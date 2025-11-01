@@ -17,7 +17,7 @@ import signal
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response
 from flask_socketio import SocketIO, emit
 import re
@@ -1614,61 +1614,128 @@ def get_stats():
 
 @app.route('/network_data')
 def legacy_network_data():
-    """Legacy endpoint for network data - returns HTML table"""
+    """Legacy endpoint for network data - returns HTML table with persistent state"""
     try:
-        # Get network data directly by calling the scan results logic
-        scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
-        
+        # Use netkb file as persistent network database
         network_data = []
         
+        # Read existing network knowledge base
+        try:
+            existing_data = shared_data.read_data()
+            # Convert to our format and ensure we have the right structure
+            for entry in existing_data:
+                if 'IPs' in entry and entry['IPs']:
+                    network_data.append({
+                        'IPs': entry.get('IPs', ''),
+                        'Hostnames': entry.get('Hostnames', ''),
+                        'Alive': int(entry.get('Alive', 1)) if str(entry.get('Alive', 1)).isdigit() else 1,
+                        'MAC Address': entry.get('MAC Address', ''),
+                        'Ports': entry.get('Ports', ''),
+                        'last_seen': entry.get('last_seen', datetime.now().isoformat())
+                    })
+        except Exception as e:
+            logger.debug(f"Could not read existing netkb data: {e}")
+        
+        # Now merge with fresh scan results to update/add new findings
+        scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
+        current_time = datetime.now().isoformat()
+        
         if os.path.exists(scan_results_dir):
-            # Process result CSV files to build network data
+            # Process only the most recent result CSV files (last 5 minutes)
+            recent_files = []
+            current_timestamp = time.time()
+            
             for filename in os.listdir(scan_results_dir):
                 if filename.startswith('result_') and filename.endswith('.csv'):
                     filepath = os.path.join(scan_results_dir, filename)
-                    try:
-                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                            reader = csv.reader(f)
-                            for row in reader:
-                                if len(row) >= 1 and row[0].strip():
-                                    ip = row[0].strip()
-                                    if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
-                                        # Build network data entry
-                                        hostname = row[1] if len(row) > 1 and row[1] else ''
-                                        alive = row[2] if len(row) > 2 and row[2] else '1'
-                                        mac = row[3] if len(row) > 3 and row[3] else ''
+                    file_mtime = os.path.getmtime(filepath)
+                    # Only process files from the last 5 minutes
+                    if current_timestamp - file_mtime < 300:  # 5 minutes
+                        recent_files.append((filepath, filename))
+            
+            # Process recent scan results
+            for filepath, filename in recent_files:
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        reader = csv.reader(f)
+                        for row in reader:
+                            if len(row) >= 1 and row[0].strip():
+                                ip = row[0].strip()
+                                if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                                    # Build network data entry from fresh scan
+                                    hostname = row[1] if len(row) > 1 and row[1] else ''
+                                    alive = row[2] if len(row) > 2 and row[2] else '1'
+                                    mac = row[3] if len(row) > 3 and row[3] else ''
+                                    
+                                    # Collect ports from remaining columns
+                                    ports = []
+                                    if len(row) > 4:
+                                        for port_col in row[4:]:
+                                            if port_col and port_col.strip() and port_col.strip() != '':
+                                                ports.append(port_col.strip())
+                                    
+                                    # Find existing entry for this IP
+                                    existing = next((item for item in network_data if item['IPs'] == ip), None)
+                                    
+                                    if existing:
+                                        # Update existing entry with new information
+                                        existing['last_seen'] = current_time
+                                        existing['Alive'] = int(alive) if alive.isdigit() else 1
                                         
-                                        # Collect ports from remaining columns
-                                        ports = []
-                                        if len(row) > 4:
-                                            for port_col in row[4:]:
-                                                if port_col and port_col.strip() and port_col.strip() != '':
-                                                    ports.append(port_col.strip())
+                                        # Update hostname if we got a better one
+                                        if hostname and hostname != 'Unknown':
+                                            existing['Hostnames'] = hostname
                                         
-                                        network_entry = {
+                                        # Update MAC if we got one
+                                        if mac and mac != 'Unknown':
+                                            existing['MAC Address'] = mac
+                                        
+                                        # Merge ports (add new ones, keep existing)
+                                        existing_ports = set(existing['Ports'].split(';')) if existing['Ports'] else set()
+                                        new_ports = set(ports)
+                                        all_ports = existing_ports.union(new_ports)
+                                        # Remove empty strings
+                                        all_ports.discard('')
+                                        existing['Ports'] = ';'.join(sorted(all_ports, key=lambda x: int(x) if x.isdigit() else 0))
+                                    else:
+                                        # Add new entry
+                                        new_entry = {
                                             'IPs': ip,
                                             'Hostnames': hostname,
                                             'Alive': int(alive) if alive.isdigit() else 1,
                                             'MAC Address': mac,
-                                            'Ports': ';'.join(ports) if ports else ''
+                                            'Ports': ';'.join(ports) if ports else '',
+                                            'last_seen': current_time
                                         }
-                                        
-                                        # Check if this IP already exists and merge
-                                        existing = next((item for item in network_data if item['IPs'] == ip), None)
-                                        if existing:
-                                            # Merge ports
-                                            existing_ports = set(existing['Ports'].split(';')) if existing['Ports'] else set()
-                                            new_ports = set(ports)
-                                            all_ports = existing_ports.union(new_ports)
-                                            existing['Ports'] = ';'.join(sorted(all_ports, key=lambda x: int(x) if x.isdigit() else 0))
-                                            # Update hostname if empty
-                                            if not existing['Hostnames'] and hostname:
-                                                existing['Hostnames'] = hostname
-                                        else:
-                                            network_data.append(network_entry)
-                    except Exception as e:
-                        logger.debug(f"Could not read scan result file {filepath}: {e}")
-                        continue
+                                        network_data.append(new_entry)
+                except Exception as e:
+                    logger.debug(f"Could not read scan result file {filepath}: {e}")
+                    continue
+        
+        # Remove entries that haven't been seen for more than 24 hours (configurable)
+        cutoff_time = datetime.now() - timedelta(hours=24)
+        network_data = [entry for entry in network_data 
+                       if datetime.fromisoformat(entry.get('last_seen', current_time)) > cutoff_time]
+        
+        # Update the netkb file with the merged data (persistence)
+        try:
+            # Prepare data for netkb format
+            netkb_data = []
+            for entry in network_data:
+                netkb_entry = {
+                    'IPs': entry['IPs'],
+                    'Hostnames': entry['Hostnames'],
+                    'Alive': entry['Alive'],
+                    'MAC Address': entry['MAC Address'],
+                    'Ports': entry['Ports']
+                }
+                netkb_data.append(netkb_entry)
+            
+            # Write back to netkb file to maintain persistence
+            if netkb_data:
+                shared_data.write_data(netkb_data)
+        except Exception as e:
+            logger.debug(f"Could not update netkb file: {e}")
         
         if not network_data:
             return '<div class="error">No network scan results found. Please run a network scan first.</div>'
@@ -1683,6 +1750,7 @@ def legacy_network_data():
                     <th>Status</th>
                     <th>MAC Address</th>
                     <th>Open Ports</th>
+                    <th>Last Seen</th>
                 </tr>
             </thead>
             <tbody>
@@ -1694,6 +1762,7 @@ def legacy_network_data():
             alive = entry.get('Alive', 0)
             mac = entry.get('MAC Address', '')
             ports = entry.get('Ports', '')
+            last_seen = entry.get('last_seen', '')
             
             # Format status
             status = 'Online' if alive == 1 else 'Offline'
@@ -1701,12 +1770,19 @@ def legacy_network_data():
             
             # Format ports for display
             if ports:
-                port_list = ports.split(';')
+                port_list = [p for p in ports.split(';') if p]
                 ports_display = ', '.join(port_list[:10])  # Show first 10 ports
                 if len(port_list) > 10:
                     ports_display += f' ... (+{len(port_list) - 10} more)'
             else:
                 ports_display = 'None detected'
+            
+            # Format last seen time
+            try:
+                last_seen_dt = datetime.fromisoformat(last_seen)
+                last_seen_display = last_seen_dt.strftime('%m-%d %H:%M')
+            except:
+                last_seen_display = 'Unknown'
             
             html += f'''
                 <tr>
@@ -1715,6 +1791,7 @@ def legacy_network_data():
                     <td><span class="{status_class}">{status}</span></td>
                     <td>{mac if mac else 'Unknown'}</td>
                     <td>{ports_display}</td>
+                    <td>{last_seen_display}</td>
                 </tr>
             '''
         
@@ -1737,6 +1814,7 @@ def legacy_network_data():
                 border: 1px solid #00ff00;
                 padding: 8px;
                 text-align: left;
+                font-size: inherit;
             }}
             .network-table th {{
                 background-color: #003300;
@@ -1750,13 +1828,14 @@ def legacy_network_data():
                 font-weight: bold;
             }}
             .status-offline {{
-                color: #ff0000;
+                color: #ff6600;
                 font-weight: bold;
             }}
             .error {{
                 color: #ff0000;
                 text-align: center;
                 padding: 20px;
+                font-family: 'Courier New', monospace;
             }}
         </style>
         {html}
