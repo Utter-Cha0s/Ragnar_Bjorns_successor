@@ -8,7 +8,7 @@ We provide security updates for the following versions of our project:
 
 | Version | Status      | Secure |
 | ------- |-------------| ------ |
-| 1.0.0   | Development | No     |
+| 3.0.0   | Development | No     |
 
 ## 🛡️ Security Practices
 
