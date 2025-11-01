@@ -219,7 +219,7 @@ class Display:
         """Display the comment based on the status of the ragnarorch."""
         comment = self.commentaire_ia.get_commentaire(status)
         if comment:
-            self.shared_data.bjornsay = comment
+            self.shared_data.ragnarsays = comment
             self.shared_data.ragnarstatustext = self.shared_data.ragnarorch_status
         else:
             pass
@@ -450,7 +450,7 @@ class Display:
                 draw.line((1, 59, self.shared_data.width - 1, 59), fill=0)
                 draw.line((1, 87, self.shared_data.width - 1, 87), fill=0)
 
-                lines = self.shared_data.wrap_text(self.shared_data.bjornsay, self.shared_data.font_arialbold, self.shared_data.width - 4)
+                lines = self.shared_data.wrap_text(self.shared_data.ragnarsays, self.shared_data.font_arialbold, self.shared_data.width - 4)
                 y_text = int(90 * self.scale_factor_y)
 
                 if self.main_image is not None:
