@@ -1,6 +1,6 @@
 #display.py
 # Description:
-# This file, display.py, is responsible for managing the e-ink display of the Bjorn project, updating it with relevant data and statuses.
+# This file, display.py, is responsible for managing the e-ink display of the Ragnar project, updating it with relevant data and statuses.
 # It initializes the display, manages multiple threads for updating shared data and vulnerability counts, and handles the rendering of information
 # and images on the display.
 #
@@ -400,7 +400,7 @@ class Display:
                 image = Image.new('1', (self.shared_data.width, self.shared_data.height))
                 draw = ImageDraw.Draw(image)
                 draw.rectangle((0, 0, self.shared_data.width, self.shared_data.height), fill=255)
-                draw.text((int(37 * self.scale_factor_x), int(5 * self.scale_factor_y)), "BJORN", font=self.shared_data.font_viking, fill=0)
+                draw.text((int(37 * self.scale_factor_x), int(5 * self.scale_factor_y)), "RAGNAR", font=self.shared_data.font_viking, fill=0)
                 draw.text((int(110 * self.scale_factor_x), int(170 * self.scale_factor_y)), self.manual_mode_txt, font=self.shared_data.font_arial14, fill=0)
                 
                 # Show AP status or WiFi status in the top-left corner
