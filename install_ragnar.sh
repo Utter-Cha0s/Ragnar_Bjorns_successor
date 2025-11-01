@@ -455,7 +455,28 @@ setup_ragnar() {
             }
         fi
     done
-    
+
+        # Install Waveshare e-Paper Python library
+    log "INFO" "Installing Waveshare e-Paper library for $EPD_VERSION..."
+    cd /home/$ragnar_USER
+    if [ ! -d "e-Paper" ]; then
+        git clone --depth=1 --filter=blob:none --sparse https://github.com/waveshareteam/e-Paper.git
+        cd e-Paper
+        git sparse-checkout set RaspberryPi_JetsonNano
+        cd RaspberryPi_JetsonNano/python
+        log "INFO" "Installing e-Paper Python package..."
+        pip3 install . --break-system-packages
+        check_success "Installed Waveshare e-Paper library"
+    else
+        log "INFO" "Waveshare e-Paper repository already exists, skipping clone"
+        cd e-Paper/RaspberryPi_JetsonNano/python
+        pip3 install . --break-system-packages
+        check_success "Reinstalled Waveshare e-Paper library"
+    fi
+    python3 -c "from waveshare_epd import ${EPD_VERSION}; print('EPD module OK')" \
+        && log "SUCCESS" "$EPD_VERSION driver installed successfully" \
+        || log "ERROR" "EPD driver $EPD_VERSION failed to import"
+
     check_success "Installed Python requirements"
 
     # Configure modern webapp by default
