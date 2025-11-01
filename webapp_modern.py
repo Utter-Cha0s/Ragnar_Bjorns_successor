@@ -182,27 +182,26 @@ def sync_all_counts():
             try:
                 scan_files_found = []
                 for filename in os.listdir(scan_results_dir):
-                    if filename.endswith('.txt') and not filename.startswith('.'):
+                    # Look for result CSV files that contain actual scan data
+                    if filename.startswith('result_') and filename.endswith('.csv') and not filename.startswith('.'):
                         scan_files_found.append(filename)
                         filepath = os.path.join(scan_results_dir, filename)
                         try:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                content = f.read()
-                                if content.strip():
-                                    # Extract IP from filename
-                                    ip_match = re.search(r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}', filename)
-                                    if ip_match:
-                                        unique_hosts.add(ip_match.group())
-                                        logger.debug(f"Found host {ip_match.group()} in {filename}")
-                                    
-                                    # Count ports
-                                    port_lines = 0
-                                    for line in content.split('\n'):
-                                        if '/tcp' in line or '/udp' in line:
-                                            port_count += 1
-                                            port_lines += 1
-                                    if port_lines > 0:
-                                        logger.debug(f"Found {port_lines} ports in {filename}")
+                                reader = csv.reader(f)
+                                for row in reader:
+                                    if len(row) >= 1 and row[0].strip():
+                                        # First column should be IP address
+                                        ip = row[0].strip()
+                                        if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                                            unique_hosts.add(ip)
+                                            logger.debug(f"Found host {ip} in {filename}")
+                                            
+                                            # Count non-empty ports in columns 4-9 (typical port columns)
+                                            if len(row) > 4:
+                                                for port_col in row[4:]:
+                                                    if port_col and port_col.strip() and port_col.strip() != '':
+                                                        port_count += 1
                         except Exception as e:
                             logger.debug(f"Could not read scan result file {filepath}: {e}")
                             continue
@@ -213,15 +212,13 @@ def sync_all_counts():
             except Exception as e:
                 logger.warning(f"Could not list scan_results directory: {e}")
             
-            # Only update if we found actual data
+            # Update shared data with the current counts
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
-            if len(unique_hosts) > 0:
-                shared_data.targetnbr = len(unique_hosts)
-                logger.debug(f"Updated targets: {old_targets} -> {len(unique_hosts)}")
-            if port_count > 0:
-                shared_data.portnbr = port_count
-                logger.debug(f"Updated ports: {old_ports} -> {port_count}")
+            shared_data.targetnbr = len(unique_hosts)
+            shared_data.portnbr = port_count
+            logger.debug(f"Updated targets: {old_targets} -> {len(unique_hosts)}")
+            logger.debug(f"Updated ports: {old_ports} -> {port_count}")
         else:
             logger.warning(f"Scan results directory does not exist: {scan_results_dir}")
         
@@ -265,11 +262,10 @@ def sync_all_counts():
             except Exception as e:
                 logger.warning(f"Could not list crackedpwd directory: {e}")
             
-            # Only update if we found actual data
+            # Update shared data with the current credential count
             old_creds = shared_data.crednbr
-            if cred_count > 0:
-                shared_data.crednbr = cred_count
-                logger.debug(f"Updated credentials: {old_creds} -> {cred_count}")
+            shared_data.crednbr = cred_count
+            logger.debug(f"Updated credentials: {old_creds} -> {cred_count}")
         else:
             logger.warning(f"Crackedpwd directory does not exist: {cred_results_dir}")
         
