@@ -440,8 +440,70 @@ def update_config():
 def get_network():
     """Get network scan data"""
     try:
-        data = shared_data.read_data()
-        return jsonify(data)
+        # Read scan results from CSV files instead of netkb
+        scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
+        
+        network_data = []
+        
+        if os.path.exists(scan_results_dir):
+            # Process result CSV files to build network data
+            for filename in os.listdir(scan_results_dir):
+                if filename.startswith('result_') and filename.endswith('.csv'):
+                    filepath = os.path.join(scan_results_dir, filename)
+                    try:
+                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                            reader = csv.reader(f)
+                            for row in reader:
+                                if len(row) >= 1 and row[0].strip():
+                                    ip = row[0].strip()
+                                    if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                                        # Build network data entry
+                                        hostname = row[1] if len(row) > 1 and row[1] else ''
+                                        alive = row[2] if len(row) > 2 and row[2] else '1'
+                                        mac = row[3] if len(row) > 3 and row[3] else ''
+                                        
+                                        # Collect ports from remaining columns
+                                        ports = []
+                                        if len(row) > 4:
+                                            for port_col in row[4:]:
+                                                if port_col and port_col.strip() and port_col.strip() != '':
+                                                    ports.append(port_col.strip())
+                                        
+                                        network_entry = {
+                                            'IPs': ip,
+                                            'Hostnames': hostname,
+                                            'Alive': int(alive) if alive.isdigit() else 1,
+                                            'MAC Address': mac,
+                                            'Ports': ';'.join(ports) if ports else ''
+                                        }
+                                        
+                                        # Check if this IP already exists and merge
+                                        existing = next((item for item in network_data if item['IPs'] == ip), None)
+                                        if existing:
+                                            # Merge ports
+                                            existing_ports = set(existing['Ports'].split(';')) if existing['Ports'] else set()
+                                            new_ports = set(ports)
+                                            all_ports = existing_ports.union(new_ports)
+                                            existing['Ports'] = ';'.join(sorted(all_ports, key=lambda x: int(x) if x.isdigit() else 0))
+                                            # Update hostname if empty
+                                            if not existing['Hostnames'] and hostname:
+                                                existing['Hostnames'] = hostname
+                                        else:
+                                            network_data.append(network_entry)
+                    except Exception as e:
+                        logger.debug(f"Could not read scan result file {filepath}: {e}")
+                        continue
+        
+        # Fallback to netkb file if no scan results found
+        if not network_data:
+            try:
+                data = shared_data.read_data()
+                return jsonify(data)
+            except Exception as e:
+                logger.warning(f"Could not read netkb data: {e}")
+                return jsonify([])
+        
+        return jsonify(network_data)
     except Exception as e:
         logger.error(f"Error getting network data: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1552,8 +1614,159 @@ def get_stats():
 
 @app.route('/network_data')
 def legacy_network_data():
-    """Legacy endpoint for network data"""
-    return get_network()
+    """Legacy endpoint for network data - returns HTML table"""
+    try:
+        # Get network data directly by calling the scan results logic
+        scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
+        
+        network_data = []
+        
+        if os.path.exists(scan_results_dir):
+            # Process result CSV files to build network data
+            for filename in os.listdir(scan_results_dir):
+                if filename.startswith('result_') and filename.endswith('.csv'):
+                    filepath = os.path.join(scan_results_dir, filename)
+                    try:
+                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                            reader = csv.reader(f)
+                            for row in reader:
+                                if len(row) >= 1 and row[0].strip():
+                                    ip = row[0].strip()
+                                    if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                                        # Build network data entry
+                                        hostname = row[1] if len(row) > 1 and row[1] else ''
+                                        alive = row[2] if len(row) > 2 and row[2] else '1'
+                                        mac = row[3] if len(row) > 3 and row[3] else ''
+                                        
+                                        # Collect ports from remaining columns
+                                        ports = []
+                                        if len(row) > 4:
+                                            for port_col in row[4:]:
+                                                if port_col and port_col.strip() and port_col.strip() != '':
+                                                    ports.append(port_col.strip())
+                                        
+                                        network_entry = {
+                                            'IPs': ip,
+                                            'Hostnames': hostname,
+                                            'Alive': int(alive) if alive.isdigit() else 1,
+                                            'MAC Address': mac,
+                                            'Ports': ';'.join(ports) if ports else ''
+                                        }
+                                        
+                                        # Check if this IP already exists and merge
+                                        existing = next((item for item in network_data if item['IPs'] == ip), None)
+                                        if existing:
+                                            # Merge ports
+                                            existing_ports = set(existing['Ports'].split(';')) if existing['Ports'] else set()
+                                            new_ports = set(ports)
+                                            all_ports = existing_ports.union(new_ports)
+                                            existing['Ports'] = ';'.join(sorted(all_ports, key=lambda x: int(x) if x.isdigit() else 0))
+                                            # Update hostname if empty
+                                            if not existing['Hostnames'] and hostname:
+                                                existing['Hostnames'] = hostname
+                                        else:
+                                            network_data.append(network_entry)
+                    except Exception as e:
+                        logger.debug(f"Could not read scan result file {filepath}: {e}")
+                        continue
+        
+        if not network_data:
+            return '<div class="error">No network scan results found. Please run a network scan first.</div>'
+        
+        # Generate HTML table
+        html = '''
+        <table class="network-table">
+            <thead>
+                <tr>
+                    <th>IP Address</th>
+                    <th>Hostname</th>
+                    <th>Status</th>
+                    <th>MAC Address</th>
+                    <th>Open Ports</th>
+                </tr>
+            </thead>
+            <tbody>
+        '''
+        
+        for entry in network_data:
+            ip = entry.get('IPs', '')
+            hostname = entry.get('Hostnames', '')
+            alive = entry.get('Alive', 0)
+            mac = entry.get('MAC Address', '')
+            ports = entry.get('Ports', '')
+            
+            # Format status
+            status = 'Online' if alive == 1 else 'Offline'
+            status_class = 'status-online' if alive == 1 else 'status-offline'
+            
+            # Format ports for display
+            if ports:
+                port_list = ports.split(';')
+                ports_display = ', '.join(port_list[:10])  # Show first 10 ports
+                if len(port_list) > 10:
+                    ports_display += f' ... (+{len(port_list) - 10} more)'
+            else:
+                ports_display = 'None detected'
+            
+            html += f'''
+                <tr>
+                    <td>{ip}</td>
+                    <td>{hostname if hostname else 'Unknown'}</td>
+                    <td><span class="{status_class}">{status}</span></td>
+                    <td>{mac if mac else 'Unknown'}</td>
+                    <td>{ports_display}</td>
+                </tr>
+            '''
+        
+        html += '''
+            </tbody>
+        </table>
+        '''
+        
+        # Add some CSS for styling
+        html = f'''
+        <style>
+            .network-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-family: 'Courier New', monospace;
+                background-color: #000;
+                color: #00ff00;
+            }}
+            .network-table th, .network-table td {{
+                border: 1px solid #00ff00;
+                padding: 8px;
+                text-align: left;
+            }}
+            .network-table th {{
+                background-color: #003300;
+                font-weight: bold;
+            }}
+            .network-table tr:nth-child(even) {{
+                background-color: #001100;
+            }}
+            .status-online {{
+                color: #00ff00;
+                font-weight: bold;
+            }}
+            .status-offline {{
+                color: #ff0000;
+                font-weight: bold;
+            }}
+            .error {{
+                color: #ff0000;
+                text-align: center;
+                padding: 20px;
+            }}
+        </style>
+        {html}
+        '''
+        
+        return html
+        
+    except Exception as e:
+        logger.error(f"Error generating network HTML: {e}")
+        return f'<div class="error">Error loading network data: {str(e)}</div>'
 
 @app.route('/list_credentials')
 def legacy_credentials():
