@@ -58,6 +58,17 @@ web_utils = WebUtils(shared_data, logger)
 clients_connected = 0
 
 
+def broadcast_status_update():
+    """Immediately broadcast current status to all connected clients"""
+    try:
+        if clients_connected > 0:
+            status_data = get_current_status()
+            socketio.emit('status_update', status_data)
+            logger.debug(f"Broadcasted status update: {status_data.get('ragnar_status', 'unknown')}")
+    except Exception as e:
+        logger.error(f"Error broadcasting status update: {e}")
+
+
 def sync_vulnerability_count():
     """Synchronize vulnerability count across all data sources"""
     try:
@@ -1795,6 +1806,9 @@ def execute_manual_attack():
         shared_data.ragnarstatustext = status_name
         shared_data.ragnarstatustext2 = f"Attacking: {target_ip}:{target_port or 'default'}"
         
+        # Immediately broadcast the status change
+        broadcast_status_update()
+        
         # Map attack types to module imports and execution
         attack_modules = {
             'ssh': 'actions.ssh_connector',
@@ -1832,6 +1846,9 @@ def execute_manual_attack():
                 shared_data.ragnarstatustext = "IDLE"
                 shared_data.ragnarstatustext2 = f"{attack_type.upper()} attack completed"
                 
+                # Broadcast completion status
+                broadcast_status_update()
+                
                 logger.info(f"Manual attack completed: {attack_type} on {target_ip}:{target_port}")
                     
             except Exception as e:
@@ -1839,6 +1856,8 @@ def execute_manual_attack():
                 # Reset status on error
                 shared_data.ragnarstatustext = "IDLE"
                 shared_data.ragnarstatustext2 = f"Attack error: {str(e)[:40]}"
+                # Broadcast error status
+                broadcast_status_update()
         
         # Start attack in background thread
         import threading
@@ -1904,6 +1923,9 @@ def trigger_network_scan():
         shared_data.ragnarstatustext = "NetworkScanner"
         shared_data.ragnarstatustext2 = f"Manual scan: {target_range}"
         
+        # Immediately broadcast the status change
+        broadcast_status_update()
+        
         # Execute scan in background
         def execute_scan():
             try:
@@ -1918,6 +1940,9 @@ def trigger_network_scan():
                 shared_data.ragnarstatustext = "IDLE"
                 shared_data.ragnarstatustext2 = "Manual scan completed"
                 
+                # Broadcast completion status
+                broadcast_status_update()
+                
                 logger.info(f"Manual network scan completed for range: {target_range}")
                 
             except Exception as e:
@@ -1925,6 +1950,8 @@ def trigger_network_scan():
                 # Reset status on error
                 shared_data.ragnarstatustext = "IDLE"
                 shared_data.ragnarstatustext2 = f"Scan error: {str(e)[:50]}"
+                # Broadcast error status
+                broadcast_status_update()
         
         # Start scan in background thread
         import threading
@@ -1958,6 +1985,9 @@ def trigger_vulnerability_scan():
         shared_data.ragnarstatustext = "NmapVulnScanner"
         shared_data.ragnarstatustext2 = f"Scanning: {target_ip}"
         
+        # Immediately broadcast the status change
+        broadcast_status_update()
+        
         # Execute vulnerability scan in background
         def execute_vuln_scan():
             try:
@@ -1975,6 +2005,9 @@ def trigger_vulnerability_scan():
                 shared_data.ragnarstatustext = "IDLE"
                 shared_data.ragnarstatustext2 = "Vulnerability scan completed"
                 
+                # Broadcast completion status
+                broadcast_status_update()
+                
                 logger.info(f"Manual vulnerability scan completed for: {target_ip}")
                 
             except Exception as e:
@@ -1982,6 +2015,8 @@ def trigger_vulnerability_scan():
                 # Reset status on error
                 shared_data.ragnarstatustext = "IDLE"
                 shared_data.ragnarstatustext2 = f"Vuln scan error: {str(e)[:40]}"
+                # Broadcast error status
+                broadcast_status_update()
         
         # Start scan in background thread
         import threading
