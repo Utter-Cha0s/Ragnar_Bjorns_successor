@@ -66,16 +66,21 @@ def sync_vulnerability_count():
         # Count vulnerabilities from files in vulnerabilities directory
         vuln_results_dir = getattr(shared_data, 'vulnerabilities_dir', os.path.join('data', 'output', 'vulnerabilities'))
         
+        logger.debug(f"Syncing vulnerabilities from directory: {vuln_results_dir}")
+        
         # Create directory if it doesn't exist
         try:
             os.makedirs(vuln_results_dir, exist_ok=True)
+            logger.debug(f"Ensured directory exists: {vuln_results_dir}")
         except Exception as e:
             logger.warning(f"Could not create vulnerabilities directory: {e}")
         
         if os.path.exists(vuln_results_dir):
             try:
+                files_found = []
                 for filename in os.listdir(vuln_results_dir):
                     if filename.endswith('.txt') and not filename.startswith('.'):
+                        files_found.append(filename)
                         filepath = os.path.join(vuln_results_dir, filename)
                         try:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -85,16 +90,25 @@ def sync_vulnerability_count():
                                     cve_matches = re.findall(r'CVE-\d{4}-\d+', content)
                                     if cve_matches:
                                         vuln_count += len(cve_matches)
+                                        logger.debug(f"Found {len(cve_matches)} CVEs in {filename}: {cve_matches}")
                                     elif len(content.strip()) > 50:  # File has significant content
                                         vuln_count += 1
+                                        logger.debug(f"Found vulnerability content in {filename} (no CVEs)")
                         except Exception as e:
                             logger.debug(f"Could not read vulnerability file {filepath}: {e}")
                             continue
+                
+                logger.debug(f"Vulnerability files found: {files_found}")
+                logger.debug(f"Total vulnerability count calculated: {vuln_count}")
             except Exception as e:
                 logger.warning(f"Could not list vulnerabilities directory: {e}")
+        else:
+            logger.warning(f"Vulnerabilities directory does not exist: {vuln_results_dir}")
         
         # Update shared data with synchronized count
+        old_count = shared_data.vulnnbr
         shared_data.vulnnbr = vuln_count
+        logger.debug(f"Updated shared_data.vulnnbr: {old_count} -> {vuln_count}")
         
         # Also update livestatus file if it exists
         if os.path.exists(shared_data.livestatusfile):
@@ -104,6 +118,7 @@ def sync_vulnerability_count():
                 if not df.empty:
                     df.loc[0, 'Vulnerabilities Count'] = vuln_count
                     df.to_csv(shared_data.livestatusfile, index=False)
+                    logger.debug(f"Updated livestatus file with vuln count: {vuln_count}")
             except Exception as e:
                 logger.warning(f"Could not update livestatus with sync vulnerability count: {e}")
         
@@ -118,15 +133,20 @@ def sync_vulnerability_count():
 def sync_all_counts():
     """Synchronize all counts (targets, ports, vulnerabilities, credentials) across data sources"""
     try:
+        logger.debug("Starting sync_all_counts()")
+        
         # Sync vulnerability count
         sync_vulnerability_count()
         
         # Sync target and port counts from scan results
         scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
         
+        logger.debug(f"Syncing targets/ports from directory: {scan_results_dir}")
+        
         # Create directory if it doesn't exist
         try:
             os.makedirs(scan_results_dir, exist_ok=True)
+            logger.debug(f"Ensured directory exists: {scan_results_dir}")
         except Exception as e:
             logger.warning(f"Could not create scan_results directory: {e}")
         
@@ -135,65 +155,98 @@ def sync_all_counts():
             port_count = 0
             
             try:
+                scan_files_found = []
                 for filename in os.listdir(scan_results_dir):
                     if filename.endswith('.txt') and not filename.startswith('.'):
+                        scan_files_found.append(filename)
                         filepath = os.path.join(scan_results_dir, filename)
                         try:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                 content = f.read()
                                 if content.strip():
                                     # Extract IP from filename
-                                    ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', filename)
+                                    ip_match = re.search(r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}', filename)
                                     if ip_match:
                                         unique_hosts.add(ip_match.group())
+                                        logger.debug(f"Found host {ip_match.group()} in {filename}")
                                     
                                     # Count ports
+                                    port_lines = 0
                                     for line in content.split('\n'):
                                         if '/tcp' in line or '/udp' in line:
                                             port_count += 1
+                                            port_lines += 1
+                                    if port_lines > 0:
+                                        logger.debug(f"Found {port_lines} ports in {filename}")
                         except Exception as e:
                             logger.debug(f"Could not read scan result file {filepath}: {e}")
                             continue
+                
+                logger.debug(f"Scan result files found: {scan_files_found}")
+                logger.debug(f"Unique hosts found: {list(unique_hosts)}")
+                logger.debug(f"Total port count: {port_count}")
             except Exception as e:
                 logger.warning(f"Could not list scan_results directory: {e}")
             
             # Only update if we found actual data
+            old_targets = shared_data.targetnbr
+            old_ports = shared_data.portnbr
             if len(unique_hosts) > 0:
                 shared_data.targetnbr = len(unique_hosts)
+                logger.debug(f"Updated targets: {old_targets} -> {len(unique_hosts)}")
             if port_count > 0:
                 shared_data.portnbr = port_count
+                logger.debug(f"Updated ports: {old_ports} -> {port_count}")
+        else:
+            logger.warning(f"Scan results directory does not exist: {scan_results_dir}")
         
         # Sync credential count from crackedpwd directory
         cred_results_dir = getattr(shared_data, 'crackedpwd_dir', os.path.join('data', 'output', 'crackedpwd'))
         
+        logger.debug(f"Syncing credentials from directory: {cred_results_dir}")
+        
         # Create directory if it doesn't exist
         try:
             os.makedirs(cred_results_dir, exist_ok=True)
+            logger.debug(f"Ensured directory exists: {cred_results_dir}")
         except Exception as e:
             logger.warning(f"Could not create crackedpwd directory: {e}")
         
         if os.path.exists(cred_results_dir):
             cred_count = 0
             try:
+                cred_files_found = []
                 for filename in os.listdir(cred_results_dir):
                     if (filename.endswith('.txt') or filename.endswith('.csv')) and not filename.startswith('.'):
+                        cred_files_found.append(filename)
                         filepath = os.path.join(cred_results_dir, filename)
                         try:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                 content = f.read()
                                 # Count lines with credential format (user:pass)
+                                file_creds = 0
                                 for line in content.split('\n'):
                                     if ':' in line and line.strip():
                                         cred_count += 1
+                                        file_creds += 1
+                                if file_creds > 0:
+                                    logger.debug(f"Found {file_creds} credentials in {filename}")
                         except Exception as e:
                             logger.debug(f"Could not read credential file {filepath}: {e}")
                             continue
+                
+                logger.debug(f"Credential files found: {cred_files_found}")
+                logger.debug(f"Total credential count: {cred_count}")
             except Exception as e:
                 logger.warning(f"Could not list crackedpwd directory: {e}")
             
             # Only update if we found actual data
+            old_creds = shared_data.crednbr
             if cred_count > 0:
                 shared_data.crednbr = cred_count
+                logger.debug(f"Updated credentials: {old_creds} -> {cred_count}")
+        else:
+            logger.warning(f"Crackedpwd directory does not exist: {cred_results_dir}")
         
         # Update livestatus file with all synchronized counts
         if os.path.exists(shared_data.livestatusfile):
@@ -205,10 +258,11 @@ def sync_all_counts():
                     df.loc[0, 'Total Open Ports'] = safe_int(shared_data.portnbr)
                     df.loc[0, 'Vulnerabilities Count'] = safe_int(shared_data.vulnnbr)
                     df.to_csv(shared_data.livestatusfile, index=False)
+                    logger.debug("Updated livestatus file with synchronized counts")
             except Exception as e:
                 logger.warning(f"Could not update livestatus with all sync counts: {e}")
         
-        logger.debug(f"Synchronized all counts - Targets: {shared_data.targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}")
+        logger.debug(f"Completed sync_all_counts() - Targets: {shared_data.targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}")
         
     except Exception as e:
         logger.error(f"Error synchronizing all counts: {e}")
