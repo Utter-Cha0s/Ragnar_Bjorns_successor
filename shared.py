@@ -43,10 +43,25 @@ class SharedData:
         self.update_mac_blacklist()
         self.setup_environment() # Setup the environment
         self.initialize_variables() # Initialize the variables used by the application
+        
+        # Initialize network intelligence (after paths and config are ready)
+        self.network_intelligence = None
+        self.initialize_network_intelligence()
+        
         self.create_livestatusfile() 
         self.load_fonts() # Load the fonts used by the application
         self.load_images() # Load the images used by the application
         # self.create_initial_image() # Create the initial image displayed on the screen
+        
+    def initialize_network_intelligence(self):
+        """Initialize the network intelligence system"""
+        try:
+            from network_intelligence import NetworkIntelligence
+            self.network_intelligence = NetworkIntelligence(self)
+            logger.info("Network intelligence system initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize network intelligence: {e}")
+            self.network_intelligence = None
 
     def initialize_paths(self):
         """Initialize the paths used by the application."""
@@ -179,6 +194,13 @@ class SharedData:
             "wifi_reconnect_interval": 20,
             "wifi_ap_cycle_enabled": True,
             "wifi_initial_connection_timeout": 60,
+            
+            "__title_network_intelligence__": "Network Intelligence",
+            "network_resolution_timeout": 3600,
+            "network_confirmation_scans": 3,
+            "network_change_grace": 300,
+            "network_intelligence_enabled": True,
+            "network_auto_resolution": True,
         }
 
     def update_mac_blacklist(self):

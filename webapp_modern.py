@@ -70,51 +70,65 @@ def broadcast_status_update():
 
 
 def sync_vulnerability_count():
-    """Synchronize vulnerability count across all data sources"""
+    """Synchronize vulnerability count across all data sources and network intelligence"""
     try:
         vuln_count = 0
         
-        # Count vulnerabilities from files in vulnerabilities directory
-        vuln_results_dir = getattr(shared_data, 'vulnerabilities_dir', os.path.join('data', 'output', 'vulnerabilities'))
-        
-        logger.debug(f"Syncing vulnerabilities from directory: {vuln_results_dir}")
-        
-        # Create directory if it doesn't exist
-        try:
-            os.makedirs(vuln_results_dir, exist_ok=True)
-            logger.debug(f"Ensured directory exists: {vuln_results_dir}")
-        except Exception as e:
-            logger.warning(f"Could not create vulnerabilities directory: {e}")
-        
-        if os.path.exists(vuln_results_dir):
-            try:
-                files_found = []
-                for filename in os.listdir(vuln_results_dir):
-                    if filename.endswith('.txt') and not filename.startswith('.'):
-                        files_found.append(filename)
-                        filepath = os.path.join(vuln_results_dir, filename)
-                        try:
-                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                content = f.read()
-                                if content.strip():
-                                    # Count CVEs or files with vulnerability content
-                                    cve_matches = re.findall(r'CVE-\d{4}-\d+', content)
-                                    if cve_matches:
-                                        vuln_count += len(cve_matches)
-                                        logger.debug(f"Found {len(cve_matches)} CVEs in {filename}: {cve_matches}")
-                                    elif len(content.strip()) > 50:  # File has significant content
-                                        vuln_count += 1
-                                        logger.debug(f"Found vulnerability content in {filename} (no CVEs)")
-                        except Exception as e:
-                            logger.debug(f"Could not read vulnerability file {filepath}: {e}")
-                            continue
-                
-                logger.debug(f"Vulnerability files found: {files_found}")
-                logger.debug(f"Total vulnerability count calculated: {vuln_count}")
-            except Exception as e:
-                logger.warning(f"Could not list vulnerabilities directory: {e}")
+        # Check if network intelligence is enabled
+        if (hasattr(shared_data, 'network_intelligence') and 
+            shared_data.network_intelligence and 
+            shared_data.config.get('network_intelligence_enabled', True)):
+            
+            # Update network context first
+            shared_data.network_intelligence.update_network_context()
+            
+            # Get active findings count for current network
+            dashboard_findings = shared_data.network_intelligence.get_active_findings_for_dashboard()
+            vuln_count = dashboard_findings['counts']['vulnerabilities']
+            
+            logger.debug(f"Network intelligence vulnerability count: {vuln_count}")
         else:
-            logger.warning(f"Vulnerabilities directory does not exist: {vuln_results_dir}")
+            # Fallback to legacy file-based counting
+            vuln_results_dir = getattr(shared_data, 'vulnerabilities_dir', os.path.join('data', 'output', 'vulnerabilities'))
+            
+            logger.debug(f"Syncing vulnerabilities from directory: {vuln_results_dir}")
+            
+            # Create directory if it doesn't exist
+            try:
+                os.makedirs(vuln_results_dir, exist_ok=True)
+                logger.debug(f"Ensured directory exists: {vuln_results_dir}")
+            except Exception as e:
+                logger.warning(f"Could not create vulnerabilities directory: {e}")
+            
+            if os.path.exists(vuln_results_dir):
+                try:
+                    files_found = []
+                    for filename in os.listdir(vuln_results_dir):
+                        if filename.endswith('.txt') and not filename.startswith('.'):
+                            files_found.append(filename)
+                            filepath = os.path.join(vuln_results_dir, filename)
+                            try:
+                                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                    content = f.read()
+                                    if content.strip():
+                                        # Count CVEs or files with vulnerability content
+                                        cve_matches = re.findall(r'CVE-\d{4}-\d+', content)
+                                        if cve_matches:
+                                            vuln_count += len(cve_matches)
+                                            logger.debug(f"Found {len(cve_matches)} CVEs in {filename}: {cve_matches}")
+                                        elif len(content.strip()) > 50:  # File has significant content
+                                            vuln_count += 1
+                                            logger.debug(f"Found vulnerability content in {filename} (no CVEs)")
+                            except Exception as e:
+                                logger.debug(f"Could not read vulnerability file {filepath}: {e}")
+                                continue
+                    
+                    logger.debug(f"Vulnerability files found: {files_found}")
+                    logger.debug(f"Total vulnerability count calculated: {vuln_count}")
+                except Exception as e:
+                    logger.warning(f"Could not list vulnerabilities directory: {e}")
+            else:
+                logger.warning(f"Vulnerabilities directory does not exist: {vuln_results_dir}")
         
         # Update shared data with synchronized count
         old_count = shared_data.vulnnbr
@@ -1299,10 +1313,214 @@ def get_actions():
 def get_vulnerabilities():
     """Get vulnerability scan results"""
     try:
-        vuln_data = web_utils.get_vulnerability_data()
-        return jsonify(vuln_data)
+        # Check if network intelligence is enabled
+        if (hasattr(shared_data, 'network_intelligence') and 
+            shared_data.network_intelligence and 
+            shared_data.config.get('network_intelligence_enabled', True)):
+            
+            # Get network-aware findings for dashboard
+            dashboard_findings = shared_data.network_intelligence.get_active_findings_for_dashboard()
+            
+            # Convert to legacy format for compatibility
+            vuln_data = []
+            for vuln_id, vuln_info in dashboard_findings['vulnerabilities'].items():
+                vuln_data.append({
+                    'id': vuln_id,
+                    'host': vuln_info['host'],
+                    'port': vuln_info['port'],
+                    'service': vuln_info['service'],
+                    'vulnerability': vuln_info['vulnerability'],
+                    'severity': vuln_info['severity'],
+                    'discovered': vuln_info['discovered'],
+                    'network_id': vuln_info['network_id'],
+                    'status': vuln_info['status']
+                })
+            
+            return jsonify({
+                'vulnerabilities': vuln_data,
+                'network_context': {
+                    'current_network': dashboard_findings['network_id'],
+                    'count': dashboard_findings['counts']['vulnerabilities']
+                }
+            })
+        else:
+            # Fallback to legacy vulnerability data
+            vuln_data = web_utils.get_vulnerability_data()
+            return jsonify(vuln_data)
+            
     except Exception as e:
         logger.error(f"Error getting vulnerabilities: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/network-intelligence')
+def get_network_intelligence():
+    """Get network intelligence summary and findings"""
+    try:
+        if (hasattr(shared_data, 'network_intelligence') and 
+            shared_data.network_intelligence and 
+            shared_data.config.get('network_intelligence_enabled', True)):
+            
+            # Update network context
+            shared_data.network_intelligence.update_network_context()
+            
+            # Get network summary
+            summary = shared_data.network_intelligence.get_network_summary()
+            
+            # Get active findings for dashboard
+            dashboard_findings = shared_data.network_intelligence.get_active_findings_for_dashboard()
+            
+            # Get all findings for NetKB
+            netkb_findings = shared_data.network_intelligence.get_all_findings_for_netkb()
+            
+            return jsonify({
+                'enabled': True,
+                'network_summary': summary,
+                'dashboard_findings': dashboard_findings,
+                'netkb_findings': netkb_findings,
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'enabled': False,
+                'message': 'Network intelligence is disabled or unavailable'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting network intelligence: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/credentials')
+def get_credentials_api():
+    """Get credential data with network intelligence if available"""
+    try:
+        # Check if network intelligence is enabled
+        if (hasattr(shared_data, 'network_intelligence') and 
+            shared_data.network_intelligence and 
+            shared_data.config.get('network_intelligence_enabled', True)):
+            
+            # Get network-aware findings for dashboard
+            dashboard_findings = shared_data.network_intelligence.get_active_findings_for_dashboard()
+            
+            # Convert to legacy format for compatibility
+            cred_data = []
+            for cred_id, cred_info in dashboard_findings['credentials'].items():
+                cred_data.append({
+                    'id': cred_id,
+                    'host': cred_info['host'],
+                    'service': cred_info['service'],
+                    'username': cred_info['username'],
+                    'password': cred_info['password'],
+                    'protocol': cred_info['protocol'],
+                    'discovered': cred_info['discovered'],
+                    'network_id': cred_info['network_id'],
+                    'status': cred_info['status']
+                })
+            
+            return jsonify({
+                'credentials': cred_data,
+                'network_context': {
+                    'current_network': dashboard_findings['network_id'],
+                    'count': dashboard_findings['counts']['credentials']
+                }
+            })
+        else:
+            # Fallback to legacy credential data - just return empty structure
+            return jsonify({
+                'credentials': [],
+                'network_context': {
+                    'current_network': 'legacy',
+                    'count': 0
+                }
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting credentials: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/network-intelligence/add-vulnerability', methods=['POST'])
+def add_vulnerability():
+    """Add a new vulnerability finding"""
+    try:
+        if not (hasattr(shared_data, 'network_intelligence') and 
+                shared_data.network_intelligence and 
+                shared_data.config.get('network_intelligence_enabled', True)):
+            return jsonify({'error': 'Network intelligence not available'}), 400
+        
+        data = request.get_json()
+        required_fields = ['host', 'port', 'service', 'vulnerability']
+        
+        if not all(field in data for field in required_fields):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        vuln_id = shared_data.network_intelligence.add_vulnerability(
+            host=data['host'],
+            port=data['port'],
+            service=data['service'],
+            vulnerability=data['vulnerability'],
+            severity=data.get('severity', 'medium'),
+            details=data.get('details', {})
+        )
+        
+        if vuln_id:
+            # Trigger sync and broadcast update
+            sync_all_counts()
+            broadcast_status_update()
+            
+            return jsonify({
+                'success': True,
+                'vulnerability_id': vuln_id,
+                'message': 'Vulnerability added successfully'
+            })
+        else:
+            return jsonify({'error': 'Failed to add vulnerability'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error adding vulnerability: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/network-intelligence/add-credential', methods=['POST'])
+def add_credential():
+    """Add a new credential finding"""
+    try:
+        if not (hasattr(shared_data, 'network_intelligence') and 
+                shared_data.network_intelligence and 
+                shared_data.config.get('network_intelligence_enabled', True)):
+            return jsonify({'error': 'Network intelligence not available'}), 400
+        
+        data = request.get_json()
+        required_fields = ['host', 'service', 'username', 'password']
+        
+        if not all(field in data for field in required_fields):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        cred_id = shared_data.network_intelligence.add_credential(
+            host=data['host'],
+            service=data['service'],
+            username=data['username'],
+            password=data['password'],
+            protocol=data.get('protocol', 'unknown'),
+            details=data.get('details', {})
+        )
+        
+        if cred_id:
+            # Trigger sync and broadcast update
+            sync_all_counts()
+            broadcast_status_update()
+            
+            return jsonify({
+                'success': True,
+                'credential_id': cred_id,
+                'message': 'Credential added successfully'
+            })
+        else:
+            return jsonify({'error': 'Failed to add credential'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error adding credential: {e}")
         return jsonify({'error': str(e)}), 500
 
 
