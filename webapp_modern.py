@@ -1134,7 +1134,6 @@ def perform_update():
             logger.info(f"Git pull completed: {output}")
         except subprocess.CalledProcessError as e:
             logger.error(f"Git pull failed: {e.stderr}")
-            # Return error immediately if git pull fails
             return jsonify({
                 'success': False, 
                 'error': f'Git pull failed: {e.stderr}',
