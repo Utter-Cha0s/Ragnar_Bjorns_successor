@@ -194,7 +194,9 @@ class SharedData:
             "wifi_reconnect_interval": 20,
             "wifi_ap_cycle_enabled": True,
             "wifi_initial_connection_timeout": 60,
-            
+
+            "network_device_retention_days": 14,
+
             "__title_network_intelligence__": "Network Intelligence",
             "network_resolution_timeout": 3600,
             "network_confirmation_scans": 3,

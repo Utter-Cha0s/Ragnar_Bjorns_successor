@@ -162,7 +162,7 @@ def sync_all_counts():
         sync_vulnerability_count()
         
         # Update WiFi-specific network data from scan results
-        update_wifi_network_data()
+        aggregated_network_stats = update_wifi_network_data()
         
         # Sync target and port counts from scan results
         scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
@@ -216,12 +216,33 @@ def sync_all_counts():
             # Update shared data with the current counts
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
-            shared_data.targetnbr = len(unique_hosts)
-            shared_data.portnbr = port_count
-            logger.debug(f"Updated targets: {old_targets} -> {len(unique_hosts)}")
-            logger.debug(f"Updated ports: {old_ports} -> {port_count}")
+            aggregated_targets = len(unique_hosts)
+            aggregated_ports = port_count
+
+            if aggregated_network_stats:
+                agg_host_count = aggregated_network_stats.get('host_count', aggregated_targets)
+                agg_port_count = aggregated_network_stats.get('port_count', aggregated_ports)
+
+                if agg_host_count or agg_port_count:
+                    aggregated_targets = max(agg_host_count, aggregated_targets)
+                    aggregated_ports = max(agg_port_count, aggregated_ports)
+
+            shared_data.targetnbr = aggregated_targets
+            shared_data.portnbr = aggregated_ports
+            logger.debug(f"Updated targets: {old_targets} -> {aggregated_targets}")
+            logger.debug(f"Updated ports: {old_ports} -> {aggregated_ports}")
         else:
             logger.warning(f"Scan results directory does not exist: {scan_results_dir}")
+
+            if aggregated_network_stats:
+                old_targets = shared_data.targetnbr
+                old_ports = shared_data.portnbr
+
+                shared_data.targetnbr = aggregated_network_stats.get('host_count', safe_int(shared_data.targetnbr))
+                shared_data.portnbr = aggregated_network_stats.get('port_count', safe_int(shared_data.portnbr))
+
+                logger.debug(f"Updated targets from aggregated data: {old_targets} -> {shared_data.targetnbr}")
+                logger.debug(f"Updated ports from aggregated data: {old_ports} -> {shared_data.portnbr}")
         
         # Sync credential count from crackedpwd directory
         cred_results_dir = getattr(shared_data, 'crackedpwd_dir', os.path.join('data', 'output', 'crackedpwd'))
@@ -351,12 +372,32 @@ def get_wifi_specific_network_file():
     return os.path.join(data_dir, f'network_{current_ssid}.csv')
 
 
+def _normalize_port_value(port_entry):
+    """Normalize a port entry string for consistent comparisons"""
+    try:
+        if not port_entry:
+            return None
+
+        cleaned = port_entry.strip()
+        if not cleaned:
+            return None
+
+        # Extract numeric portion if the port entry contains protocol suffixes
+        match = re.match(r"^(\d+)", cleaned)
+        if match:
+            return match.group(1)
+
+        return cleaned
+    except Exception:
+        return None
+
+
 def update_wifi_network_data():
-    """Update WiFi-specific network data from scan results"""
+    """Update WiFi-specific network data from scan results and provide aggregated counts"""
     try:
         scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
         wifi_network_file = get_wifi_specific_network_file()
-        
+
         # Load existing data if file exists
         existing_data = {}
         if os.path.exists(wifi_network_file):
@@ -368,20 +409,27 @@ def update_wifi_network_data():
                         for row in reader:
                             if len(row) >= 1 and row[0].strip():
                                 ip = row[0].strip()
+                                ports = set()
+                                if len(row) > 4 and row[4]:
+                                    for port_entry in row[4].split(';'):
+                                        normalized = _normalize_port_value(port_entry)
+                                        if normalized:
+                                            ports.add(normalized)
+
                                 existing_data[ip] = {
                                     'hostname': row[1] if len(row) > 1 else '',
                                     'alive': row[2] if len(row) > 2 else '1',
                                     'mac': row[3] if len(row) > 3 else '',
-                                    'ports': set(row[4].split(';')) if len(row) > 4 and row[4] else set(),
+                                    'ports': ports,
                                     'last_seen': row[5] if len(row) > 5 else datetime.now().isoformat()
                                 }
             except Exception as e:
                 logger.debug(f"Could not read existing WiFi network file: {e}")
-        
+
         # Process new scan results
         if os.path.exists(scan_results_dir):
             current_time = datetime.now().isoformat()
-            
+
             for filename in os.listdir(scan_results_dir):
                 if filename.startswith('result_') and filename.endswith('.csv'):
                     filepath = os.path.join(scan_results_dir, filename)
@@ -395,14 +443,15 @@ def update_wifi_network_data():
                                         hostname = row[1] if len(row) > 1 and row[1] else ''
                                         alive = row[2] if len(row) > 2 and row[2] else '1'
                                         mac = row[3] if len(row) > 3 and row[3] else ''
-                                        
+
                                         # Collect ports from remaining columns
                                         ports = set()
                                         if len(row) > 4:
                                             for port_col in row[4:]:
-                                                if port_col and port_col.strip():
-                                                    ports.add(port_col.strip())
-                                        
+                                                normalized = _normalize_port_value(port_col)
+                                                if normalized:
+                                                    ports.add(normalized)
+
                                         # Update or add entry
                                         if ip in existing_data:
                                             # Merge data
@@ -426,14 +475,53 @@ def update_wifi_network_data():
                         logger.debug(f"Could not read scan result file {filepath}: {e}")
                         continue
         
+        # Remove entries that haven't been seen recently
+        retention_days = shared_data.config.get('network_device_retention_days', 14)
+        try:
+            retention_days = int(retention_days)
+        except (ValueError, TypeError):
+            retention_days = 14
+
+        retention_days = max(retention_days, 1)
+        stale_cutoff = datetime.now() - timedelta(days=retention_days)
+
+        stale_hosts = []
+        for ip, data in list(existing_data.items()):
+            try:
+                last_seen_dt = datetime.fromisoformat(data.get('last_seen', datetime.now().isoformat()))
+            except Exception:
+                last_seen_dt = datetime.now()
+
+            if last_seen_dt < stale_cutoff:
+                stale_hosts.append(ip)
+
+        for ip in stale_hosts:
+            existing_data.pop(ip, None)
+
+        # Prepare aggregated counts from persisted data
+        aggregated_host_count = 0
+        aggregated_port_count = 0
+
+        for ip, data in existing_data.items():
+            aggregated_host_count += 1
+            aggregated_port_count += sum(1 for port in data['ports'] if port)
+
         # Write updated data to WiFi-specific file
         try:
             with open(wifi_network_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(['IP', 'Hostname', 'Alive', 'MAC', 'Ports', 'LastSeen'])
-                
+
                 for ip, data in existing_data.items():
-                    ports_str = ';'.join(sorted(data['ports'], key=lambda x: int(x) if x.isdigit() else 0))
+                    def port_sort_key(value):
+                        if value.isdigit():
+                            return int(value)
+                        try:
+                            return int(re.match(r"^(\d+)", value).group(1))
+                        except Exception:
+                            return value
+
+                    ports_str = ';'.join(sorted((port for port in data['ports'] if port), key=port_sort_key))
                     writer.writerow([
                         ip,
                         data['hostname'],
@@ -442,13 +530,20 @@ def update_wifi_network_data():
                         ports_str,
                         data['last_seen']
                     ])
-            
-            logger.info(f"Updated WiFi network data file: {wifi_network_file} with {len(existing_data)} entries")
+
+            logger.info(f"Updated WiFi network data file: {wifi_network_file} with {len(existing_data)} entries (removed {len(stale_hosts)} stale hosts)")
         except Exception as e:
             logger.error(f"Error writing WiFi network data file: {e}")
-    
+
+        return {
+            'host_count': aggregated_host_count,
+            'port_count': aggregated_port_count,
+            'stale_hosts_removed': len(stale_hosts)
+        }
+
     except Exception as e:
         logger.error(f"Error updating WiFi network data: {e}")
+        return None
 
 
 def read_wifi_network_data():
