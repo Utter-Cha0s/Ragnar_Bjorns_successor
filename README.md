@@ -53,16 +53,16 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
 
 ### 📋 Prerequisites for RPI zero W + W2 (64bits)
 
-
-
 - Raspberry Pi OS installed. 
     - Stable:
       - System: 64-bit
       - Kernel version: 6.12
       - Debian version: Debian GNU/Linux 13 (trixie)'
-- Username and hostname set to `Ragnar`.
+- Username and hostname set to `ragnar`.
 - 2.13-inch e-Paper HAT connected to GPIO pins.
 
+Ragnar is built for 64 bit trixie and 
+Waveshare 2.13inch E-Paper Display HAT V4 for 32 bit system i recommend using Ragnars little brother [Bjorn](https://github.com/infinition/Bjorn) 
 
 ### 🔨 Installation
 
