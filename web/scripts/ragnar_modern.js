@@ -1280,8 +1280,8 @@ function updateDashboardStatus(data) {
     }
     
     // Update status - use the actual e-paper display text
-    updateElement('ragnar-status', data.ragnar_status || 'IDLE');
-    updateElement('ragnar-says', (data.ragnar_status2 || data.ragnar_status || 'Awakening...'));
+    updateElement('Ragnar-status', data.ragnar_status || 'IDLE');
+    updateElement('Ragnar-says', (data.ragnar_says || 'Hacking away...'));
     
     // Update mode and handle manual controls
     const isManualMode = data.manual_mode;
