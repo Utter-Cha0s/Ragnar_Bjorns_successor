@@ -1032,7 +1032,7 @@ def check_updates():
         
         # Fetch latest changes from remote
         try:
-            fetch_result = subprocess.run(['git', 'fetch', 'origin'], cwd=repo_path, check=True, capture_output=True, text=True)
+            fetch_result = subprocess.run(['git', 'fetch'], cwd=repo_path, check=True, capture_output=True, text=True)
             logger.info(f"Git fetch completed: {fetch_result.stdout}")
         except subprocess.CalledProcessError as e:
             logger.error(f"Git fetch failed: {e.stderr}")
@@ -1042,7 +1042,7 @@ def check_updates():
                              cwd=repo_path, check=True, capture_output=True)
                 logger.info(f"Added {repo_path} to git safe directories")
                 # Retry fetch
-                fetch_result = subprocess.run(['git', 'fetch', 'origin'], cwd=repo_path, check=True, capture_output=True, text=True)
+                fetch_result = subprocess.run(['git', 'fetch'], cwd=repo_path, check=True, capture_output=True, text=True)
                 logger.info(f"Git fetch completed after fixing safe directory: {fetch_result.stdout}")
             except subprocess.CalledProcessError as e2:
                 logger.error(f"Git fetch still failed after fixing safe directory: {e2.stderr}")
@@ -1052,33 +1052,30 @@ def check_updates():
                     'detailed_error': str(e2.stderr)
                 }), 500
         
+        # Get the current branch name
+        try:
+            branch_result = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True)
+            current_branch = branch_result.stdout.strip()
+        except subprocess.CalledProcessError:
+            current_branch = 'main' # Fallback
+        
+        logger.info(f"Current git branch is: {current_branch}")
+        remote_branch = f'origin/{current_branch}'
+
         # Check if local branch is behind remote
         try:
             result = subprocess.run(
-                ['git', 'rev-list', '--count', 'HEAD..origin/main'], 
+                ['git', 'rev-list', '--count', f'HEAD..{remote_branch}'], 
                 cwd=repo_path, 
                 capture_output=True, 
                 text=True, 
                 check=True
             )
             commits_behind = int(result.stdout.strip())
-            logger.info(f"Commits behind: {commits_behind}")
+            logger.info(f"Commits behind '{remote_branch}': {commits_behind}")
         except (subprocess.CalledProcessError, ValueError) as e:
-            logger.error(f"Error checking commits behind main: {e}")
-            # Fallback: try main branch or assume up to date
-            try:
-                result = subprocess.run(
-                    ['git', 'rev-list', '--count', 'HEAD..origin/main'], 
-                    cwd=repo_path, 
-                    capture_output=True, 
-                    text=True, 
-                    check=True
-                )
-                commits_behind = int(result.stdout.strip())
-                logger.info(f"Commits behind (main): {commits_behind}")
-            except:
-                logger.error("Could not determine commits behind, assuming up to date")
-                commits_behind = 0
+            logger.error(f"Error checking commits behind '{remote_branch}': {e}")
+            commits_behind = 0
         
         # Get current HEAD commit
         try:
@@ -1096,7 +1093,7 @@ def check_updates():
         # Get latest commit info
         try:
             result = subprocess.run(
-                ['git', 'log', 'origin/main', '--oneline', '-1'], 
+                ['git', 'log', remote_branch, '--oneline', '-1'], 
                 cwd=repo_path, 
                 capture_output=True, 
                 text=True, 
@@ -1104,17 +1101,7 @@ def check_updates():
             )
             latest_commit = result.stdout.strip()
         except:
-            try:
-                result = subprocess.run(
-                    ['git', 'log', 'origin/main', '--oneline', '-1'], 
-                    cwd=repo_path, 
-                    capture_output=True, 
-                    text=True, 
-                    check=True
-                )
-                latest_commit = result.stdout.strip()
-            except:
-                latest_commit = "Unable to fetch latest commit"
+            latest_commit = "Unable to fetch latest commit"
         
         logger.info(f"Update check result - Behind: {commits_behind}, Current: {current_commit}, Latest: {latest_commit}")
         
