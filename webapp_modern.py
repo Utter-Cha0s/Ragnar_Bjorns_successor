@@ -1143,12 +1143,22 @@ def perform_update():
         # Make files executable after pull
         try:
             logger.info("Making files executable...")
-            chmod_result = subprocess.run(
-                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/*'],
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            # More comprehensive chmod - handle shell scripts and Python files specifically
+            chmod_commands = [
+                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/*.sh'],           # All shell scripts
+                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/*.py'],           # All Python files
+                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/Ragnar.py'],      # Main script
+                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/kill_port_8000.sh'], # Specific failing script
+                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/webapp_modern.py'], # This file
+                ['sudo', 'find', '/home/ragnar/Ragnar', '-name', '*.sh', '-exec', 'chmod', '+x', '{}', ';'] # Find all .sh files
+            ]
+            
+            for cmd in chmod_commands:
+                try:
+                    subprocess.run(cmd, capture_output=True, text=True, check=False)  # Don't fail on individual commands
+                except Exception as e:
+                    logger.debug(f"Chmod command failed (continuing): {cmd} - {e}")
+            
             logger.info("Files made executable successfully")
         except subprocess.CalledProcessError as e:
             logger.warning(f"Chmod failed (continuing anyway): {e.stderr}")
