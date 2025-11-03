@@ -134,7 +134,7 @@ class SharedData:
             "websrv": True,
             "web_increment": False,
             "debug_mode": True,
-            "scan_vuln_running": False,
+            "scan_vuln_running": True,
             "retry_success_actions": False,
             "retry_failed_actions": True,
             "blacklistcheck": True,
@@ -144,6 +144,7 @@ class SharedData:
             "log_warning": True,
             "log_error": True,
             "log_critical": True,
+            "terminal_log_level": "all",
             
             "startup_delay": 10,
             "web_delay": 2,

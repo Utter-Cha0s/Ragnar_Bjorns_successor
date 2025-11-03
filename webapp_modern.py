@@ -830,6 +830,9 @@ def get_logs():
         # Enhanced logging - aggregate from multiple sources
         all_logs = []
         
+        # Get terminal log level filter from config
+        terminal_log_level = shared_data.config.get('terminal_log_level', 'all')
+        
         # 1. Get web console logs (existing functionality)
         log_file = shared_data.webconsolelog
         if os.path.exists(log_file):
@@ -924,9 +927,41 @@ def get_logs():
         status_log = f"📊 Status: {safe_int(shared_data.targetnbr)} targets, {safe_int(shared_data.portnbr)} ports, {safe_int(shared_data.vulnnbr)} vulns, {safe_int(shared_data.crednbr)} creds"
         all_logs.append(f"[STATUS] {status_log}")
         
+        # Filter logs based on terminal_log_level setting
+        def should_include_log(log_line):
+            """Filter logs based on terminal_log_level setting"""
+            if terminal_log_level == 'all':
+                return True
+            
+            log_upper = log_line.upper()
+            
+            # Check for error indicators
+            is_error = any(keyword in log_upper for keyword in [
+                'ERROR', 'CRITICAL', 'EXCEPTION', 'FAILED', 'FAILURE'
+            ])
+            
+            # Check for warning/info indicators
+            is_info_or_warning = any(keyword in log_upper for keyword in [
+                'WARNING', 'WARN', 'INFO', 'SUCCESS', 'DISCOVERED', 
+                'FOUND', 'STATUS', 'CREDENTIALS', 'VULNERABILITIES', 'DISCOVERY'
+            ])
+            
+            if terminal_log_level == 'error':
+                # Only show errors
+                return is_error
+            elif terminal_log_level == 'info':
+                # Show info/warnings and errors
+                return is_error or is_info_or_warning
+            
+            # Default: show the log if we can't determine (safer to show)
+            return True
+        
+        # Apply filtering
+        filtered_logs = [log for log in all_logs if should_include_log(log)]
+        
         # Sort logs by timestamp if possible, otherwise keep recent additions at the end
         # Limit to last 100 entries to avoid overwhelming the UI
-        recent_logs = all_logs[-100:] if all_logs else []
+        recent_logs = filtered_logs[-100:] if filtered_logs else []
         
         return jsonify({'logs': recent_logs})
     except Exception as e:

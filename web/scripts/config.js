@@ -47,6 +47,12 @@ const configMetadata = {
         label: "Log Critical Messages",
         description: "Include critical-level entries in Ragnar logs."
     },
+    terminal_log_level: {
+        label: "Terminal Log Level",
+        description: "Control which log levels appear in the dashboard terminal. Options: 'all' (show everything), 'info' (info, warnings, and errors only), 'error' (errors only).",
+        type: "select",
+        options: ["all", "info", "error"]
+    },
     startup_delay: {
         label: "Startup Delay (s)",
         description: "Seconds to wait after boot before the orchestrator begins automated activity."
@@ -309,6 +315,25 @@ function generateConfigForm(config) {
                         <label for="${key}">${labelText}</label>
                         ${infoIcon}
                     </div>
+                </div>
+            `;
+        } else if (configMetadata[key] && configMetadata[key].type === "select") {
+            // Handle dropdown/select fields
+            const labelText = escapeHtml(getConfigLabel(key));
+            const infoIcon = createInfoIconMarkup(key);
+            const options = configMetadata[key].options || [];
+            const optionsHtml = options.map(opt => 
+                `<option value="${escapeHtml(opt)}" ${opt === value ? 'selected' : ''}>${escapeHtml(opt)}</option>`
+            ).join('');
+            rightColumn.innerHTML += `
+                <div class="section-item">
+                    <div class="label-with-info">
+                        <label for="${key}">${labelText}:</label>
+                        ${infoIcon}
+                    </div>
+                    <select id="${key}" name="${key}" style="width: 100%; padding: 8px; border: 1px solid #555; background-color: #2a2a2a; color: #fff; border-radius: 4px;">
+                        ${optionsHtml}
+                    </select>
                 </div>
             `;
         } else if (Array.isArray(value)) {
