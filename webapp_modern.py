@@ -19,6 +19,10 @@ import threading
 import time
 import subprocess
 import re
+import io
+import base64
+import shutil
+import importlib
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response
 from flask_socketio import SocketIO, emit
@@ -27,6 +31,16 @@ try:
     flask_cors_available = True
 except ImportError:
     flask_cors_available = False
+try:
+    import psutil
+    psutil_available = True
+except ImportError:
+    psutil_available = False
+try:
+    import pandas as pd
+    pandas_available = True
+except ImportError:
+    pandas_available = False
 from init_shared import shared_data
 from utils import WebUtils
 from logger import Logger
@@ -141,12 +155,14 @@ def sync_vulnerability_count():
         # Also update livestatus file if it exists
         if os.path.exists(shared_data.livestatusfile):
             try:
-                import pandas as pd
-                df = pd.read_csv(shared_data.livestatusfile)
-                if not df.empty:
-                    df.loc[0, 'Vulnerabilities Count'] = vuln_count
-                    df.to_csv(shared_data.livestatusfile, index=False)
-                    logger.debug(f"Updated livestatus file with vuln count: {vuln_count}")
+                if pandas_available:
+                    df = pd.read_csv(shared_data.livestatusfile)
+                    if not df.empty:
+                        df.loc[0, 'Vulnerabilities Count'] = vuln_count
+                        df.to_csv(shared_data.livestatusfile, index=False)
+                        logger.debug(f"Updated livestatus file with vuln count: {vuln_count}")
+                else:
+                    logger.warning("Pandas not available, skipping livestatus update")
             except Exception as e:
                 logger.warning(f"Could not update livestatus with sync vulnerability count: {e}")
         
@@ -289,14 +305,16 @@ def sync_all_counts():
             # Update livestatus file with all synchronized counts
             if os.path.exists(shared_data.livestatusfile):
                 try:
-                    import pandas as pd
-                    df = pd.read_csv(shared_data.livestatusfile)
-                    if not df.empty:
-                        df.loc[0, 'Alive Hosts Count'] = safe_int(shared_data.targetnbr)
-                        df.loc[0, 'Total Open Ports'] = safe_int(shared_data.portnbr)
-                        df.loc[0, 'Vulnerabilities Count'] = safe_int(shared_data.vulnnbr)
-                        df.to_csv(shared_data.livestatusfile, index=False)
-                        logger.debug("Updated livestatus file with synchronized counts")
+                    if pandas_available:
+                        df = pd.read_csv(shared_data.livestatusfile)
+                        if not df.empty:
+                            df.loc[0, 'Alive Hosts Count'] = safe_int(shared_data.targetnbr)
+                            df.loc[0, 'Total Open Ports'] = safe_int(shared_data.portnbr)
+                            df.loc[0, 'Vulnerabilities Count'] = safe_int(shared_data.vulnnbr)
+                            df.to_csv(shared_data.livestatusfile, index=False)
+                            logger.debug("Updated livestatus file with synchronized counts")
+                    else:
+                        logger.warning("Pandas not available, skipping livestatus update")
                 except Exception as e:
                     logger.warning(f"Could not update livestatus with all sync counts: {e}")
 
@@ -1797,8 +1815,6 @@ def get_epaper_display():
     """Get current e-paper display image as base64"""
     try:
         from PIL import Image
-        import base64
-        import io
         
         # Look for the current display image saved by display.py
         display_image_path = os.path.join(shared_data.webdir, "screen.png")
@@ -3610,9 +3626,9 @@ def format_bytes(bytes_value):
 def get_system_status_api():
     """Get comprehensive system status"""
     try:
-        import psutil
-        import subprocess
-        
+        if not psutil_available:
+            return jsonify({'error': 'System monitoring not available'}), 503
+            
         # CPU Information
         cpu_percent = psutil.cpu_percent(interval=1)
         cpu_count = psutil.cpu_count()
@@ -3729,7 +3745,8 @@ def get_system_status_api():
 def get_processes_api():
     """Get detailed process information"""
     try:
-        import psutil
+        if not psutil_available:
+            return jsonify({'error': 'Process monitoring not available'}), 503
         
         processes = []
         for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status', 'create_time']):
@@ -3763,7 +3780,8 @@ def get_processes_api():
 def get_network_stats_api():
     """Get network interface statistics"""
     try:
-        import psutil
+        if not psutil_available:
+            return jsonify({'error': 'Network monitoring not available'}), 503
         
         net_io = psutil.net_io_counters(pernic=True)
         net_connections = psutil.net_connections()
