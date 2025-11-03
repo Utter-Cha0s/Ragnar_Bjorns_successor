@@ -546,6 +546,9 @@ async function loadTabData(tabName) {
         case 'loot':
             await loadLootData();
             break;
+        case 'threat-intel':
+            await loadThreatIntelData();
+            break;
         case 'files':
             await loadFilesData();
             break;
@@ -3053,3 +3056,180 @@ window.exportNetkbEntry = exportNetkbEntry;
 window.researchEntry = researchEntry;
 window.researchVulnerability = researchVulnerability;
 window.exploitVulnerability = exploitVulnerability;
+
+// Threat Intelligence Functions
+window.loadThreatIntelData = loadThreatIntelData;
+window.refreshThreatIntel = refreshThreatIntel;
+window.enrichTarget = enrichTarget;
+window.updateThreatIntelStats = updateThreatIntelStats;
+
+// ===========================================
+// THREAT INTELLIGENCE FUNCTIONS
+// ===========================================
+
+// Load threat intelligence data when tab is shown
+async function loadThreatIntelData() {
+    try {
+        // Load threat intelligence status
+        const statusResponse = await fetch('/api/threat-intelligence/status');
+        if (statusResponse.ok) {
+            const statusData = await statusResponse.json();
+            updateThreatIntelStats(statusData);
+        }
+
+        // Load enriched findings
+        const findingsResponse = await fetch('/api/threat-intelligence/enriched-findings');
+        if (findingsResponse.ok) {
+            const findingsData = await findingsResponse.json();
+            updateEnrichedFindingsTable(findingsData.enriched_findings || []);
+        }
+
+    } catch (error) {
+        console.error('Error loading threat intelligence data:', error);
+        showNotification('Error loading threat intelligence data', 'error');
+    }
+}
+
+// Refresh threat intelligence data
+function refreshThreatIntel() {
+    showNotification('Refreshing threat intelligence...', 'info');
+    loadThreatIntelData();
+}
+
+// Update threat intelligence statistics
+function updateThreatIntelStats(data) {
+    // Update summary cards
+    document.getElementById('threat-sources-count').textContent = data.active_sources || 0;
+    document.getElementById('enriched-findings-count').textContent = data.enriched_findings_count || 0;
+    document.getElementById('high-risk-count').textContent = data.high_risk_count || 0;
+    document.getElementById('active-campaigns-count').textContent = data.active_campaigns || 0;
+
+    // Update risk distribution
+    const riskDistribution = data.risk_distribution || {};
+    document.getElementById('critical-risk-count').textContent = riskDistribution.critical || 0;
+    document.getElementById('high-risk-detail-count').textContent = riskDistribution.high || 0;
+    document.getElementById('medium-risk-count').textContent = riskDistribution.medium || 0;
+    document.getElementById('low-risk-count').textContent = riskDistribution.low || 0;
+
+    // Update source status indicators
+    const sources = data.source_status || {};
+    updateSourceStatus('cisa-status', sources.cisa_kev || false);
+    updateSourceStatus('nvd-status', sources.nvd_cve || false);
+    updateSourceStatus('otx-status', sources.alienvault_otx || false);
+    updateSourceStatus('mitre-status', sources.mitre_attack || false);
+}
+
+// Update source status indicator
+function updateSourceStatus(elementId, isActive) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.className = `w-3 h-3 rounded-full ${isActive ? 'bg-green-400' : 'bg-red-400'}`;
+    }
+}
+
+// Update enriched findings table
+function updateEnrichedFindingsTable(findings) {
+    const tableBody = document.getElementById('enriched-findings-table');
+    
+    if (!findings || findings.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-center py-8 text-slate-400">
+                    No enriched findings available. Run network scans to generate threat intelligence data.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tableBody.innerHTML = findings.map(finding => `
+        <tr class="border-b border-slate-700 hover:bg-slate-700/50">
+            <td class="py-3 px-4 text-white font-mono">${escapeHtml(finding.target)}</td>
+            <td class="py-3 px-4">
+                <span class="px-2 py-1 rounded text-xs font-medium ${getRiskScoreClass(finding.risk_score)}">
+                    ${finding.risk_score}/100
+                </span>
+            </td>
+            <td class="py-3 px-4 text-slate-300 max-w-xs truncate" title="${escapeHtml(finding.threat_context || 'N/A')}">
+                ${escapeHtml(finding.threat_context || 'N/A')}
+            </td>
+            <td class="py-3 px-4 text-slate-300">${escapeHtml(finding.attribution || 'Unknown')}</td>
+            <td class="py-3 px-4 text-slate-400">${formatTimestamp(finding.last_updated)}</td>
+            <td class="py-3 px-4">
+                <button onclick="showFindingDetails('${finding.target}')" 
+                        class="text-blue-400 hover:text-blue-300 text-sm">
+                    Details
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Get risk score CSS class
+function getRiskScoreClass(score) {
+    if (score >= 90) return 'bg-red-600 text-white';
+    if (score >= 70) return 'bg-orange-600 text-white';
+    if (score >= 50) return 'bg-yellow-600 text-black';
+    return 'bg-green-600 text-white';
+}
+
+// Manual target enrichment
+async function enrichTarget() {
+    const targetInput = document.getElementById('enrichment-target');
+    const target = targetInput.value.trim();
+    
+    if (!target) {
+        showNotification('Please enter a target (IP, domain, or hash)', 'error');
+        return;
+    }
+
+    try {
+        showNotification(`Enriching target: ${target}...`, 'info');
+        
+        const response = await fetch('/api/threat-intelligence/enrich-target', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ target: target })
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            showNotification(`Target enriched successfully. Risk score: ${result.risk_score}/100`, 'success');
+            targetInput.value = '';
+            loadThreatIntelData(); // Refresh the data
+        } else {
+            const error = await response.json();
+            showNotification(`Enrichment failed: ${error.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error enriching target:', error);
+        showNotification('Error enriching target', 'error');
+    }
+}
+
+// Show finding details (placeholder for future modal implementation)
+function showFindingDetails(target) {
+    showNotification(`Detailed analysis for ${target} coming soon...`, 'info');
+}
+
+// Format timestamp for display
+function formatTimestamp(timestamp) {
+    if (!timestamp) return 'N/A';
+    
+    try {
+        const date = new Date(timestamp);
+        return date.toLocaleString();
+    } catch (error) {
+        return 'Invalid date';
+    }
+}
+
+// HTML escape utility
+function escapeHtml(text) {
+    if (typeof text !== 'string') return text;
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}

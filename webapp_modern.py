@@ -44,6 +44,7 @@ except ImportError:
 from init_shared import shared_data
 from utils import WebUtils
 from logger import Logger
+from threat_intelligence import ThreatIntelligenceFusion
 
 # Initialize logger
 logger = Logger(name="webapp_modern.py", level=logging.DEBUG)
@@ -65,6 +66,14 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Initialize web utilities
 web_utils = WebUtils(shared_data, logger)
+
+# Initialize threat intelligence system
+try:
+    threat_intelligence = ThreatIntelligenceFusion(shared_data)
+    logger.info("Threat intelligence system initialized")
+except Exception as e:
+    logger.error(f"Failed to initialize threat intelligence: {e}")
+    threat_intelligence = None
 
 # Global state
 clients_connected = 0
@@ -2121,9 +2130,199 @@ def get_stats():
             df = pd.read_csv(shared_data.netkbfile)
             stats['scan_results_count'] = safe_int(len(df[df['Alive'] == 1]) if 'Alive' in df.columns else len(df))
         
+        # Add threat intelligence stats
+        if threat_intelligence:
+            ti_stats = threat_intelligence.get_enriched_findings_summary()
+            stats.update(ti_stats)
+        
         return jsonify(stats)
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# THREAT INTELLIGENCE ENDPOINTS
+# ============================================================================
+
+@app.route('/api/threat-intelligence/status')
+def get_threat_intelligence_status():
+    """Get threat intelligence system status"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'error': 'Threat intelligence system not available'}), 503
+        
+        status = {
+            'enabled': True,
+            'sources_configured': len(threat_intelligence.threat_sources),
+            'sources_enabled': sum(1 for s in threat_intelligence.threat_sources.values() if s.enabled),
+            'cache_entries': len(threat_intelligence.threat_cache),
+            'enriched_findings': len(threat_intelligence.enriched_findings)
+        }
+        
+        # Add source details
+        sources = []
+        for name, source in threat_intelligence.threat_sources.items():
+            sources.append({
+                'name': name,
+                'type': source.type,
+                'enabled': source.enabled,
+                'confidence_weight': source.confidence_weight,
+                'last_updated': source.last_updated
+            })
+        
+        status['sources'] = sources
+        
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Error getting threat intelligence status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/threat-intelligence/enriched-findings')
+def get_enriched_findings():
+    """Get all enriched findings with threat intelligence"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'error': 'Threat intelligence system not available'}), 503
+        
+        enriched_findings = []
+        
+        for finding_id, enriched_finding in threat_intelligence.enriched_findings.items():
+            finding_data = {
+                'id': finding_id,
+                'original_finding': enriched_finding.original_finding,
+                'dynamic_risk_score': enriched_finding.dynamic_risk_score,
+                'executive_summary': enriched_finding.executive_summary,
+                'recommended_actions': enriched_finding.recommended_actions,
+                'threat_contexts_count': len(enriched_finding.threat_contexts),
+                'active_campaigns': enriched_finding.active_campaigns,
+                'attribution': {
+                    'actor_name': enriched_finding.attribution.actor_name if enriched_finding.attribution else None,
+                    'confidence': enriched_finding.attribution.confidence if enriched_finding.attribution else 0.0
+                }
+            }
+            
+            # Add threat context summaries
+            threat_contexts = []
+            for context in enriched_finding.threat_contexts:
+                threat_contexts.append({
+                    'source': context.source,
+                    'threat_type': context.threat_type,
+                    'severity': context.severity,
+                    'confidence': context.confidence,
+                    'tags': context.tags
+                })
+            
+            finding_data['threat_contexts'] = threat_contexts
+            enriched_findings.append(finding_data)
+        
+        return jsonify({
+            'enriched_findings': enriched_findings,
+            'total_count': len(enriched_findings),
+            'summary': threat_intelligence.get_enriched_findings_summary()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting enriched findings: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/threat-intelligence/enrich-finding', methods=['POST'])
+def enrich_finding_endpoint():
+    """Manually enrich a finding with threat intelligence"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'error': 'Threat intelligence system not available'}), 503
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Extract finding data
+        finding = {
+            'id': data.get('id'),
+            'host': data.get('host'),
+            'port': data.get('port'),
+            'service': data.get('service'),
+            'vulnerability': data.get('vulnerability'),
+            'severity': data.get('severity', 'medium'),
+            'details': data.get('details', {})
+        }
+        
+        # Enrich the finding
+        import asyncio
+        enriched_finding = asyncio.run(threat_intelligence.enrich_finding_with_threat_intelligence(finding))
+        
+        return jsonify({
+            'success': True,
+            'enriched_finding': {
+                'id': finding['id'],
+                'dynamic_risk_score': enriched_finding.dynamic_risk_score,
+                'executive_summary': enriched_finding.executive_summary,
+                'recommended_actions': enriched_finding.recommended_actions,
+                'threat_contexts_count': len(enriched_finding.threat_contexts),
+                'attribution': {
+                    'actor_name': enriched_finding.attribution.actor_name if enriched_finding.attribution else None,
+                    'confidence': enriched_finding.attribution.confidence if enriched_finding.attribution else 0.0
+                }
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error enriching finding: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/threat-intelligence/dashboard')
+def get_threat_intelligence_dashboard():
+    """Get threat intelligence dashboard data"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'error': 'Threat intelligence system not available'}), 503
+        
+        dashboard_data = {
+            'summary': threat_intelligence.get_enriched_findings_summary(),
+            'recent_findings': [],
+            'risk_distribution': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0},
+            'threat_sources_status': []
+        }
+        
+        # Get recent enriched findings
+        recent_findings = []
+        for finding_id, enriched_finding in list(threat_intelligence.enriched_findings.items())[-10:]:
+            recent_findings.append({
+                'id': finding_id,
+                'host': enriched_finding.original_finding.get('host', 'Unknown'),
+                'vulnerability': enriched_finding.original_finding.get('vulnerability', 'Unknown'),
+                'risk_score': enriched_finding.dynamic_risk_score,
+                'executive_summary': enriched_finding.executive_summary[:200] + '...'
+            })
+        
+        dashboard_data['recent_findings'] = recent_findings
+        
+        # Calculate risk distribution
+        for enriched_finding in threat_intelligence.enriched_findings.values():
+            score = enriched_finding.dynamic_risk_score
+            if score >= 9.0:
+                dashboard_data['risk_distribution']['critical'] += 1
+            elif score >= 7.0:
+                dashboard_data['risk_distribution']['high'] += 1
+            elif score >= 5.0:
+                dashboard_data['risk_distribution']['medium'] += 1
+            else:
+                dashboard_data['risk_distribution']['low'] += 1
+        
+        # Threat sources status
+        for name, source in threat_intelligence.threat_sources.items():
+            dashboard_data['threat_sources_status'].append({
+                'name': name,
+                'type': source.type,
+                'enabled': source.enabled,
+                'last_updated': source.last_updated
+            })
+        
+        return jsonify(dashboard_data)
+        
+    except Exception as e:
+        logger.error(f"Error getting threat intelligence dashboard: {e}")
         return jsonify({'error': str(e)}), 500
 
 
