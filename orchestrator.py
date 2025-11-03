@@ -171,6 +171,12 @@ class Orchestrator:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             if result == 'success':
                 row[action_key] = f'success_{timestamp}'
+                # Update stats immediately after successful action
+                try:
+                    self.shared_data.update_stats()
+                    logger.debug(f"Updated stats after successful {action.action_name}")
+                except Exception as stats_error:
+                    logger.warning(f"Could not update stats: {stats_error}")
             else:
                 row[action_key] = f'failed_{timestamp}'
             self.shared_data.write_data(current_data)
@@ -235,6 +241,12 @@ class Orchestrator:
             if result == 'success':
                 row[action_key] = f'success_{timestamp}'
                 logger.info(f"Standalone action {action.action_name} executed successfully")
+                # Update stats immediately after successful standalone action
+                try:
+                    self.shared_data.update_stats()
+                    logger.debug(f"Updated stats after successful standalone {action.action_name}")
+                except Exception as stats_error:
+                    logger.warning(f"Could not update stats: {stats_error}")
             else:
                 row[action_key] = f'failed_{timestamp}'
                 logger.error(f"Standalone action {action.action_name} failed")

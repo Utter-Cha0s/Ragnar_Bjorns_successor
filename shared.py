@@ -21,6 +21,7 @@ import time
 import csv
 import logging
 import subprocess
+import threading
 from PIL import Image, ImageFont 
 from logger import Logger
 from epd_helper import EPDHelper
@@ -34,6 +35,7 @@ class SharedData:
         self.initialize_paths() # Initialize the paths used by the application
         self.status_list = [] 
         self.last_comment_time = time.time() # Last time a comment was displayed
+        self._stats_lock = threading.Lock()  # Thread-safe lock for update_stats()
         self.default_config = self.get_default_config() # Default configuration of the application  
         self.config = self.default_config.copy() # Configuration of the application
         # Load existing configuration first
@@ -796,8 +798,9 @@ class SharedData:
 
     def update_stats(self):
         """Update the stats based on formulas."""
-        self.coinnbr = int((self.networkkbnbr * 5 + self.crednbr * 5 + self.datanbr * 5 + self.zombiesnbr * 10+self.attacksnbr * 5+ self.vulnnbr * 2 ))
-        self.levelnbr = int((self.networkkbnbr * 0.1 + self.crednbr * 0.2 + self.datanbr * 0.1 + self.zombiesnbr * 0.5+ self.attacksnbr+ self.vulnnbr * 0.01 ))
+        with self._stats_lock:
+            self.coinnbr = int((self.networkkbnbr * 5 + self.crednbr * 5 + self.datanbr * 5 + self.zombiesnbr * 10+self.attacksnbr * 5+ self.vulnnbr * 2 ))
+            self.levelnbr = int((self.networkkbnbr * 0.1 + self.crednbr * 0.2 + self.datanbr * 0.1 + self.zombiesnbr * 0.5+ self.attacksnbr+ self.vulnnbr * 0.01 ))
 
 
     def print(self, message):
