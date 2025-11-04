@@ -2043,12 +2043,15 @@ def get_verbose_debug_logs():
             for i, entry in enumerate(network_data[:5]):  # Trace first 5 entries
                 ip = entry.get('IPs', '').strip()
                 alive_status = entry.get('Alive')
-                debug_info['api_traces'].append(f"Entry {i}: IP={ip}, Alive={alive_status} (type: {type(alive_status)})")
+                is_in_arp = ip in recent_arp_data
+                debug_info['api_traces'].append(f"Entry {i}: IP={ip}, Alive={alive_status} (type: {type(alive_status)}), InARP={is_in_arp}")
                 
                 if ip and ip not in processed_ips:
                     processed_ips.add(ip)
-                    is_alive = alive_status in [True, 'True', '1', 1]
-                    debug_info['api_traces'].append(f"  -> IP {ip} processed, alive check: {is_alive}")
+                    is_alive_in_file = alive_status in [True, 'True', '1', 1]
+                    is_alive_in_arp = ip in recent_arp_data
+                    is_alive = is_alive_in_file or is_alive_in_arp
+                    debug_info['api_traces'].append(f"  -> IP {ip} processed, alive_file={is_alive_in_file}, alive_arp={is_alive_in_arp}, final_alive={is_alive}")
                     if is_alive:
                         active_hosts_count += 1
                         debug_info['api_traces'].append(f"  -> Active count increased to {active_hosts_count}")
