@@ -2067,6 +2067,47 @@ def exit_wifi_ap_mode():
         logger.error(f"Error exiting Wi-Fi AP mode: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/wifi/force-recovery', methods=['POST'])
+def force_wifi_recovery():
+    """Force WiFi recovery - stop AP mode and aggressively search for known networks"""
+    try:
+        wifi_manager = getattr(shared_data, 'ragnar_instance', None)
+        if not wifi_manager or not hasattr(wifi_manager, 'wifi_manager'):
+            return jsonify({'error': 'Wi-Fi manager not available'}), 503
+        
+        wm = wifi_manager.wifi_manager
+        
+        # Stop AP mode if active
+        if wm.ap_mode_active:
+            logger.info("Force recovery: Stopping AP mode")
+            wm.stop_ap_mode()
+            time.sleep(2)  # Give time for AP to shut down properly
+        
+        # Force a WiFi search
+        logger.info("Force recovery: Starting aggressive WiFi search")
+        wm.wifi_validation_failures = 0
+        wm.consecutive_validation_cycles_failed = 0
+        
+        # Try to connect in a separate thread to avoid blocking
+        def attempt_reconnect():
+            success = wm._endless_loop_wifi_search()
+            if success:
+                logger.info("Force recovery: Successfully reconnected to WiFi")
+            else:
+                logger.warning("Force recovery: Failed to reconnect to WiFi")
+        
+        recovery_thread = threading.Thread(target=attempt_reconnect, daemon=True)
+        recovery_thread.start()
+        
+        return jsonify({
+            'success': True,
+            'message': 'WiFi recovery initiated - searching for known networks...'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error forcing WiFi recovery: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/epaper-display')
 def get_epaper_display():
     """Get current e-paper display image as base64"""
