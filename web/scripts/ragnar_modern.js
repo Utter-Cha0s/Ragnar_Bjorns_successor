@@ -320,20 +320,9 @@ function initializeSocket() {
 
     socket.on('network_update', function(data) {
         if (currentTab === 'network') {
-            // Check if this is enhanced network scan data
-            if (data.source === 'arp_background' && data.hosts) {
-                // Convert to format expected by updateNetworkTableWithScanData
-                const enhancedData = {
-                    success: true,
-                    hosts: data.hosts,
-                    count: data.count,
-                    timestamp: data.timestamp
-                };
-                updateNetworkTableWithScanData(enhancedData);
-            } else {
-                // Fallback to original display function
-                displayNetworkTable(data);
-            }
+            // Only refresh the stable data when we get background updates
+            // This prevents the twitching by not processing conflicting data sources
+            loadStableNetworkData();
         }
     });
 
@@ -429,16 +418,8 @@ function setupEventListeners() {
         clearBtn.addEventListener('click', clearConsole);
     }
 
-    // Real-time scanning buttons
-    const startScanBtn = document.getElementById('start-network-scan');
-    if (startScanBtn) {
-        startScanBtn.addEventListener('click', startEnhancedRealTimeScan);
-    }
-
-    const stopScanBtn = document.getElementById('stop-network-scan');
-    if (stopScanBtn) {
-        stopScanBtn.addEventListener('click', stopEnhancedRealTimeScan);
-    }
+    // Remove network scan button listeners to prevent conflicts
+    // Network tab now just displays stable data from background scanning
 }
 
 // ============================================================================
@@ -749,10 +730,132 @@ function updateDashboardStats(stats) {
 
 async function loadNetworkData() {
     try {
-        const data = await fetchAPI('/api/network');
-        displayNetworkTable(data);
+        // Use the new stable network data endpoint
+        await loadStableNetworkData();
     } catch (error) {
         console.error('Error loading network data:', error);
+        addConsoleMessage('Failed to load network data', 'error');
+    }
+}
+
+// ============================================================================
+// STABLE NETWORK DATA FUNCTIONS
+// ============================================================================
+
+async function loadStableNetworkData() {
+    try {
+        const data = await fetchAPI('/api/network/stable');
+        
+        if (data.success) {
+            displayStableNetworkTable(data);
+            addConsoleMessage(`Network data loaded: ${data.count} hosts`, 'info');
+        } else {
+            addConsoleMessage(`Failed to load network data: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error loading stable network data:', error);
+        addConsoleMessage(`Network data error: ${error.message}`, 'error');
+    }
+}
+
+function displayStableNetworkTable(data) {
+    const tableBody = document.getElementById('network-hosts-table');
+    const hostCountSpan = document.getElementById('host-count');
+    
+    if (!tableBody) return;
+    
+    tableBody.innerHTML = '';
+    
+    if (!data.hosts || data.hosts.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center py-8 text-gray-400">
+                    No hosts discovered yet. Network scanning is running in the background.
+                </td>
+            </tr>
+        `;
+        if (hostCountSpan) hostCountSpan.textContent = '0 hosts';
+        return;
+    }
+    
+    data.hosts.forEach(host => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
+        
+        // Status indicator
+        const statusIcon = host.status === 'up' ? 
+            '<span class="flex items-center"><div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>Online</span>' :
+            '<span class="flex items-center"><div class="w-2 h-2 bg-gray-500 rounded-full mr-2"></div>Unknown</span>';
+        
+        // Format MAC address
+        let macDisplay = host.mac === 'Unknown' ? 
+            '<span class="text-gray-500">Unknown</span>' : 
+            `<span class="font-mono text-xs">${host.mac}</span>`;
+        
+        // Format ports
+        let portsDisplay = host.ports === 'Unknown' || host.ports === 'Scanning...' ? 
+            '<span class="text-gray-500">Unknown</span>' : 
+            `<span class="text-xs">${host.ports}</span>`;
+        
+        // Format vulnerabilities
+        let vulnDisplay = host.vulnerabilities === '0' ? 
+            '<span class="text-gray-500">None</span>' : 
+            `<span class="text-orange-400">${host.vulnerabilities}</span>`;
+        
+        // Format last scan
+        let lastScanDisplay = host.last_scan === 'Never' || host.last_scan === 'Unknown' ? 
+            '<span class="text-gray-500">Never</span>' : 
+            `<span class="text-xs">${formatTimeAgo(host.last_scan)}</span>`;
+        
+        row.innerHTML = `
+            <td class="py-3 px-4">${statusIcon}</td>
+            <td class="py-3 px-4 font-mono text-sm">${host.ip}</td>
+            <td class="py-3 px-4">${host.hostname === 'Unknown' ? '<span class="text-gray-500">Unknown</span>' : host.hostname}</td>
+            <td class="py-3 px-4">${macDisplay}</td>
+            <td class="py-3 px-4">${portsDisplay}</td>
+            <td class="py-3 px-4">${vulnDisplay}</td>
+            <td class="py-3 px-4">${lastScanDisplay}</td>
+        `;
+        
+        tableBody.appendChild(row);
+    });
+    
+    // Update host count
+    if (hostCountSpan) {
+        hostCountSpan.textContent = `${data.hosts.length} hosts`;
+    }
+}
+
+function formatTimeAgo(timeString) {
+    try {
+        if (!timeString || timeString === 'Never' || timeString === 'Unknown') {
+            return 'Never';
+        }
+        
+        // If it's already a relative time string, return as is
+        if (timeString.includes('ago') || timeString.includes('Recently')) {
+            return timeString;
+        }
+        
+        const date = new Date(timeString);
+        if (isNaN(date.getTime())) {
+            return timeString; // Return original if can't parse
+        }
+        
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / (1000 * 60));
+        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        
+        return date.toLocaleDateString();
+    } catch (error) {
+        return timeString;
     }
 }
 

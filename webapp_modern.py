@@ -1444,6 +1444,92 @@ def load_persistent_network_data():
     return network_data
 
 
+@app.route('/api/network/stable')
+def get_stable_network_data():
+    """Get stable, aggregated network data for the Network tab"""
+    try:
+        # Read from the WiFi-specific network file for most stable data
+        network_data = read_wifi_network_data()
+        
+        # Also get any recent ARP scan cache data
+        recent_arp_data = network_scan_cache.get('arp_hosts', {})
+        
+        # Merge and enrich the data
+        enriched_hosts = []
+        processed_ips = set()
+        
+        # Process network data first (most stable)
+        for entry in network_data:
+            ip = entry.get('IP', '').strip()
+            if not ip or ip in processed_ips:
+                continue
+                
+            processed_ips.add(ip)
+            
+            host_data = {
+                'ip': ip,
+                'hostname': entry.get('Hostname', '').strip() or 'Unknown',
+                'mac': entry.get('MAC', '').strip() or 'Unknown', 
+                'status': 'up' if entry.get('Alive') in [True, 'True', '1', 1] else 'unknown',
+                'ports': entry.get('Ports', '').strip() or 'Unknown',
+                'vulnerabilities': str(entry.get('Vulnerabilities', '0')).strip() or '0',
+                'last_scan': entry.get('Last_Seen', '').strip() or 'Never',
+                'first_seen': entry.get('First_Seen', '').strip() or 'Unknown',
+                'os': entry.get('OS', '').strip() or 'Unknown',
+                'services': entry.get('Services', '').strip() or 'Unknown',
+                'source': 'network_data'
+            }
+            
+            # Enhance with recent ARP data if available
+            if ip in recent_arp_data:
+                arp_entry = recent_arp_data[ip]
+                if arp_entry.get('mac') and host_data['mac'] == 'Unknown':
+                    host_data['mac'] = arp_entry['mac']
+                if arp_entry.get('hostname') and host_data['hostname'] == 'Unknown':
+                    host_data['hostname'] = arp_entry['hostname']
+                host_data['status'] = 'up'  # ARP means it's definitely up
+                host_data['source'] = 'network_data+arp'
+            
+            enriched_hosts.append(host_data)
+        
+        # Add any new ARP discoveries not in network data
+        for ip, arp_entry in recent_arp_data.items():
+            if ip not in processed_ips:
+                host_data = {
+                    'ip': ip,
+                    'hostname': arp_entry.get('hostname', 'Unknown'),
+                    'mac': arp_entry.get('mac', 'Unknown'),
+                    'status': 'up',
+                    'ports': 'Scanning...',
+                    'vulnerabilities': '0',
+                    'last_scan': 'Recently discovered',
+                    'first_seen': 'Recent',
+                    'os': 'Unknown',
+                    'services': 'Unknown',
+                    'source': 'arp_discovery'
+                }
+                enriched_hosts.append(host_data)
+        
+        # Sort by IP address for consistent display
+        enriched_hosts.sort(key=lambda x: tuple(map(int, x['ip'].split('.'))))
+        
+        return jsonify({
+            'success': True,
+            'hosts': enriched_hosts,
+            'count': len(enriched_hosts),
+            'timestamp': datetime.now().isoformat(),
+            'source': 'stable_aggregated'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting stable network data: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hosts': [],
+            'count': 0
+        }), 500
+
 @app.route('/api/network')
 def get_network():
     """Get network scan data from the persistent WiFi-specific file."""
