@@ -837,22 +837,54 @@ function handleScanProgress(data) {
 }
 
 function handleScanHostUpdate(data) {
-    // Update the network table with new host data
-    if (currentTab === 'network') {
-        updateHostInTable(data);
+    if (!data) {
+        return;
     }
-    
-    // Update threat intelligence and NetKB if vulnerabilities found
-    if (data.vulnerabilities && data.vulnerabilities.length > 0) {
-        // Trigger refresh of threat intelligence tab
-        if (currentTab === 'threat') {
-            loadThreatIntelData();
+
+    const eventType = data.type || data.event || 'host_update';
+
+    if (eventType === 'sep_scan_output') {
+        if (data.message) {
+            const prefix = data.ip ? `[sep-scan ${data.ip}]` : '[sep-scan]';
+            addConsoleMessage(`${prefix} ${data.message}`, 'info');
         }
-        
-        // Update NetKB if applicable
-        if (currentTab === 'netkb') {
-            loadNetkbData();
+        return;
+    }
+
+    if (eventType === 'sep_scan_error') {
+        const prefix = data.ip ? `sep-scan error for ${data.ip}` : 'sep-scan error';
+        addConsoleMessage(`${prefix}: ${data.message || 'Unknown error'}`, 'error');
+        return;
+    }
+
+    if (eventType === 'sep_scan_completed') {
+        const ipLabel = data.ip || 'target';
+        const statusLabel = data.status === 'success' ? 'successfully' : 'with issues';
+        const level = data.status === 'success' ? 'success' : 'warning';
+        addConsoleMessage(`sep-scan completed for ${ipLabel} ${statusLabel}`, level);
+
+        if (currentTab === 'network') {
+            loadNetworkData();
         }
+        return;
+    }
+
+    // Update the network table with new host data
+    if (eventType === 'host_updated' || data.ip || data.IPs) {
+        if (currentTab === 'network') {
+            updateHostInTable(data);
+        }
+
+        // Update threat intelligence and NetKB if vulnerabilities found
+        if (data.vulnerabilities && data.vulnerabilities.length > 0) {
+            if (currentTab === 'threat') {
+                loadThreatIntelData();
+            }
+            if (currentTab === 'netkb') {
+                loadNetkbData();
+            }
+        }
+        return;
     }
 }
 
