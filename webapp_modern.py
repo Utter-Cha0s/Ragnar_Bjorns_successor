@@ -25,6 +25,7 @@ import shutil
 import importlib
 import hashlib
 import ipaddress
+import socket
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response
 from flask_socketio import SocketIO, emit
@@ -85,6 +86,160 @@ sync_lock = threading.Lock()
 last_sync_time = 0.0
 SYNC_BACKGROUND_INTERVAL = 5  # seconds between automatic synchronizations
 
+
+DEFAULT_ARP_SCAN_INTERFACE = 'wlan0'
+SEP_SCAN_COMMAND = ['sudo', 'sep-scan']
+MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+
+
+def _is_valid_ipv4(value):
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _normalize_mac(mac):
+    return mac.lower() if mac else ''
+
+
+def _parse_arp_scan_output(output):
+    hosts = {}
+    if not output:
+        return hosts
+
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith('Interface:') or line.startswith('Starting') or line.startswith('Ending'):
+            continue
+
+        parts = re.split(r'\s+', line)
+        if len(parts) < 2:
+            continue
+
+        ip_candidate, mac_candidate = parts[0], parts[1]
+        if not (_is_valid_ipv4(ip_candidate) and MAC_REGEX.match(mac_candidate)):
+            continue
+
+        vendor = ' '.join(parts[2:]).strip() if len(parts) > 2 else ''
+        hosts[ip_candidate] = {
+            'mac': _normalize_mac(mac_candidate),
+            'vendor': vendor
+        }
+
+    return hosts
+
+
+def build_pseudo_mac_from_ip(ip):
+    try:
+        octets = [int(part) for part in ip.split('.')]
+        if len(octets) == 4:
+            return f"00:00:{octets[0]:02x}:{octets[1]:02x}:{octets[2]:02x}:{octets[3]:02x}"
+    except Exception:
+        pass
+    return "00:00:00:00:00:00"
+
+
+def run_targeted_arp_scan(ip, interface=DEFAULT_ARP_SCAN_INTERFACE):
+    command = ['sudo', 'arp-scan', f'--interface={interface}', ip]
+    logger.info(f"Running targeted arp-scan for {ip}: {' '.join(command)}")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=60)
+        hosts = _parse_arp_scan_output(result.stdout)
+        entry = hosts.get(ip)
+        return entry.get('mac', '') if entry else ''
+    except FileNotFoundError:
+        logger.warning("arp-scan command not found when resolving MAC for %s", ip)
+        return ''
+    except subprocess.TimeoutExpired as e:
+        logger.warning("arp-scan timed out for %s: %s", ip, e)
+        hosts = _parse_arp_scan_output(e.stdout or '')
+        entry = hosts.get(ip)
+        return entry.get('mac', '') if entry else ''
+    except Exception as e:
+        logger.error(f"Error running targeted arp-scan for {ip}: {e}")
+        return ''
+
+
+def resolve_ip_hostname(ip):
+    try:
+        if _is_valid_ipv4(ip):
+            hostname, _, _ = socket.gethostbyaddr(ip)
+            return hostname
+    except (socket.herror, socket.gaierror):
+        return ''
+    except Exception as e:
+        logger.debug(f"Hostname resolution failed for {ip}: {e}")
+    return ''
+
+
+def update_netkb_entry(ip, hostname, mac, is_alive):
+    try:
+        netkb_path = shared_data.netkbfile
+        os.makedirs(os.path.dirname(netkb_path), exist_ok=True)
+
+        rows = []
+        headers = []
+        updated_row = None
+
+        if os.path.exists(netkb_path) and os.path.getsize(netkb_path) > 0:
+            with open(netkb_path, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames or []
+                for row in reader:
+                    rows.append(row)
+        else:
+            headers = ['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports']
+
+        for column in ['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports']:
+            if column not in headers:
+                headers.append(column)
+
+        alive_value = '1' if is_alive else '0'
+        mac_to_store = _normalize_mac(mac) if mac else ''
+
+        for row in rows:
+            existing_ips = [entry.strip() for entry in row.get('IPs', '').split(';') if entry.strip()]
+            if ip in existing_ips:
+                if mac_to_store:
+                    row['MAC Address'] = mac_to_store
+                elif is_alive and not MAC_REGEX.match(row.get('MAC Address', '') or ''):
+                    row['MAC Address'] = build_pseudo_mac_from_ip(ip)
+
+                if hostname:
+                    existing_hostnames = [h.strip() for h in row.get('Hostnames', '').split(';') if h.strip()]
+                    existing_hostnames.append(hostname)
+                    row['Hostnames'] = ';'.join(sorted(set(existing_hostnames)))
+
+                row['Alive'] = alive_value
+                updated_row = row
+                break
+
+        if updated_row is None:
+            new_row = {header: '' for header in headers}
+            new_row['IPs'] = ip
+            new_row['Hostnames'] = hostname or ''
+            if mac_to_store:
+                new_row['MAC Address'] = mac_to_store
+            elif is_alive:
+                new_row['MAC Address'] = build_pseudo_mac_from_ip(ip)
+            else:
+                new_row['MAC Address'] = ''
+            new_row['Alive'] = alive_value
+            new_row['Ports'] = ''
+            rows.append(new_row)
+            updated_row = new_row
+
+        with open(netkb_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        return updated_row
+    except Exception as e:
+        logger.error(f"Error updating netkb entry for {ip}: {e}")
+        return None
 
 def broadcast_status_update():
     """Immediately broadcast current status to all connected clients"""
@@ -1711,28 +1866,134 @@ def scan_single_host():
             return jsonify({'status': 'error', 'message': 'IP address is required'}), 400
         
         ip = data['ip']
-        
+
         # Validate IP address format
         import ipaddress
         try:
             ipaddress.ip_address(ip)
         except ValueError:
             return jsonify({'status': 'error', 'message': 'Invalid IP address format'}), 400
-        
+
         # Start single host scan in background thread
         def scan_host_background():
-            from actions.nmap_vuln_scanner import NmapVulnScanner
-            
-            scanner = NmapVulnScanner(shared_data)
-            
-            # Real-time callback for individual host scan
-            def single_host_callback(scan_data):
-                if scan_data.get('type') == 'host_update':
-                    socketio.emit('scan_host_update', scan_data)
-            
-            # Scan the host
-            scanner.scan_single_host_realtime(ip, callback=single_host_callback)
-        
+            def run_nmap_fallback():
+                try:
+                    from actions.nmap_vuln_scanner import NmapVulnScanner
+
+                    scanner = NmapVulnScanner(shared_data)
+
+                    def callback(event_type, event_data):
+                        payload = {'type': event_type}
+                        if isinstance(event_data, dict):
+                            payload.update(event_data)
+                        socketio.emit('scan_host_update', payload)
+
+                    scanner.scan_single_host_realtime(ip, callback=callback)
+                except Exception as fallback_error:
+                    logger.error(f"Fallback nmap scan failed for {ip}: {fallback_error}")
+                    socketio.emit('scan_host_update', {
+                        'type': 'sep_scan_error',
+                        'ip': ip,
+                        'message': f'Nmap fallback failed: {fallback_error}'
+                    })
+
+            try:
+                logger.info(f"Running sep-scan for {ip}")
+                command = SEP_SCAN_COMMAND + [ip]
+                result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=300)
+
+                stdout_lines = result.stdout.splitlines() if result.stdout else []
+                stderr_lines = result.stderr.splitlines() if result.stderr else []
+
+                for line in stdout_lines:
+                    line = line.strip()
+                    if line:
+                        socketio.emit('scan_host_update', {
+                            'type': 'sep_scan_output',
+                            'ip': ip,
+                            'message': line
+                        })
+
+                for line in stderr_lines:
+                    line = line.strip()
+                    if line:
+                        socketio.emit('scan_host_update', {
+                            'type': 'sep_scan_output',
+                            'ip': ip,
+                            'message': line
+                        })
+
+                success = result.returncode == 0
+                if not success:
+                    error_message = result.stderr.strip() if result.stderr else f"sep-scan exited with code {result.returncode}"
+                    socketio.emit('scan_host_update', {
+                        'type': 'sep_scan_error',
+                        'ip': ip,
+                        'message': error_message
+                    })
+
+                mac = run_targeted_arp_scan(ip)
+                hostname = resolve_ip_hostname(ip)
+
+                updated_row = update_netkb_entry(ip, hostname, mac, success)
+                payload = {
+                    'type': 'host_updated',
+                    'ip': ip,
+                    'IPs': ip,
+                    'Hostnames': hostname or '',
+                    'MAC Address': mac or '',
+                    'Alive': '1' if success else '0',
+                    'Ports': '',
+                    'scan_status': 'sep-scan' if success else 'sep-scan-failed',
+                    'last_scan': datetime.now().isoformat(),
+                    'vulnerabilities': []
+                }
+
+                if updated_row:
+                    payload.update({
+                        'IPs': updated_row.get('IPs', ip),
+                        'Hostnames': updated_row.get('Hostnames', hostname or ''),
+                        'MAC Address': updated_row.get('MAC Address', mac or ''),
+                        'Ports': updated_row.get('Ports', ''),
+                        'Alive': updated_row.get('Alive', '1' if success else '0'),
+                        'Nmap Vulnerabilities': updated_row.get('Nmap Vulnerabilities', ''),
+                        'NmapVulnScanner': updated_row.get('NmapVulnScanner', '')
+                    })
+
+                payload['mac'] = payload.get('MAC Address', '')
+                payload['hostname'] = payload.get('Hostnames', '')
+
+                socketio.emit('scan_host_update', payload)
+                socketio.emit('scan_host_update', {
+                    'type': 'sep_scan_completed',
+                    'ip': ip,
+                    'status': 'success' if success else 'failed'
+                })
+
+            except FileNotFoundError:
+                logger.warning("sep-scan command not found. Falling back to nmap for %s", ip)
+                socketio.emit('scan_host_update', {
+                    'type': 'sep_scan_error',
+                    'ip': ip,
+                    'message': 'sep-scan command not found. Falling back to nmap.'
+                })
+                run_nmap_fallback()
+            except subprocess.TimeoutExpired:
+                logger.error(f"sep-scan timed out for {ip}")
+                socketio.emit('scan_host_update', {
+                    'type': 'sep_scan_error',
+                    'ip': ip,
+                    'message': 'sep-scan timed out'
+                })
+            except Exception as e:
+                logger.error(f"Error running sep-scan for {ip}: {e}")
+                socketio.emit('scan_host_update', {
+                    'type': 'sep_scan_error',
+                    'ip': ip,
+                    'message': str(e)
+                })
+                run_nmap_fallback()
+
         # Start the scan in a background thread
         import threading
         scan_thread = threading.Thread(target=scan_host_background)
