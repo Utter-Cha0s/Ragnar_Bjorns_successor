@@ -1458,10 +1458,45 @@
                         <h4 class="font-medium text-lg mb-3">Manual Profile Selection</h4>
                         <p class="text-sm text-gray-400 mb-4">Choose a predefined configuration for your hardware</p>
                         
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="hardware-profiles-grid">
-                            <!-- Profiles will be dynamically loaded here -->
-                            <div class="text-gray-400 col-span-full text-center py-8">
-                                Loading hardware profiles...
+                        <div class="flex flex-col sm:flex-row gap-4 items-end">
+                            <div class="flex-1">
+                                <label for="hardware-profile-select" class="block text-sm font-medium text-gray-300 mb-2">Hardware Profile</label>
+                                <select id="hardware-profile-select" class="w-full bg-slate-700 border border-slate-600 text-white py-2 px-3 rounded-lg focus:ring-2 focus:ring-Ragnar-500 focus:border-transparent">
+                                    <option value="">Loading hardware profiles...</option>
+                                </select>
+                            </div>
+                            <button id="apply-profile-btn" onclick="applySelectedProfile()" 
+                                    class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-6 rounded-lg transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed" 
+                                    disabled>
+                                Apply Profile
+                            </button>
+                        </div>
+                        
+                        <!-- Profile Details Display -->
+                        <div id="profile-details" class="mt-4 p-3 bg-slate-800 rounded-lg hidden">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span class="text-gray-400">Description:</span>
+                                    <p id="profile-description" class="text-gray-300 mt-1"></p>
+                                </div>
+                                <div class="space-y-2">
+                                    <div class="flex justify-between">
+                                        <span class="text-gray-400">RAM:</span>
+                                        <span id="profile-ram" class="text-gray-300"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="text-gray-400">Max Threads:</span>
+                                        <span id="profile-threads" class="text-gray-300"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="text-gray-400">Concurrent Actions:</span>
+                                        <span id="profile-concurrent" class="text-gray-300"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="text-gray-400">Scan Speed:</span>
+                                        <span id="profile-speed" class="text-gray-300"></span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

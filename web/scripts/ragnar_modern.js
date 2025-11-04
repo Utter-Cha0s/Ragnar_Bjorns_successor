@@ -320,7 +320,20 @@ function initializeSocket() {
 
     socket.on('network_update', function(data) {
         if (currentTab === 'network') {
-            displayNetworkTable(data);
+            // Check if this is enhanced network scan data
+            if (data.source === 'arp_background' && data.hosts) {
+                // Convert to format expected by updateNetworkTableWithScanData
+                const enhancedData = {
+                    success: true,
+                    hosts: data.hosts,
+                    count: data.count,
+                    timestamp: data.timestamp
+                };
+                updateNetworkTableWithScanData(enhancedData);
+            } else {
+                // Fallback to original display function
+                displayNetworkTable(data);
+            }
         }
     });
 
@@ -419,12 +432,12 @@ function setupEventListeners() {
     // Real-time scanning buttons
     const startScanBtn = document.getElementById('start-network-scan');
     if (startScanBtn) {
-        startScanBtn.addEventListener('click', startRealtimeScan);
+        startScanBtn.addEventListener('click', startEnhancedRealTimeScan);
     }
 
     const stopScanBtn = document.getElementById('stop-network-scan');
     if (stopScanBtn) {
-        stopScanBtn.addEventListener('click', stopRealtimeScan);
+        stopScanBtn.addEventListener('click', stopEnhancedRealTimeScan);
     }
 }
 
@@ -903,6 +916,192 @@ function handleScanError(data) {
     resetScanButtons();
 }
 
+// ============================================================================
+// ENHANCED NETWORK SCANNING WITH ARP/NMAP
+// ============================================================================
+
+// Network scanning variables for enhanced scanning
+let enhancedNetworkScanInterval = null;
+let isEnhancedRealTimeScanning = false;
+
+async function startEnhancedRealTimeScan() {
+    const startBtn = document.getElementById('start-network-scan');
+    const stopBtn = document.getElementById('stop-network-scan');
+    
+    if (!startBtn || !stopBtn) return;
+    
+    try {
+        addConsoleMessage('Starting enhanced real-time network scanning (ARP + Nmap)...', 'info');
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        isEnhancedRealTimeScanning = true;
+        
+        // Show progress section
+        document.getElementById('scan-progress').classList.remove('hidden');
+        
+        // Start immediate scan
+        await performCombinedNetworkScan();
+        
+        // Set up interval for continuous scanning
+        enhancedNetworkScanInterval = setInterval(async () => {
+            if (isEnhancedRealTimeScanning) {
+                await performCombinedNetworkScan();
+            }
+        }, 15000); // Scan every 15 seconds (ARP background scanning is every 10 seconds)
+        
+        addConsoleMessage('Enhanced real-time network scanning started', 'info');
+        
+    } catch (error) {
+        console.error('Error starting enhanced real-time scan:', error);
+        addConsoleMessage('Failed to start network scan: ' + error.message, 'error');
+        resetEnhancedScanButtons();
+    }
+}
+
+async function stopEnhancedRealTimeScan() {
+    const stopBtn = document.getElementById('stop-network-scan');
+    const startBtn = document.getElementById('start-network-scan');
+    
+    if (enhancedNetworkScanInterval) {
+        clearInterval(enhancedNetworkScanInterval);
+        enhancedNetworkScanInterval = null;
+    }
+    
+    isEnhancedRealTimeScanning = false;
+    
+    if (stopBtn && startBtn) {
+        addConsoleMessage('Stopping enhanced network scan...', 'info');
+        resetEnhancedScanButtons();
+    }
+}
+
+function resetEnhancedScanButtons() {
+    const startBtn = document.getElementById('start-network-scan');
+    const stopBtn = document.getElementById('stop-network-scan');
+    
+    if (startBtn && stopBtn) {
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        isEnhancedRealTimeScanning = false;
+        document.getElementById('scan-progress').classList.add('hidden');
+    }
+}
+
+async function performCombinedNetworkScan() {
+    try {
+        const data = await fetchAPI('/api/scan/combined-network');
+        
+        if (data.success) {
+            updateNetworkTableWithScanData(data);
+            addConsoleMessage(`Network scan found ${data.count} hosts (ARP: ${data.arp_count}, Nmap: ${data.nmap_count})`, 'success');
+        } else {
+            addConsoleMessage(`Network scan failed: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error performing network scan:', error);
+        addConsoleMessage(`Network scan error: ${error.message}`, 'error');
+    }
+}
+
+function updateNetworkTableWithScanData(data) {
+    const tableBody = document.getElementById('network-hosts-table');
+    const hostCountSpan = document.getElementById('host-count');
+    
+    if (!tableBody) return;
+    
+    tableBody.innerHTML = '';
+    
+    if (!data.hosts || Object.keys(data.hosts).length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="8" class="text-center py-8 text-gray-400">
+                    No hosts discovered. Check network connectivity and try again.
+                </td>
+            </tr>
+        `;
+        if (hostCountSpan) hostCountSpan.textContent = '0 hosts';
+        return;
+    }
+    
+    // Convert hosts object to array for easier processing
+    const hostArray = Object.values(data.hosts);
+    
+    hostArray.forEach(host => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
+        
+        // Determine status indicator
+        const statusIcon = host.status === 'up' ? 
+            '<span class="flex items-center"><div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>Online</span>' :
+            '<span class="flex items-center"><div class="w-2 h-2 bg-red-500 rounded-full mr-2"></div>Offline</span>';
+        
+        // Format MAC address with vendor info
+        let macDisplay = host.mac || 'Unknown';
+        if (host.vendor) {
+            macDisplay += `<br><span class="text-xs text-gray-400">${host.vendor}</span>`;
+        }
+        
+        // Get source indicator
+        const sourceIcon = {
+            'arp': '<span class="text-xs px-2 py-1 bg-blue-600 rounded">ARP</span>',
+            'nmap': '<span class="text-xs px-2 py-1 bg-purple-600 rounded">NMAP</span>',
+            'arp+nmap': '<span class="text-xs px-2 py-1 bg-green-600 rounded">ARP+NMAP</span>'
+        }[host.source] || '';
+        
+        row.innerHTML = `
+            <td class="py-3 px-4">${statusIcon}</td>
+            <td class="py-3 px-4 font-mono text-sm">${host.ip}</td>
+            <td class="py-3 px-4">${host.hostname || 'Unknown'}</td>
+            <td class="py-3 px-4 font-mono text-xs">${macDisplay}</td>
+            <td class="py-3 px-4">
+                <span class="text-xs px-2 py-1 bg-gray-600 rounded">Scanning...</span>
+            </td>
+            <td class="py-3 px-4">
+                <span class="text-xs px-2 py-1 bg-gray-600 rounded">Checking...</span>
+            </td>
+            <td class="py-3 px-4 text-sm text-gray-400">${new Date().toLocaleTimeString()}</td>
+            <td class="py-3 px-4">
+                <div class="flex space-x-2">
+                    ${sourceIcon}
+                    <button onclick="scanSingleHostEnhanced('${host.ip}')" 
+                            class="text-xs px-2 py-1 bg-Ragnar-600 hover:bg-Ragnar-700 rounded transition-colors">
+                        Scan
+                    </button>
+                </div>
+            </td>
+        `;
+        
+        tableBody.appendChild(row);
+    });
+    
+    // Update host count
+    if (hostCountSpan) {
+        hostCountSpan.textContent = `${hostArray.length} hosts`;
+    }
+}
+
+async function scanSingleHostEnhanced(ip) {
+    try {
+        addConsoleMessage(`Scanning host ${ip}...`, 'info');
+        
+        const data = await postAPI('/api/scan/host', { 
+            ip: ip,
+            scan_type: 'full'
+        });
+        
+        if (data.success) {
+            addConsoleMessage(`Host ${ip} scan completed`, 'success');
+            // Refresh the network table to show updated data
+            await performCombinedNetworkScan();
+        } else {
+            addConsoleMessage(`Host ${ip} scan failed: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error scanning host:', error);
+        addConsoleMessage(`Host scan error: ${error.message}`, 'error');
+    }
+}
+
 function updateScanProgress() {
     const progressText = document.getElementById('scan-progress-text');
     const progressBar = document.getElementById('scan-progress-bar');
@@ -1296,50 +1495,80 @@ async function loadFilesData() {
 async function loadHardwareProfiles() {
     try {
         const profiles = await fetchAPI('/api/config/hardware-profiles');
-        const grid = document.getElementById('hardware-profiles-grid');
+        const select = document.getElementById('hardware-profile-select');
+        const applyBtn = document.getElementById('apply-profile-btn');
         
-        if (!grid) return;
+        if (!select) return;
         
-        grid.innerHTML = '';
+        // Clear existing options
+        select.innerHTML = '<option value="">Select a hardware profile...</option>';
         
-        // Create profile cards
+        // Store profiles data for later use
+        window.hardwareProfiles = profiles;
+        
+        // Populate dropdown options
         for (const [profileId, profile] of Object.entries(profiles)) {
-            const card = document.createElement('div');
-            card.className = 'glass rounded-lg p-4 hover:border-2 hover:border-Ragnar-500 transition-all cursor-pointer';
-            card.onclick = () => confirmApplyProfile(profileId, profile);
-            
-            card.innerHTML = `
-                <div class="flex items-center justify-between mb-2">
-                    <h5 class="font-semibold text-white">${profile.name}</h5>
-                    <span class="text-xs px-2 py-1 rounded bg-slate-700 text-slate-300">${profile.ram}MB</span>
-                </div>
-                <p class="text-sm text-gray-400 mb-3">${profile.description}</p>
-                <div class="text-xs space-y-1 text-gray-500">
-                    <div class="flex justify-between">
-                        <span>Max Threads:</span>
-                        <span class="text-gray-300">${profile.settings.scanner_max_threads}</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span>Concurrent Actions:</span>
-                        <span class="text-gray-300">${profile.settings.orchestrator_max_concurrent}</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span>Scan Speed:</span>
-                        <span class="text-gray-300">${profile.settings.nmap_scan_aggressivity}</span>
-                    </div>
-                </div>
-                <button class="w-full mt-3 bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-3 rounded text-sm transition-colors">
-                    Apply Profile
-                </button>
-            `;
-            
-            grid.appendChild(card);
+            const option = document.createElement('option');
+            option.value = profileId;
+            option.textContent = `${profile.name} (${profile.ram}MB RAM)`;
+            select.appendChild(option);
         }
+        
+        // Add change event listener to show profile details
+        select.addEventListener('change', function() {
+            const selectedProfileId = this.value;
+            const applyBtn = document.getElementById('apply-profile-btn');
+            
+            if (selectedProfileId && profiles[selectedProfileId]) {
+                showProfileDetails(profiles[selectedProfileId]);
+                applyBtn.disabled = false;
+            } else {
+                hideProfileDetails();
+                applyBtn.disabled = true;
+            }
+        });
         
     } catch (error) {
         console.error('Error loading hardware profiles:', error);
         addConsoleMessage('Failed to load hardware profiles', 'error');
+        
+        const select = document.getElementById('hardware-profile-select');
+        if (select) {
+            select.innerHTML = '<option value="">Error loading profiles</option>';
+        }
     }
+}
+
+function showProfileDetails(profile) {
+    const detailsDiv = document.getElementById('profile-details');
+    if (!detailsDiv) return;
+    
+    document.getElementById('profile-description').textContent = profile.description || 'No description available';
+    document.getElementById('profile-ram').textContent = `${profile.ram}MB`;
+    document.getElementById('profile-threads').textContent = profile.settings.scanner_max_threads || 'N/A';
+    document.getElementById('profile-concurrent').textContent = profile.settings.orchestrator_max_concurrent || 'N/A';
+    document.getElementById('profile-speed').textContent = profile.settings.nmap_scan_aggressivity || 'N/A';
+    
+    detailsDiv.classList.remove('hidden');
+}
+
+function hideProfileDetails() {
+    const detailsDiv = document.getElementById('profile-details');
+    if (detailsDiv) {
+        detailsDiv.classList.add('hidden');
+    }
+}
+
+async function applySelectedProfile() {
+    const select = document.getElementById('hardware-profile-select');
+    const selectedProfileId = select.value;
+    
+    if (!selectedProfileId) {
+        addConsoleMessage('Please select a hardware profile first', 'warning');
+        return;
+    }
+    
+    await confirmApplyProfile(selectedProfileId, window.hardwareProfiles[selectedProfileId]);
 }
 
 async function detectAndApplyHardware() {

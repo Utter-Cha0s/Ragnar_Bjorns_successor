@@ -174,8 +174,47 @@ def resolve_ip_hostname(ip):
     return ''
 
 
+def update_vulnerability_output(ip, hostname, mac, is_alive):
+    """Create or update vulnerability scan results file for discovered host"""
+    try:
+        # Ensure vulnerabilities output directory exists
+        vuln_output_dir = os.path.join('data', 'output', 'vulnerabilities')
+        os.makedirs(vuln_output_dir, exist_ok=True)
+        
+        # Create or update vulnerability scan results file for this IP
+        vuln_file = os.path.join(vuln_output_dir, f'scan_{ip.replace(".", "_")}.txt')
+        
+        with open(vuln_file, 'w') as f:
+            f.write(f"# Vulnerability scan results for {ip}\n")
+            f.write(f"# Hostname: {hostname}\n")
+            f.write(f"# MAC: {mac}\n")
+            f.write(f"# Status: {'alive' if is_alive else 'dead'}\n")
+            f.write(f"# Last updated: {datetime.now().isoformat()}\n")
+            f.write(f"# Discovered via: ARP/Nmap network scanning\n\n")
+            
+            if is_alive:
+                f.write(f"Host {ip} is alive and responding\n")
+                f.write(f"MAC Address: {mac}\n")
+                f.write(f"Hostname: {hostname}\n")
+                f.write(f"Status: ACTIVE\n\n")
+                f.write(f"=== NETWORK DISCOVERY RESULTS ===\n")
+                f.write(f"Host discovered through network scanning\n")
+                f.write(f"Further vulnerability scanning recommended\n")
+            else:
+                f.write(f"Host {ip} is not responding\n")
+                f.write(f"Status: INACTIVE\n")
+        
+        logger.debug(f"Updated vulnerability output for {ip}")
+        
+    except Exception as e:
+        logger.error(f"Error updating vulnerability output for {ip}: {e}")
+
+
 def update_netkb_entry(ip, hostname, mac, is_alive):
     try:
+        # Update vulnerability output files
+        update_vulnerability_output(ip, hostname, mac, is_alive)
+        
         netkb_path = shared_data.netkbfile
         os.makedirs(os.path.dirname(netkb_path), exist_ok=True)
 
@@ -1776,6 +1815,212 @@ def get_activity_logs():
 # ============================================================================
 # REAL-TIME SCANNING ENDPOINTS
 # ============================================================================
+
+def run_arp_scan_localnet(interface='wlan0'):
+    """Run arp-scan on local network to discover active hosts"""
+    command = ['sudo', 'arp-scan', f'--interface={interface}', '--localnet']
+    logger.info(f"Running arp-scan localnet: {' '.join(command)}")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return _parse_arp_scan_output(result.stdout)
+        else:
+            logger.warning(f"arp-scan failed with return code {result.returncode}: {result.stderr}")
+            return {}
+    except FileNotFoundError:
+        logger.warning("arp-scan command not found")
+        return {}
+    except subprocess.TimeoutExpired as e:
+        logger.warning(f"arp-scan timed out: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Error running arp-scan: {e}")
+        return {}
+
+def run_nmap_ping_scan(network='192.168.1.0/24'):
+    """Run nmap ping scan to discover active hosts"""
+    command = ['sudo', 'nmap', '-sn', '-PR', network]
+    logger.info(f"Running nmap ping scan: {' '.join(command)}")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            return _parse_nmap_ping_output(result.stdout)
+        else:
+            logger.warning(f"nmap ping scan failed with return code {result.returncode}: {result.stderr}")
+            return {}
+    except FileNotFoundError:
+        logger.warning("nmap command not found")
+        return {}
+    except subprocess.TimeoutExpired as e:
+        logger.warning(f"nmap ping scan timed out: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Error running nmap ping scan: {e}")
+        return {}
+
+def _parse_nmap_ping_output(output):
+    """Parse nmap ping scan output to extract IP addresses and MAC addresses"""
+    hosts = {}
+    current_ip = None
+    
+    for line in output.splitlines():
+        line = line.strip()
+        
+        # Look for "Nmap scan report for" lines to get IP addresses
+        if line.startswith('Nmap scan report for'):
+            # Extract IP from line like "Nmap scan report for 192.168.1.1"
+            parts = line.split()
+            if len(parts) >= 5:
+                ip_part = parts[-1]
+                if '(' in ip_part and ')' in ip_part:
+                    # Format: "hostname (192.168.1.1)"
+                    current_ip = ip_part.strip('()')
+                else:
+                    # Format: "192.168.1.1"
+                    current_ip = ip_part
+                
+                if _is_valid_ipv4(current_ip):
+                    hosts[current_ip] = {
+                        'ip': current_ip,
+                        'mac': '',
+                        'hostname': '',
+                        'status': 'up'
+                    }
+        
+        # Look for MAC address lines
+        elif line.startswith('MAC Address:') and current_ip:
+            # Extract MAC from line like "MAC Address: 00:11:22:33:44:55 (Vendor)"
+            parts = line.split()
+            if len(parts) >= 3:
+                mac = parts[2]
+                if MAC_REGEX.match(mac):
+                    hosts[current_ip]['mac'] = _normalize_mac(mac)
+                    # Extract vendor info if available
+                    if '(' in line and ')' in line:
+                        vendor_start = line.find('(')
+                        vendor_end = line.find(')')
+                        if vendor_start < vendor_end:
+                            vendor = line[vendor_start+1:vendor_end]
+                            hosts[current_ip]['vendor'] = vendor
+    
+    return hosts
+
+# Global variables for network scanning
+network_scan_cache = {}
+network_scan_last_update = 0
+ARP_SCAN_INTERVAL = 10  # seconds
+
+@app.route('/api/scan/arp-localnet')
+def get_arp_scan_localnet():
+    """Get ARP scan results for local network"""
+    try:
+        interface = request.args.get('interface', 'wlan0')
+        hosts = run_arp_scan_localnet(interface)
+        
+        return jsonify({
+            'success': True,
+            'hosts': hosts,
+            'count': len(hosts),
+            'interface': interface,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error in ARP scan endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hosts': {},
+            'count': 0
+        }), 500
+
+@app.route('/api/scan/nmap-ping')
+def get_nmap_ping_scan():
+    """Get nmap ping scan results"""
+    try:
+        network = request.args.get('network', '192.168.1.0/24')
+        hosts = run_nmap_ping_scan(network)
+        
+        return jsonify({
+            'success': True,
+            'hosts': hosts,
+            'count': len(hosts),
+            'network': network,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error in nmap ping scan endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hosts': {},
+            'count': 0
+        }), 500
+
+@app.route('/api/scan/combined-network')
+def get_combined_network_scan():
+    """Get combined results from both ARP and nmap scans"""
+    try:
+        interface = request.args.get('interface', 'wlan0')
+        network = request.args.get('network', '192.168.1.0/24')
+        
+        # Run both scans
+        arp_hosts = run_arp_scan_localnet(interface)
+        nmap_hosts = run_nmap_ping_scan(network)
+        
+        # Combine results, preferring ARP data when available
+        combined_hosts = {}
+        
+        # Start with nmap results
+        for ip, data in nmap_hosts.items():
+            combined_hosts[ip] = {
+                'ip': ip,
+                'mac': data.get('mac', ''),
+                'hostname': data.get('hostname', ''),
+                'status': data.get('status', 'up'),
+                'vendor': data.get('vendor', ''),
+                'source': 'nmap'
+            }
+        
+        # Overlay ARP results (more reliable for MAC addresses)
+        for ip, data in arp_hosts.items():
+            if ip in combined_hosts:
+                # Update existing entry with ARP data
+                combined_hosts[ip]['mac'] = data.get('mac', combined_hosts[ip]['mac'])
+                combined_hosts[ip]['hostname'] = data.get('hostname', combined_hosts[ip]['hostname'])
+                combined_hosts[ip]['source'] = 'arp+nmap'
+            else:
+                # Add new entry from ARP
+                combined_hosts[ip] = {
+                    'ip': ip,
+                    'mac': data.get('mac', ''),
+                    'hostname': data.get('hostname', ''),
+                    'status': 'up',
+                    'vendor': data.get('vendor', ''),
+                    'source': 'arp'
+                }
+        
+        # Update network knowledge base
+        for ip, data in combined_hosts.items():
+            update_netkb_entry(ip, data.get('hostname', ''), data.get('mac', ''), True)
+        
+        return jsonify({
+            'success': True,
+            'hosts': combined_hosts,
+            'count': len(combined_hosts),
+            'arp_count': len(arp_hosts),
+            'nmap_count': len(nmap_hosts),
+            'interface': interface,
+            'network': network,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error in combined network scan endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hosts': {},
+            'count': 0
+        }), 500
 
 @app.route('/api/scan/start-realtime', methods=['POST'])
 def start_realtime_scan():
@@ -4276,6 +4521,50 @@ def background_sync_loop(interval=SYNC_BACKGROUND_INTERVAL):
 
         time.sleep(max(1, interval))
 
+def background_arp_scan_loop():
+    """Continuously run ARP scans to keep network data fresh"""
+    global network_scan_cache, network_scan_last_update
+    
+    while not shared_data.webapp_should_exit:
+        try:
+            current_time = time.time()
+            
+            # Run ARP scan every ARP_SCAN_INTERVAL seconds
+            if current_time - network_scan_last_update >= ARP_SCAN_INTERVAL:
+                logger.debug("Running background ARP scan...")
+                
+                # Run ARP scan
+                arp_hosts = run_arp_scan_localnet('wlan0')
+                
+                # Update cache
+                network_scan_cache['arp_hosts'] = arp_hosts
+                network_scan_cache['last_arp_scan'] = current_time
+                network_scan_last_update = current_time
+                
+                # Update network knowledge base
+                for ip, data in arp_hosts.items():
+                    update_netkb_entry(ip, data.get('hostname', ''), data.get('mac', ''), True)
+                
+                # Emit real-time update to connected clients
+                if clients_connected > 0:
+                    try:
+                        socketio.emit('network_update', {
+                            'hosts': arp_hosts,
+                            'count': len(arp_hosts),
+                            'source': 'arp_background',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"Error emitting network update: {e}")
+                
+                logger.debug(f"Background ARP scan completed, found {len(arp_hosts)} hosts")
+            
+            time.sleep(2)  # Check every 2 seconds, but only scan based on interval
+            
+        except Exception as e:
+            logger.error(f"Error in background ARP scan loop: {e}")
+            time.sleep(ARP_SCAN_INTERVAL)
+
 
 # ============================================================================
 # MANUAL MODE ENDPOINTS
@@ -5783,6 +6072,7 @@ def run_server(host='0.0.0.0', port=8000):
         # Start background status broadcaster
         socketio.start_background_task(broadcast_status_updates)
         socketio.start_background_task(background_sync_loop)
+        socketio.start_background_task(background_arp_scan_loop)
 
         # Run the server
         socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
