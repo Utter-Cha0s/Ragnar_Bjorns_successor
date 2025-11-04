@@ -267,6 +267,40 @@ class Orchestrator:
             self.shared_data.ragnarstatustext2 = "First scan..."
             self.network_scanner.scan()
             self.shared_data.ragnarstatustext2 = ""
+            
+            # Run initial vulnerability scan on startup if enabled
+            if self.shared_data.scan_vuln_running and self.nmap_vuln_scanner:
+                try:
+                    logger.info("Starting initial vulnerability scan on all discovered hosts...")
+                    current_data = self.shared_data.read_data()
+                    alive_hosts = [row for row in current_data if row.get("Alive") == '1']
+                    
+                    if alive_hosts:
+                        logger.info(f"Found {len(alive_hosts)} alive hosts. Starting vulnerability scans...")
+                        for row in alive_hosts:
+                            ip = row.get("IPs", "")
+                            if not ip:
+                                continue
+                            
+                            try:
+                                logger.info(f"Scanning {ip} for vulnerabilities...")
+                                with self.semaphore:
+                                    result = self.nmap_vuln_scanner.execute(ip, row, "NmapVulnScanner")
+                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    if result == 'success':
+                                        row["NmapVulnScanner"] = f'success_{timestamp}'
+                                    else:
+                                        row["NmapVulnScanner"] = f'failed_{timestamp}'
+                                    self.shared_data.write_data(current_data)
+                            except Exception as e:
+                                logger.error(f"Error scanning {ip} on startup: {e}")
+                        
+                        self.last_vuln_scan_time = datetime.now()
+                        logger.info("Initial vulnerability scan completed.")
+                    else:
+                        logger.info("No alive hosts found for initial vulnerability scan.")
+                except Exception as e:
+                    logger.error(f"Error during initial vulnerability scan: {e}")
         else:
             logger.error("Network scanner not initialized. Cannot start orchestrator.")
         while not self.shared_data.orchestrator_should_exit:
