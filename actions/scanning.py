@@ -66,7 +66,9 @@ class NetworkScanner:
         self.console = Console()
         self.lock = threading.Lock()
         self.currentdir = shared_data.currentdir
-        self.semaphore = threading.Semaphore(200)  # Limit the number of active threads to 20
+        # CRITICAL: Pi Zero W2 has limited resources - use conservative thread count
+        # 512MB RAM, 4 cores @ 1GHz can only handle a few concurrent operations
+        self.semaphore = threading.Semaphore(3)  # Max 3 concurrent port scans for Pi Zero W2
         self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
 

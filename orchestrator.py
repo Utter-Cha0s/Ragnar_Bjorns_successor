@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from actions.nmap_vuln_scanner import NmapVulnScanner
 from init_shared import shared_data
 from logger import Logger
+from resource_monitor import resource_monitor
 
 logger = Logger(name="orchestrator.py", level=logging.DEBUG)
 
@@ -44,7 +45,9 @@ class Orchestrator:
         self.load_actions()  # Load all actions from the actions file
         actions_loaded = [action.__class__.__name__ for action in self.actions + self.standalone_actions]  # Get the names of the loaded actions
         logger.info(f"Actions loaded: {actions_loaded}")
-        self.semaphore = threading.Semaphore(10)  # Limit the number of active threads to 10
+        # CRITICAL: Pi Zero W2 resource management - limit concurrent actions
+        # Running too many actions simultaneously causes memory exhaustion and hangs
+        self.semaphore = threading.Semaphore(2)  # Max 2 concurrent actions for Pi Zero W2
     
     def _verify_config_attributes(self):
         """Verify that all required configuration attributes exist on shared_data."""
@@ -229,6 +232,17 @@ class Orchestrator:
                 logger.error(f"Error parsing last failed time for {action.action_name}: {ve}")
 
         try:
+            # CRITICAL: Check system resources before executing action (Pi Zero W2 protection)
+            if not resource_monitor.can_start_operation(
+                operation_name=f"action_{action.action_name}",
+                min_memory_mb=30  # Require at least 30MB free memory
+            ):
+                logger.warning(
+                    f"Skipping action {action.action_name} for {ip}:{action.port} - "
+                    f"Insufficient system resources (preventing hang)"
+                )
+                return False
+            
             logger.info(f"Executing action {action.action_name} for {ip}:{action.port}")
             self.shared_data.ragnarstatustext2 = ip
             result = action.execute(ip, str(action.port), row, action_key)
@@ -383,7 +397,29 @@ class Orchestrator:
                     logger.error(f"Error during initial vulnerability scan: {e}")
         else:
             logger.error("Network scanner not initialized. Cannot start orchestrator.")
+        
+        # Log initial system status
+        resource_monitor.log_system_status()
+        last_resource_log_time = time.time()
+        
         while not self.shared_data.orchestrator_should_exit:
+            # Periodically log resource status (every 5 minutes)
+            if time.time() - last_resource_log_time > 300:
+                resource_monitor.log_system_status()
+                last_resource_log_time = time.time()
+                
+                # Force garbage collection if memory is high
+                if resource_monitor.get_memory_usage() > 75:
+                    logger.info("High memory usage detected - forcing garbage collection")
+                    resource_monitor.force_garbage_collection()
+            
+            # CRITICAL: Check system health before processing actions
+            if not resource_monitor.is_system_healthy():
+                logger.warning("System resources critical - pausing orchestrator for 30 seconds")
+                resource_monitor.log_system_status()
+                time.sleep(30)
+                continue
+            
             current_data = self.shared_data.read_data()
             any_action_executed = False
             action_retry_pending = False
