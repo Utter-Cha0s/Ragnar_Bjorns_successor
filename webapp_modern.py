@@ -6760,6 +6760,9 @@ def format_uptime(seconds):
 def get_dashboard_stats():
     """Get dashboard statistics including counts from various sources"""
     try:
+        # Check for network switches and clear old data if needed
+        check_and_handle_network_switch()
+        
         # Ensure recent synchronization without blocking the request unnecessarily
         ensure_recent_sync()
 
