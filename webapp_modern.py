@@ -466,18 +466,37 @@ def sync_all_counts():
             logger.debug(f"Total port count from CSV: {aggregated_ports_from_csv}")
             
             # ALSO read ports from netkb file which has the most complete port data
+            # Count ports from LIVE hosts (detected by ARP), not just Alive=1 in netkb
             netkb_port_count = 0
+            netkb_live_ips = set()
+            
+            # Get IPs of live hosts from ARP scan
+            if arp_hosts:
+                netkb_live_ips = set(arp_hosts.keys())
+                logger.debug(f"Counting ports for {len(netkb_live_ips)} ARP-detected live hosts")
+            
             if os.path.exists(shared_data.netkbfile):
                 try:
                     with open(shared_data.netkbfile, 'r', encoding='utf-8', errors='ignore') as f:
                         reader = csv.DictReader(f)
                         for row in reader:
-                            if row.get('Alive') == '1' and row.get('Ports'):
-                                ports_str = row['Ports'].strip()
-                                if ports_str:
-                                    port_list = [p.strip() for p in ports_str.split(';') if p.strip()]
+                            ip = row.get('IPs', '').strip()
+                            ports_str = row.get('Ports', '').strip()
+                            
+                            # Count ports for hosts that are:
+                            # 1. In the ARP scan (confirmed alive) OR
+                            # 2. Marked as Alive=1 in netkb
+                            is_arp_live = ip in netkb_live_ips
+                            is_netkb_alive = row.get('Alive') == '1'
+                            
+                            if (is_arp_live or is_netkb_alive) and ports_str and ports_str != '0':
+                                port_list = [p.strip() for p in ports_str.split(';') if p.strip() and p.strip() != '0']
+                                if port_list:
                                     netkb_port_count += len(port_list)
-                    logger.debug(f"Total port count from netkb: {netkb_port_count}")
+                                    if is_arp_live:
+                                        logger.debug(f"Counted {len(port_list)} ports for live host {ip}: {ports_str}")
+                                        
+                    logger.debug(f"Total port count from netkb (live hosts): {netkb_port_count}")
                     # Use netkb port count if it's higher (more complete)
                     if netkb_port_count > aggregated_ports_from_csv:
                         aggregated_ports_from_csv = netkb_port_count
@@ -523,8 +542,10 @@ def sync_all_counts():
             shared_data.total_targetnbr = total_target_count
             shared_data.inactive_targetnbr = inactive_target_count
             shared_data.portnbr = aggregated_ports
+            shared_data.networkkbnbr = total_target_count  # Use total target count for network KB count
             logger.debug(f"Updated targets: {old_targets} -> {aggregated_targets}")
             logger.debug(f"Updated ports: {old_ports} -> {aggregated_ports}")
+            logger.debug(f"Updated networkkbnbr: -> {total_target_count}")
 
             previous_snapshot = getattr(shared_data, 'network_hosts_snapshot', {}) or {}
 
@@ -587,6 +608,39 @@ def sync_all_counts():
             else:
                 logger.warning(f"Crackedpwd directory does not exist: {cred_results_dir}")
 
+            # Sync data stolen count
+            data_stolen_dir = getattr(shared_data, 'datastolendir', os.path.join('data', 'output', 'data_stolen'))
+            if os.path.exists(data_stolen_dir):
+                try:
+                    total_data_files = sum([len(files) for r, d, files in os.walk(data_stolen_dir)])
+                    old_data = shared_data.datanbr
+                    shared_data.datanbr = total_data_files
+                    logger.debug(f"Updated data stolen: {old_data} -> {total_data_files}")
+                except Exception as e:
+                    logger.debug(f"Could not count data stolen files: {e}")
+            
+            # Sync zombies count
+            zombies_dir = getattr(shared_data, 'zombiesdir', os.path.join('data', 'output', 'zombies'))
+            if os.path.exists(zombies_dir):
+                try:
+                    total_zombies = sum([len(files) for r, d, files in os.walk(zombies_dir)])
+                    old_zombies = shared_data.zombiesnbr
+                    shared_data.zombiesnbr = total_zombies
+                    logger.debug(f"Updated zombies: {old_zombies} -> {total_zombies}")
+                except Exception as e:
+                    logger.debug(f"Could not count zombie files: {e}")
+            
+            # Sync attacks count (count action modules available)
+            actions_dir = getattr(shared_data, 'actions_dir', os.path.join('actions'))
+            if os.path.exists(actions_dir):
+                try:
+                    total_attacks = sum([len(files) for r, d, files in os.walk(actions_dir) if not r.endswith("__pycache__")]) - 2
+                    old_attacks = shared_data.attacksnbr
+                    shared_data.attacksnbr = max(total_attacks, 0)
+                    logger.debug(f"Updated attacks: {old_attacks} -> {shared_data.attacksnbr}")
+                except Exception as e:
+                    logger.debug(f"Could not count attack modules: {e}")
+
             # Update livestatus file with all synchronized counts
             try:
                 if pandas_available:
@@ -611,11 +665,12 @@ def sync_all_counts():
 
             try:
                 shared_data.update_stats()
-                logger.debug(f"Updated gamification stats - Level: {shared_data.levelnbr}, Points: {shared_data.coinnbr}")
+                logger.debug(f"Updated gamification stats - Level: {shared_data.levelnbr}, Coins: {shared_data.coinnbr}")
+                logger.debug(f"Stats breakdown - NetworkKB: {shared_data.networkkbnbr}, Creds: {shared_data.crednbr}, Data: {shared_data.datanbr}, Zombies: {shared_data.zombiesnbr}, Attacks: {shared_data.attacksnbr}, Vulns: {shared_data.vulnnbr}")
             except Exception as e:
                 logger.warning(f"Could not update gamification stats: {e}")
 
-            logger.debug(f"Completed sync_all_counts() - Targets: {shared_data.targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}")
+            logger.debug(f"Completed sync_all_counts() - Targets: {shared_data.targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}, Level: {shared_data.levelnbr}, Coins: {shared_data.coinnbr}")
 
         except Exception as e:
             logger.error(f"Error synchronizing all counts: {e}")
