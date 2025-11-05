@@ -547,20 +547,25 @@ def sync_all_counts():
                 logger.warning(f"Crackedpwd directory does not exist: {cred_results_dir}")
 
             # Update livestatus file with all synchronized counts
-            if os.path.exists(shared_data.livestatusfile):
-                try:
-                    if pandas_available:
-                        df = pd.read_csv(shared_data.livestatusfile)
-                        if not df.empty:
-                            df.loc[0, 'Alive Hosts Count'] = safe_int(shared_data.targetnbr)
-                            df.loc[0, 'Total Open Ports'] = safe_int(shared_data.portnbr)
-                            df.loc[0, 'Vulnerabilities Count'] = safe_int(shared_data.vulnnbr)
-                            df.to_csv(shared_data.livestatusfile, index=False)
-                            logger.debug("Updated livestatus file with synchronized counts")
-                    else:
-                        logger.warning("Pandas not available, skipping livestatus update")
-                except Exception as e:
-                    logger.warning(f"Could not update livestatus with all sync counts: {e}")
+            try:
+                if pandas_available:
+                    # Create livestatus file if it doesn't exist
+                    if not os.path.exists(shared_data.livestatusfile):
+                        logger.info(f"Creating missing livestatus file: {shared_data.livestatusfile}")
+                        shared_data.create_livestatusfile()
+                    
+                    # Update the file with current counts
+                    df = pd.read_csv(shared_data.livestatusfile)
+                    if not df.empty:
+                        df.loc[0, 'Alive Hosts Count'] = safe_int(shared_data.targetnbr)
+                        df.loc[0, 'Total Open Ports'] = safe_int(shared_data.portnbr)
+                        df.loc[0, 'Vulnerabilities Count'] = safe_int(shared_data.vulnnbr)
+                        df.to_csv(shared_data.livestatusfile, index=False)
+                        logger.debug("Updated livestatus file with synchronized counts")
+                else:
+                    logger.warning("Pandas not available, skipping livestatus update")
+            except Exception as e:
+                logger.warning(f"Could not update livestatus with all sync counts: {e}")
 
             try:
                 shared_data.update_stats()
