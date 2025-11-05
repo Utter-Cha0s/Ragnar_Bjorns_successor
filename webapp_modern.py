@@ -473,36 +473,45 @@ def sync_all_counts():
             # Get IPs of live hosts from ARP scan
             if arp_hosts:
                 netkb_live_ips = set(arp_hosts.keys())
-                logger.debug(f"Counting ports for {len(netkb_live_ips)} ARP-detected live hosts")
+                logger.info(f"[PORT COUNT] Counting ports for {len(netkb_live_ips)} ARP-detected live hosts: {list(netkb_live_ips)}")
+            else:
+                logger.warning(f"[PORT COUNT] No ARP hosts available for port counting!")
+            
+            logger.info(f"[PORT COUNT] Checking netkb file: {shared_data.netkbfile}, exists={os.path.exists(shared_data.netkbfile)}")
             
             if os.path.exists(shared_data.netkbfile):
                 try:
                     with open(shared_data.netkbfile, 'r', encoding='utf-8', errors='ignore') as f:
                         reader = csv.DictReader(f)
+                        row_count = 0
                         for row in reader:
+                            row_count += 1
                             ip = row.get('IPs', '').strip()
                             ports_str = row.get('Ports', '').strip()
+                            alive_status = row.get('Alive', '').strip()
                             
                             # Count ports for hosts that are:
                             # 1. In the ARP scan (confirmed alive) OR
                             # 2. Marked as Alive=1 in netkb
                             is_arp_live = ip in netkb_live_ips
-                            is_netkb_alive = row.get('Alive') == '1'
+                            is_netkb_alive = alive_status == '1'
                             
                             if (is_arp_live or is_netkb_alive) and ports_str and ports_str != '0':
                                 port_list = [p.strip() for p in ports_str.split(';') if p.strip() and p.strip() != '0']
                                 if port_list:
                                     netkb_port_count += len(port_list)
-                                    if is_arp_live:
-                                        logger.debug(f"Counted {len(port_list)} ports for live host {ip}: {ports_str}")
+                                    logger.info(f"[PORT COUNT] {ip}: {len(port_list)} ports ({ports_str}) - ARP={is_arp_live}, Alive={is_netkb_alive}")
                                         
-                    logger.debug(f"Total port count from netkb (live hosts): {netkb_port_count}")
+                        logger.info(f"[PORT COUNT] Processed {row_count} rows from netkb")
+                    logger.info(f"[PORT COUNT] Total port count from netkb (live hosts): {netkb_port_count}")
                     # Use netkb port count if it's higher (more complete)
                     if netkb_port_count > aggregated_ports_from_csv:
                         aggregated_ports_from_csv = netkb_port_count
-                        logger.debug(f"Using netkb port count as it's more complete")
+                        logger.info(f"[PORT COUNT] Using netkb port count as it's more complete: {netkb_port_count}")
+                    else:
+                        logger.info(f"[PORT COUNT] Using CSV port count: {aggregated_ports_from_csv} (netkb had {netkb_port_count})")
                 except Exception as e:
-                    logger.debug(f"Could not read netkb file for port count: {e}")
+                    logger.error(f"[PORT COUNT] ERROR reading netkb file for port count: {e}", exc_info=True)
 
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
@@ -2088,12 +2097,14 @@ def get_verbose_debug_logs():
         try:
             # NetKB data
             netkb_data = shared_data.read_data()
+            netkb_file_path = getattr(shared_data, 'netkbfile', 'NOT_SET')
             debug_info['data_sources']['netkb_data'] = {
                 'total_entries': len(netkb_data),
                 'alive_entries': len([entry for entry in netkb_data if entry.get('Alive') in ['1', 1]]),
                 'sample_entries': netkb_data[:3] if netkb_data else [],
                 'all_alive_values': list(set([str(entry.get('Alive', 'MISSING')) for entry in netkb_data])),
-                'file_path': getattr(shared_data, 'network_file', 'NOT_SET')
+                'file_path': netkb_file_path,
+                'file_exists': os.path.exists(netkb_file_path) if netkb_file_path != 'NOT_SET' else False
             }
         except Exception as e:
             debug_info['errors_and_warnings'].append(f"Error reading NetKB data: {str(e)}")
