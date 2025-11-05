@@ -3639,6 +3639,106 @@ def reboot_system():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # ============================================================================
+# DATA MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.route('/api/data/reset-vulnerabilities', methods=['POST'])
+def reset_vulnerabilities():
+    """Reset all vulnerability data - removes all discovered vulnerabilities"""
+    try:
+        deleted_count = 0
+        
+        # Clear network intelligence vulnerabilities
+        if hasattr(shared_data, 'network_intelligence') and shared_data.network_intelligence:
+            try:
+                # Count all vulnerabilities across all networks
+                if hasattr(shared_data.network_intelligence, 'active_vulnerabilities'):
+                    deleted_count = sum(len(vulns) for vulns in shared_data.network_intelligence.active_vulnerabilities.values())
+                    shared_data.network_intelligence.active_vulnerabilities.clear()
+                    
+                    # Also clear resolved vulnerabilities
+                    if hasattr(shared_data.network_intelligence, 'resolved_vulnerabilities'):
+                        shared_data.network_intelligence.resolved_vulnerabilities.clear()
+                    
+                    shared_data.network_intelligence.save_intelligence_data()
+                    logger.info(f"Cleared {deleted_count} vulnerabilities from network intelligence")
+            except Exception as e:
+                logger.error(f"Error clearing network intelligence vulnerabilities: {e}")
+        
+        # Clear vulnerability summary file
+        vuln_summary = os.path.join('data', 'output', 'vulnerabilities', 'vulnerability_summary.csv')
+        if os.path.exists(vuln_summary):
+            try:
+                import pandas as pd
+                df = pd.DataFrame(columns=["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"])
+                df.to_csv(vuln_summary, index=False)
+                logger.info("Reset vulnerability summary file")
+            except Exception as e:
+                logger.error(f"Error resetting vulnerability summary: {e}")
+        
+        # Clear individual vulnerability scan files
+        vuln_dir = os.path.join('data', 'output', 'vulnerabilities')
+        if os.path.exists(vuln_dir):
+            try:
+                for filename in os.listdir(vuln_dir):
+                    if filename.startswith('scan_') and filename.endswith('.txt'):
+                        file_path = os.path.join(vuln_dir, filename)
+                        os.remove(file_path)
+                logger.info("Cleared individual vulnerability scan files")
+            except Exception as e:
+                logger.error(f"Error clearing vulnerability scan files: {e}")
+        
+        # Reset vulnerability counter
+        shared_data.vulnnbr = 0
+        
+        # Trigger sync
+        sync_vulnerability_count()
+        
+        logger.info(f"Vulnerability reset complete: {deleted_count} entries removed")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Vulnerabilities reset successfully',
+            'deleted_count': deleted_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting vulnerabilities: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/data/reset-threat-intel', methods=['POST'])
+def reset_threat_intelligence():
+    """Reset all threat intelligence data"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'success': False, 'error': 'Threat intelligence system not available'}), 400
+        
+        # Clear enriched findings
+        findings_cleared = len(threat_intelligence.enriched_findings)
+        threat_intelligence.enriched_findings.clear()
+        
+        # Clear threat cache
+        cache_cleared = len(threat_intelligence.threat_cache)
+        threat_intelligence.threat_cache.clear()
+        
+        # Save cleared state
+        threat_intelligence.save_enriched_findings()
+        threat_intelligence.save_threat_cache()
+        
+        logger.info(f"Threat intelligence reset: {findings_cleared} findings, {cache_cleared} cache entries cleared")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Threat intelligence reset successfully',
+            'findings_cleared': findings_cleared,
+            'cache_cleared': cache_cleared
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting threat intelligence: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# ============================================================================
 # WI-FI MANAGEMENT ENDPOINTS
 # ============================================================================
 
@@ -4337,6 +4437,92 @@ def get_network_intelligence():
             
     except Exception as e:
         logger.error(f"Error getting network intelligence: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/vulnerabilities/grouped')
+def get_vulnerabilities_grouped():
+    """Get vulnerabilities grouped by IP address with summary statistics"""
+    try:
+        if (hasattr(shared_data, 'network_intelligence') and 
+            shared_data.network_intelligence and 
+            shared_data.config.get('network_intelligence_enabled', True)):
+            
+            # Get network-aware findings for dashboard
+            dashboard_findings = shared_data.network_intelligence.get_active_findings_for_dashboard()
+            
+            # Group vulnerabilities by host IP
+            grouped = {}
+            for vuln_id, vuln_info in dashboard_findings['vulnerabilities'].items():
+                host = vuln_info['host']
+                
+                if host not in grouped:
+                    grouped[host] = {
+                        'ip': host,
+                        'total_vulnerabilities': 0,
+                        'severity_counts': {
+                            'critical': 0,
+                            'high': 0,
+                            'medium': 0,
+                            'low': 0
+                        },
+                        'affected_ports': set(),
+                        'affected_services': set(),
+                        'vulnerabilities': []
+                    }
+                
+                # Increment counts
+                grouped[host]['total_vulnerabilities'] += 1
+                severity = vuln_info.get('severity', 'medium')
+                if severity in grouped[host]['severity_counts']:
+                    grouped[host]['severity_counts'][severity] += 1
+                
+                # Track ports and services
+                grouped[host]['affected_ports'].add(vuln_info['port'])
+                grouped[host]['affected_services'].add(vuln_info['service'])
+                
+                # Add vulnerability detail
+                grouped[host]['vulnerabilities'].append({
+                    'id': vuln_id,
+                    'port': vuln_info['port'],
+                    'service': vuln_info['service'],
+                    'vulnerability': vuln_info['vulnerability'],
+                    'severity': severity,
+                    'discovered': vuln_info['discovered'],
+                    'status': vuln_info['status']
+                })
+            
+            # Convert sets to lists for JSON serialization
+            for host_data in grouped.values():
+                host_data['affected_ports'] = sorted(list(host_data['affected_ports']))
+                host_data['affected_services'] = sorted(list(host_data['affected_services']))
+                # Sort vulnerabilities by severity
+                severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+                host_data['vulnerabilities'].sort(
+                    key=lambda v: severity_order.get(v['severity'], 4)
+                )
+            
+            # Convert to list and sort by total vulnerability count
+            grouped_list = sorted(
+                grouped.values(),
+                key=lambda x: x['total_vulnerabilities'],
+                reverse=True
+            )
+            
+            return jsonify({
+                'grouped_vulnerabilities': grouped_list,
+                'total_hosts': len(grouped_list),
+                'total_vulnerabilities': dashboard_findings['counts']['vulnerabilities'],
+                'network_context': {
+                    'current_network': dashboard_findings['network_id'],
+                    'network_name': dashboard_findings.get('network_name', 'Unknown')
+                }
+            })
+        else:
+            return jsonify({'error': 'Network intelligence not available'}), 503
+            
+    except Exception as e:
+        logger.error(f"Error getting grouped vulnerabilities: {e}")
         return jsonify({'error': str(e)}), 500
 
 
