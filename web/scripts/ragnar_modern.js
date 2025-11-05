@@ -708,6 +708,7 @@ function updateDashboardStats(stats) {
 
     const portCount = toNumber(stats.port_count ?? stats.open_port_count, 0);
     const vulnCount = toNumber(stats.vulnerability_count ?? stats.vuln_count, 0);
+    const vulnerableHostsCount = toNumber(stats.vulnerable_hosts_count ?? stats.vulnerable_host_count ?? 0, 0);
     const credCount = toNumber(stats.credential_count ?? stats.cred_count, 0);
     const level = toNumber(stats.level ?? stats.levelnbr, 0);
     const points = toNumber(stats.points ?? stats.coins, 0);
@@ -730,6 +731,7 @@ function updateDashboardStats(stats) {
 
     updateElement('port-count', portCount);
     updateElement('vuln-count', vulnCount);
+    updateElement('vulnerable-hosts-count', vulnerableHostsCount);
     updateElement('cred-count', credCount);
     updateElement('level-count', level);
     updateElement('points-count', points);
