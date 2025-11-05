@@ -2539,6 +2539,53 @@ def get_verbose_debug_logs():
         logger.error(f"Error in verbose debug logs: {e}")
         return jsonify({'error': str(e), 'timestamp': datetime.now().isoformat()}), 500
 
+@app.route('/api/debug/test-robust-tracking')
+def test_robust_tracking():
+    """Test endpoint to verify robust tracking logic is working"""
+    try:
+        logger.info("[TEST] Robust tracking test endpoint called")
+        
+        # Test the network data reading with new logic
+        network_data = read_wifi_network_data()
+        
+        # Count devices by failure status
+        max_failed_pings = shared_data.config.get('network_max_failed_pings', 5)
+        results = {
+            'total_devices': len(network_data),
+            'devices_with_failure_data': 0,
+            'devices_exceeding_failure_limit': 0,
+            'devices_active_by_robust_rule': 0,
+            'max_failed_pings_threshold': max_failed_pings,
+            'sample_devices': [],
+            'test_timestamp': datetime.now().isoformat()
+        }
+        
+        for entry in network_data[:5]:  # Sample first 5
+            ip = entry.get('IPs', '')
+            failed_ping_count = entry.get('FailedPingCount', 'N/A')
+            alive_status = entry.get('Alive', 'N/A')
+            
+            if isinstance(failed_ping_count, int):
+                results['devices_with_failure_data'] += 1
+                if failed_ping_count >= max_failed_pings:
+                    results['devices_exceeding_failure_limit'] += 1
+                else:
+                    results['devices_active_by_robust_rule'] += 1
+            
+            results['sample_devices'].append({
+                'ip': ip,
+                'failed_ping_count': failed_ping_count,
+                'alive': alive_status,
+                'would_be_removed': failed_ping_count >= max_failed_pings if isinstance(failed_ping_count, int) else False
+            })
+        
+        return jsonify(results)
+        
+    except Exception as e:
+        logger.error(f"Error in robust tracking test: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/debug/connectivity-tracking')
 def get_connectivity_tracking():
     """Get detailed connectivity tracking information for all devices"""
