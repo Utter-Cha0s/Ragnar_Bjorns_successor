@@ -40,6 +40,7 @@ class Display:
         self.semaphore = threading.Semaphore(10)
         self.screen_reversed = self.shared_data.screen_reversed
         self.web_screen_reversed = self.shared_data.web_screen_reversed
+        self.main_image = None  # Initialize main_image variable
 
         # Define frise positions for different display types
         self.frise_positions = {
