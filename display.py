@@ -90,7 +90,7 @@ class Display:
         """Periodically update the shared data with the latest system information."""
         while not self.shared_data.display_should_exit:
             self.update_shared_data()
-            time.sleep(25)
+            time.sleep(5)  # Check every 5 seconds for faster WiFi/SSH status updates
 
     def schedule_update_vuln_count(self):
         """Periodically update the vulnerability count on the display."""
