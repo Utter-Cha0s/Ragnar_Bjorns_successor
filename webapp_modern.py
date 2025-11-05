@@ -513,12 +513,15 @@ def sync_all_counts():
 
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
+            
+            # Initialize with defaults from CSV scan files
             aggregated_targets = len(unique_hosts)
             aggregated_ports = aggregated_ports_from_csv
             total_target_count = aggregated_targets
             inactive_target_count = 0
             current_snapshot = {ip: {'alive': True, 'ports': csv_host_ports.get(ip, set())} for ip in unique_hosts}
 
+            # PRIORITIZE aggregated_network_stats (robust failure tracking) over CSV data
             if aggregated_network_stats:
                 agg_host_count = aggregated_network_stats.get('host_count')
                 agg_total_host_count = aggregated_network_stats.get('total_host_count')
@@ -529,14 +532,18 @@ def sync_all_counts():
                 if hosts_snapshot:
                     current_snapshot = hosts_snapshot
 
+                # Use robust failure tracking counts if available
                 if agg_host_count is not None:
                     aggregated_targets = safe_int(agg_host_count)
+                    logger.info(f"[ROBUST TRACKING] Using active host count from WiFi network data: {aggregated_targets}")
                 if agg_total_host_count is not None:
                     total_target_count = safe_int(agg_total_host_count)
+                    logger.info(f"[ROBUST TRACKING] Using total host count from WiFi network data: {total_target_count}")
                 else:
                     total_target_count = aggregated_targets
                 if agg_inactive_count is not None:
                     inactive_target_count = safe_int(agg_inactive_count)
+                    logger.info(f"[ROBUST TRACKING] Using inactive host count from WiFi network data: {inactive_target_count}")
                 else:
                     inactive_target_count = max(total_target_count - aggregated_targets, 0)
                 if agg_port_count is not None:
@@ -6766,32 +6773,46 @@ def get_dashboard_stats():
         # Ensure recent synchronization without blocking the request unnecessarily
         ensure_recent_sync()
 
-        # Get current live network data (same logic as stable endpoint)
+        # Get current live network data with robust failure tracking
         network_data = read_wifi_network_data()
         recent_arp_data = network_scan_cache.get('arp_hosts', {})
+        max_failed_pings = shared_data.config.get('network_max_failed_pings', 5)
         
-        # Count unique active hosts (same logic as stable network endpoint)
+        # Count unique hosts using robust failure tracking
         processed_ips = set()
         active_hosts_count = 0
+        total_hosts_count = 0
         
-        # Count from network data (hosts with Alive status)
+        # Count from network data using failure counter logic
         for entry in network_data:
-            ip = entry.get('IPs', '').strip()  # Note: field is 'IPs' not 'IP'
+            ip = entry.get('IPs', '').strip()
             if ip and ip not in processed_ips:
                 processed_ips.add(ip)
-                # Check if host is alive - prioritize ARP cache over file data
-                is_alive_in_file = entry.get('Alive') in [True, 'True', '1', 1]
+                total_hosts_count += 1
+                
+                # Get failure tracking data
+                failed_ping_count = entry.get('FailedPingCount', 0)
+                if isinstance(failed_ping_count, str) and failed_ping_count.isdigit():
+                    failed_ping_count = int(failed_ping_count)
+                elif not isinstance(failed_ping_count, int):
+                    failed_ping_count = 0
+                
+                # Check if host is in ARP cache (recent discovery)
                 is_alive_in_arp = ip in recent_arp_data
-                is_alive = is_alive_in_file or is_alive_in_arp  # ARP data overrides file data
-                if is_alive:
+                
+                # Target is considered "active" if:
+                # 1. It has fewer than max_failed_pings consecutive failures, OR
+                # 2. It's currently visible in ARP cache (recent discovery)
+                if failed_ping_count < max_failed_pings or is_alive_in_arp:
                     active_hosts_count += 1
         
-        # Count from recent ARP discoveries (these are definitely active)
+        # Count from recent ARP discoveries that aren't in the file yet
         for ip in recent_arp_data.keys():
             if ip not in processed_ips:
                 processed_ips.add(ip)
-                active_hosts_count += 1
-        
+                total_hosts_count += 1
+                active_hosts_count += 1  # New discoveries are always active
+
         total_hosts_count = len(processed_ips)
         
         current_time = time.time()
