@@ -6780,6 +6780,9 @@ def get_dashboard_stats():
         # Check for network switches and clear old data if needed
         check_and_handle_network_switch()
         
+        # LOG MESSAGE TO VERIFY NEW CODE IS RUNNING
+        logger.info("[ROBUST TRACKING TEST] Dashboard stats called with new robust tracking logic")
+        
         # Ensure recent synchronization without blocking the request unnecessarily
         ensure_recent_sync()
 
