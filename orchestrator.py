@@ -144,6 +144,12 @@ class Orchestrator:
 
     def process_alive_ips(self, current_data):
         """Process all IPs with alive status set to 1"""
+        # Check if attacks are enabled in config
+        attacks_enabled = getattr(self.shared_data, 'attacks_enabled', True)
+        if not attacks_enabled:
+            logger.debug("Attacks disabled in config - skipping action execution")
+            return False
+        
         any_action_executed = False
         action_executed_status = None
 
