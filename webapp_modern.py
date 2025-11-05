@@ -542,7 +542,13 @@ def sync_all_counts():
                 else:
                     inactive_target_count = max(total_target_count - aggregated_targets, 0)
                 if agg_port_count is not None:
-                    aggregated_ports = safe_int(agg_port_count)
+                    # Only use aggregated_network_stats port count if it's HIGHER than what we counted from netkb
+                    agg_ports_value = safe_int(agg_port_count)
+                    if agg_ports_value > aggregated_ports:
+                        logger.info(f"[PORT COUNT] Using aggregated_network_stats port count: {agg_ports_value} (higher than netkb: {aggregated_ports})")
+                        aggregated_ports = agg_ports_value
+                    else:
+                        logger.info(f"[PORT COUNT] Keeping netkb port count: {aggregated_ports} (aggregated_network_stats had: {agg_ports_value})")
             else:
                 total_target_count = aggregated_targets
                 inactive_target_count = max(total_target_count - aggregated_targets, 0)
