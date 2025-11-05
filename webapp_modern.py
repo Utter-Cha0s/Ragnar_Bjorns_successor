@@ -5088,17 +5088,31 @@ def broadcast_status_updates():
 
 def background_sync_loop(interval=SYNC_BACKGROUND_INTERVAL):
     """Continuously synchronize counts so displays remain fresh even without web clients"""
+    global background_thread_health
+    consecutive_errors = 0
+    max_consecutive_errors = 10
+    
     while not shared_data.webapp_should_exit:
         try:
             sync_all_counts()
+            consecutive_errors = 0  # Reset on success
+            background_thread_health['sync_last_run'] = time.time()
         except Exception as e:
-            logger.error(f"Background sync error: {e}")
-
+            consecutive_errors += 1
+            logger.error(f"Background sync error (attempt {consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+            
+            if consecutive_errors >= max_consecutive_errors:
+                logger.critical(f"Background sync failed {max_consecutive_errors} times consecutively! Resetting error counter but continuing...")
+                consecutive_errors = 0  # Reset to prevent thread death
+                time.sleep(30)  # Wait longer after multiple failures
+        
         time.sleep(max(1, interval))
 
 def background_arp_scan_loop():
     """Continuously run ARP scans to keep network data fresh"""
-    global network_scan_cache, network_scan_last_update
+    global network_scan_cache, network_scan_last_update, background_thread_health
+    consecutive_errors = 0
+    max_consecutive_errors = 10
     
     while not shared_data.webapp_should_exit:
         try:
@@ -5115,10 +5129,14 @@ def background_arp_scan_loop():
                 network_scan_cache['arp_hosts'] = arp_hosts
                 network_scan_cache['last_arp_scan'] = current_time
                 network_scan_last_update = current_time
+                background_thread_health['arp_last_run'] = current_time
                 
                 # Update network knowledge base
                 for ip, data in arp_hosts.items():
-                    update_netkb_entry(ip, data.get('hostname', ''), data.get('mac', ''), True)
+                    try:
+                        update_netkb_entry(ip, data.get('hostname', ''), data.get('mac', ''), True)
+                    except Exception as e:
+                        logger.error(f"Error updating netkb for {ip}: {e}")
                 
                 # Emit real-time update to connected clients
                 if clients_connected > 0:
@@ -5133,12 +5151,62 @@ def background_arp_scan_loop():
                         logger.error(f"Error emitting network update: {e}")
                 
                 logger.debug(f"Background ARP scan completed, found {len(arp_hosts)} hosts")
+                consecutive_errors = 0  # Reset on success
             
             time.sleep(2)  # Check every 2 seconds, but only scan based on interval
             
         except Exception as e:
-            logger.error(f"Error in background ARP scan loop: {e}")
+            consecutive_errors += 1
+            logger.error(f"Error in background ARP scan loop (attempt {consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+            
+            if consecutive_errors >= max_consecutive_errors:
+                logger.critical(f"Background ARP scan failed {max_consecutive_errors} times consecutively! Resetting error counter but continuing...")
+                consecutive_errors = 0  # Reset to prevent thread death
+                time.sleep(30)  # Wait longer after multiple failures
+            else:
+                time.sleep(5)  # Wait a bit before retry
             time.sleep(ARP_SCAN_INTERVAL)
+
+
+# Health monitoring for background threads
+background_thread_health = {
+    'sync_last_run': 0,
+    'arp_last_run': 0,
+    'sync_alive': False,
+    'arp_alive': False
+}
+
+def background_health_monitor():
+    """Monitor background threads and log warnings if they stop responding"""
+    global background_thread_health
+    
+    while not shared_data.webapp_should_exit:
+        try:
+            current_time = time.time()
+            
+            # Check sync thread - should run every 5 seconds
+            if background_thread_health['sync_last_run'] > 0:
+                time_since_sync = current_time - background_thread_health['sync_last_run']
+                if time_since_sync > 30:  # No sync for 30 seconds
+                    logger.warning(f"⚠️ Background sync thread appears stuck! Last run was {time_since_sync:.0f}s ago")
+                    background_thread_health['sync_alive'] = False
+                else:
+                    background_thread_health['sync_alive'] = True
+            
+            # Check ARP thread - should run every 10 seconds  
+            if background_thread_health['arp_last_run'] > 0:
+                time_since_arp = current_time - background_thread_health['arp_last_run']
+                if time_since_arp > 60:  # No ARP scan for 60 seconds
+                    logger.warning(f"⚠️ Background ARP scan thread appears stuck! Last run was {time_since_arp:.0f}s ago")
+                    background_thread_health['arp_alive'] = False
+                else:
+                    background_thread_health['arp_alive'] = True
+            
+            time.sleep(15)  # Check every 15 seconds
+            
+        except Exception as e:
+            logger.error(f"Error in health monitor: {e}", exc_info=True)
+            time.sleep(15)
 
 
 # ============================================================================
@@ -6683,6 +6751,9 @@ def run_server(host='0.0.0.0', port=8000):
         socketio.start_background_task(broadcast_status_updates)
         socketio.start_background_task(background_sync_loop)
         socketio.start_background_task(background_arp_scan_loop)
+        socketio.start_background_task(background_health_monitor)
+        
+        logger.info("✅ All background threads started successfully")
 
         # Run the server
         socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
