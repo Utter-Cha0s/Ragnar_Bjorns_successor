@@ -16,6 +16,10 @@ const configMetadata = {
         label: "Debug Mode",
         description: "Enable verbose debug logging for deeper troubleshooting output."
     },
+    attacks_enabled: {
+        label: "Enable Attacks",
+        description: "Allow the orchestrator to execute attack actions against discovered targets. Disable this to only perform network scanning and vulnerability detection without active exploitation."
+    },
     scan_vuln_running: {
         label: "Automatic Vulnerability Scans",
         description: "Allow the orchestrator to launch vulnerability scans on discovered hosts based on the configured interval."
@@ -3153,7 +3157,7 @@ function displayConfigForm(config) {
     
     // Group config by sections
     const sections = {
-        'General': ['manual_mode', 'debug_mode', 'blacklistcheck'],
+        'General': ['manual_mode', 'debug_mode', 'attacks_enabled', 'blacklistcheck'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
         'Display': ['epd_type', 'ref_width', 'ref_height']
     };
