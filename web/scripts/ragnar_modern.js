@@ -3170,8 +3170,16 @@ function displayConfigForm(config) {
         `;
         
         keys.forEach(key => {
-            if (config.hasOwnProperty(key)) {
-                const value = config[key];
+            // Check if config has the key, or provide defaults for known boolean settings
+            const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'enable_attacks', 'blacklistcheck'];
+            let value = config[key];
+            
+            // If key is missing and it's a known boolean, default to true (except manual_mode)
+            if (!config.hasOwnProperty(key) && knownBooleans.includes(key)) {
+                value = (key === 'manual_mode') ? false : true;
+            }
+            
+            if (config.hasOwnProperty(key) || knownBooleans.includes(key)) {
                 const type = typeof value === 'boolean' ? 'checkbox' : 'text';
                 const label = getConfigLabel(key);
                 const description = escapeHtml(getConfigDescription(key));
