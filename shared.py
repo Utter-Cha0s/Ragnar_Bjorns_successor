@@ -177,6 +177,7 @@ class SharedData:
             "default_vulnerability_ports": [22, 80, 443],
             "network_max_failed_pings": 5,
             "network_device_retention_days": 14,
+            "network_device_retention_hours": 8,  # Legacy data cleanup after 8 hours
             "network_ping_grace_period_minutes": 30,
             
             "__title_timewaits__": "Time Wait Settings",

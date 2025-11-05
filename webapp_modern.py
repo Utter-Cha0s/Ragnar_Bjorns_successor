@@ -764,6 +764,49 @@ def get_wifi_specific_network_file():
     return os.path.join(data_dir, f'network_{current_ssid}.csv')
 
 
+def check_and_handle_network_switch():
+    """Check if we've switched networks and clear old data if so"""
+    try:
+        current_ssid = get_current_wifi_ssid()
+        last_ssid_file = os.path.join('data', 'network_data', '.last_ssid')
+        
+        # Check if we have a record of the last SSID
+        last_ssid = None
+        if os.path.exists(last_ssid_file):
+            try:
+                with open(last_ssid_file, 'r', encoding='utf-8') as f:
+                    last_ssid = f.read().strip()
+            except Exception as e:
+                logger.debug(f"Error reading last SSID file: {e}")
+        
+        # If SSID has changed, clear old network data files
+        if last_ssid and last_ssid != current_ssid:
+            logger.info(f"Network switch detected: {last_ssid} -> {current_ssid}")
+            
+            # Clear old network data files
+            data_dir = os.path.join('data', 'network_data')
+            if os.path.exists(data_dir):
+                for filename in os.listdir(data_dir):
+                    if filename.startswith('network_') and filename.endswith('.csv'):
+                        old_file = os.path.join(data_dir, filename)
+                        try:
+                            os.remove(old_file)
+                            logger.info(f"Removed old network data file: {filename}")
+                        except Exception as e:
+                            logger.error(f"Error removing old network data file {filename}: {e}")
+        
+        # Update the last SSID record
+        try:
+            os.makedirs(os.path.dirname(last_ssid_file), exist_ok=True)
+            with open(last_ssid_file, 'w', encoding='utf-8') as f:
+                f.write(current_ssid)
+        except Exception as e:
+            logger.error(f"Error updating last SSID file: {e}")
+    
+    except Exception as e:
+        logger.error(f"Error checking network switch: {e}")
+
+
 def _is_ip_address(value):
     """Check if a value is a valid IP address"""
     try:
@@ -1057,29 +1100,136 @@ def update_wifi_network_data():
 
 
 def read_wifi_network_data():
-    """Read network data from WiFi-specific file"""
+    """Read network data from WiFi-specific file with automatic cleanup of legacy entries"""
     try:
         wifi_network_file = get_wifi_specific_network_file()
         network_data = []
+        cleaned_data = []
+        cleanup_needed = False
+        
+        # Get configuration values for cleanup
+        retention_hours = shared_data.config.get('network_device_retention_hours', 8)  # 8 hours by default
+        max_failed_pings = shared_data.config.get('network_max_failed_pings', 5)
+        current_time = datetime.now()
+        cutoff_time = current_time - timedelta(hours=retention_hours)
         
         if os.path.exists(wifi_network_file):
             with open(wifi_network_file, 'r', encoding='utf-8', errors='ignore') as f:
                 reader = csv.reader(f)
-                headers = next(reader, None)  # Skip header
+                headers = next(reader, None)  # Read header
+                
+                # Determine if we have the enhanced format with connectivity tracking
+                has_enhanced_format = (headers and len(headers) >= 9 and 
+                                     'FailedPingCount' in headers and 
+                                     'LastSuccessfulPing' in headers and 
+                                     'LastPingAttempt' in headers)
                 
                 for row in reader:
-                    if len(row) >= 6 and row[0].strip():
-                        ip = row[0].strip()
-                        if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                    if not row or not row[0].strip():
+                        continue
+                        
+                    ip = row[0].strip()
+                    if not re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                        continue
+                    
+                    # Handle both old and new CSV formats
+                    if has_enhanced_format and len(row) >= 9:
+                        # Enhanced format: IP, Hostname, Alive, MAC, Ports, LastSeen, FailedPingCount, LastSuccessfulPing, LastPingAttempt
+                        failed_ping_count = int(row[6]) if row[6].isdigit() else 0
+                        last_successful_ping = row[7] if len(row) > 7 else ''
+                        last_ping_attempt = row[8] if len(row) > 8 else ''
+                        last_seen = row[5] if len(row) > 5 else ''
+                        
+                        # Determine the most recent activity timestamp
+                        most_recent_activity = None
+                        for timestamp_str in [last_successful_ping, last_ping_attempt, last_seen]:
+                            if timestamp_str and timestamp_str.strip():
+                                try:
+                                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                                    if timestamp.tzinfo:
+                                        timestamp = timestamp.replace(tzinfo=None)
+                                    if most_recent_activity is None or timestamp > most_recent_activity:
+                                        most_recent_activity = timestamp
+                                except (ValueError, TypeError):
+                                    continue
+                        
+                        # Apply cleanup logic for enhanced format
+                        should_keep = True
+                        if most_recent_activity and most_recent_activity < cutoff_time:
+                            # Entry is older than retention period
+                            if failed_ping_count >= max_failed_pings:
+                                # Device has been failing pings and is old - remove it
+                                logger.debug(f"Removing legacy entry {ip} (failed pings: {failed_ping_count}, last activity: {most_recent_activity})")
+                                should_keep = False
+                                cleanup_needed = True
+                            elif not last_successful_ping:
+                                # No successful ping recorded and old - likely legacy data
+                                logger.debug(f"Removing legacy entry {ip} (no successful pings, last activity: {most_recent_activity})")
+                                should_keep = False
+                                cleanup_needed = True
+                        
+                        if should_keep:
                             network_entry = {
                                 'IPs': ip,
                                 'Hostnames': row[1] if row[1] else '',
-                                'Alive': int(row[2]) if row[2].isdigit() else 1,
+                                'Alive': int(row[2]) if row[2].isdigit() else 0,
                                 'MAC Address': row[3] if row[3] else '',
                                 'Ports': row[4] if row[4] else '',
-                                'LastSeen': row[5] if len(row) > 5 else ''
+                                'LastSeen': last_seen,
+                                'FailedPingCount': failed_ping_count,
+                                'LastSuccessfulPing': last_successful_ping,
+                                'LastPingAttempt': last_ping_attempt
                             }
                             network_data.append(network_entry)
+                            cleaned_data.append(row)
+                    
+                    elif len(row) >= 6:
+                        # Legacy format: IP, Hostname, Alive, MAC, Ports, LastSeen
+                        last_seen = row[5] if len(row) > 5 else ''
+                        alive_status = int(row[2]) if row[2].isdigit() else 0
+                        
+                        # For legacy format, remove entries that are old and not alive
+                        should_keep = True
+                        if last_seen:
+                            try:
+                                last_seen_time = datetime.fromisoformat(last_seen.replace('Z', '+00:00'))
+                                if last_seen_time.tzinfo:
+                                    last_seen_time = last_seen_time.replace(tzinfo=None)
+                                
+                                if last_seen_time < cutoff_time and alive_status == 0:
+                                    logger.debug(f"Removing legacy entry {ip} (old format, not alive, last seen: {last_seen_time})")
+                                    should_keep = False
+                                    cleanup_needed = True
+                            except (ValueError, TypeError):
+                                # If we can't parse the timestamp and device is not alive, remove it
+                                if alive_status == 0:
+                                    logger.debug(f"Removing legacy entry {ip} (unparseable timestamp, not alive)")
+                                    should_keep = False
+                                    cleanup_needed = True
+                        
+                        if should_keep:
+                            network_entry = {
+                                'IPs': ip,
+                                'Hostnames': row[1] if row[1] else '',
+                                'Alive': alive_status,
+                                'MAC Address': row[3] if row[3] else '',
+                                'Ports': row[4] if row[4] else '',
+                                'LastSeen': last_seen
+                            }
+                            network_data.append(network_entry)
+                            cleaned_data.append(row)
+            
+            # If we removed any entries, rewrite the file
+            if cleanup_needed:
+                try:
+                    with open(wifi_network_file, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        if headers:
+                            writer.writerow(headers)
+                        writer.writerows(cleaned_data)
+                    logger.info(f"Cleaned up legacy network data - removed {len(cleaned_data) - len(network_data)} old entries")
+                except Exception as e:
+                    logger.error(f"Error rewriting cleaned network file: {e}")
             
             logger.debug(f"Read {len(network_data)} entries from WiFi network file: {wifi_network_file}")
         else:
@@ -1522,6 +1672,9 @@ def apply_hardware_profile():
 
 def load_persistent_network_data():
     """Load the WiFi-specific network data with fallbacks."""
+    # Check for network switches and clear old data if needed
+    check_and_handle_network_switch()
+    
     update_wifi_network_data()
 
     network_data = read_wifi_network_data()
@@ -1637,6 +1790,9 @@ def load_persistent_network_data():
 def get_stable_network_data():
     """Get stable, aggregated network data for the Network tab"""
     try:
+        # Check for network switches and clear old data if needed
+        check_and_handle_network_switch()
+        
         # Read from the WiFi-specific network file for most stable data
         network_data = read_wifi_network_data()
         
