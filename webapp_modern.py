@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response
 from flask_socketio import SocketIO, emit
 try:
-    from flask_cors import CORS
+    from flask_cors import CORS  # type: ignore
     flask_cors_available = True
 except ImportError:
     flask_cors_available = False
@@ -150,10 +150,10 @@ def run_targeted_arp_scan(ip, interface=DEFAULT_ARP_SCAN_INTERFACE):
         entry = hosts.get(ip)
         return entry.get('mac', '') if entry else ''
     except FileNotFoundError:
-        logger.warning("arp-scan command not found when resolving MAC for %s", ip)
+        logger.warning(f"arp-scan command not found when resolving MAC for {ip}")
         return ''
     except subprocess.TimeoutExpired as e:
-        logger.warning("arp-scan timed out for %s: %s", ip, e)
+        logger.warning(f"arp-scan timed out for {ip}: {e}")
         hosts = _parse_arp_scan_output(e.stdout or '')
         entry = hosts.get(ip)
         return entry.get('mac', '') if entry else ''
@@ -219,13 +219,13 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
         os.makedirs(os.path.dirname(netkb_path), exist_ok=True)
 
         rows = []
-        headers = []
+        headers: list[str] = []
         updated_row = None
 
         if os.path.exists(netkb_path) and os.path.getsize(netkb_path) > 0:
             with open(netkb_path, 'r', encoding='utf-8', errors='ignore') as f:
                 reader = csv.DictReader(f)
-                headers = reader.fieldnames or []
+                headers = list(reader.fieldnames) if reader.fieldnames else []
                 for row in reader:
                     rows.append(row)
         else:
@@ -498,7 +498,7 @@ def sync_all_counts():
                 logger.info(f"[NETKB SYNC] Found {len(netkb_hosts)} hosts in netkb.csv")
                 
             except Exception as e:
-                logger.error(f"[NETKB SYNC] ❌ Error reading from netkb.csv: {e}", exc_info=True)
+                logger.error(f"[NETKB SYNC] ❌ Error reading from netkb.csv: {e}")
             
             # STEP 2: Read from WiFi network file (primary source on this system)
             wifi_hosts = {}
@@ -783,8 +783,9 @@ def get_current_wifi_ssid():
     """Get the current WiFi SSID for file naming"""
     try:
         # Try to get SSID from wifi_manager if available
-        if hasattr(shared_data, 'wifi_manager') and shared_data.wifi_manager:
-            ssid = shared_data.wifi_manager.get_current_ssid()
+        if hasattr(shared_data, 'wifi_manager') and getattr(shared_data, 'wifi_manager', None):
+            wifi_manager = getattr(shared_data, 'wifi_manager')
+            ssid = wifi_manager.get_current_ssid()
             if ssid:
                 # Sanitize SSID for filename
                 sanitized = re.sub(r'[^\w\-_]', '_', ssid)
@@ -1714,6 +1715,8 @@ def apply_hardware_profile():
         
         # Get the profile
         profiles_response = get_hardware_profiles()
+        if isinstance(profiles_response, tuple):
+            return profiles_response
         profiles = profiles_response.get_json()
         
         if profile_id not in profiles:
@@ -2530,7 +2533,7 @@ def get_verbose_debug_logs():
         try:
             # Check key files
             important_files = [
-                shared_data.network_file if hasattr(shared_data, 'network_file') else 'NOT_SET',
+                getattr(shared_data, 'network_file', 'NOT_SET'),
                 shared_data.webconsolelog if hasattr(shared_data, 'webconsolelog') else 'NOT_SET',
                 get_wifi_specific_network_file()
             ]
@@ -3392,7 +3395,7 @@ def scan_single_host():
                 })
 
             except FileNotFoundError:
-                logger.warning("sep-scan command not found. Falling back to nmap for %s", ip)
+                logger.warning(f"sep-scan command not found. Falling back to nmap for {ip}")
                 socketio.emit('scan_host_update', {
                     'type': 'sep_scan_error',
                     'ip': ip,
@@ -4419,6 +4422,232 @@ def get_display():
         return jsonify({'error': 'Display image not found'}), 404
     except Exception as e:
         logger.error(f"Error getting display: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# BLUETOOTH MANAGEMENT ENDPOINTS
+# ============================================================================
+
+# Import the Bluetooth manager
+try:
+    from actions.ble import BluetoothManager
+    bluetooth_manager = BluetoothManager(logger)
+    BLUETOOTH_AVAILABLE = True
+    logger.info("Bluetooth manager loaded successfully")
+except ImportError as e:
+    logger.warning(f"Bluetooth manager not available: {e}")
+    bluetooth_manager = None
+    BLUETOOTH_AVAILABLE = False
+except Exception as e:
+    logger.error(f"Error initializing Bluetooth manager: {e}")
+    bluetooth_manager = None
+    BLUETOOTH_AVAILABLE = False
+
+@app.route('/api/bluetooth/status')
+def get_bluetooth_status():
+    """Get current Bluetooth status"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'error': 'Bluetooth manager not available', 'enabled': False}), 503
+            
+        status = bluetooth_manager.get_status()
+        return jsonify(status)
+        
+    except Exception as e:
+        logger.error(f"Error getting Bluetooth status: {e}")
+        return jsonify({'error': str(e), 'enabled': False}), 500
+
+@app.route('/api/bluetooth/enable', methods=['POST'])
+def enable_bluetooth():
+    """Enable Bluetooth"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        success, message = bluetooth_manager.power_on()
+        return jsonify({'success': success, 'message': message})
+            
+    except Exception as e:
+        logger.error(f"Error enabling Bluetooth: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/disable', methods=['POST'])
+def disable_bluetooth():
+    """Disable Bluetooth"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        success, message = bluetooth_manager.power_off()
+        return jsonify({'success': success, 'message': message})
+            
+    except Exception as e:
+        logger.error(f"Error disabling Bluetooth: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/discoverable/on', methods=['POST'])
+def make_bluetooth_discoverable():
+    """Make Bluetooth discoverable"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        success, message = bluetooth_manager.set_discoverable(True)
+        return jsonify({'success': success, 'message': message})
+            
+    except Exception as e:
+        logger.error(f"Error making Bluetooth discoverable: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/discoverable/off', methods=['POST'])
+def hide_bluetooth_device():
+    """Hide Bluetooth device (make non-discoverable)"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        success, message = bluetooth_manager.set_discoverable(False)
+        return jsonify({'success': success, 'message': message})
+            
+    except Exception as e:
+        logger.error(f"Error hiding Bluetooth device: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/scan/start', methods=['POST'])
+def start_bluetooth_scan():
+    """Start Bluetooth device scan"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        data = request.get_json() or {}
+        duration = data.get('duration', None)
+        
+        success, message = bluetooth_manager.start_scan(duration)
+        
+        if success:
+            # Update shared data for compatibility
+            shared_data.bluetooth_scan_active = True
+            shared_data.bluetooth_scan_start_time = time.time()
+        
+        return jsonify({'success': success, 'message': message})
+            
+    except Exception as e:
+        logger.error(f"Error starting Bluetooth scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/scan/stop', methods=['POST'])
+def stop_bluetooth_scan():
+    """Stop Bluetooth device scan"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        success, message = bluetooth_manager.stop_scan()
+        
+        if success:
+            # Update shared data for compatibility
+            shared_data.bluetooth_scan_active = False
+        
+        return jsonify({'success': success, 'message': message})
+            
+    except Exception as e:
+        logger.error(f"Error stopping Bluetooth scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/devices')
+def get_bluetooth_devices():
+    """Get discovered Bluetooth devices"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'devices': [], 'error': 'Bluetooth manager not available'})
+            
+        devices = bluetooth_manager.get_discovered_devices()
+        
+        # Convert to list format for API compatibility
+        device_list = list(devices.values())
+        
+        return jsonify({'devices': device_list})
+        
+    except Exception as e:
+        logger.error(f"Error getting Bluetooth devices: {e}")
+        return jsonify({'devices': [], 'error': str(e)})
+
+@app.route('/api/bluetooth/pair', methods=['POST'])
+def pair_bluetooth_device():
+    """Pair with a Bluetooth device"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        data = request.get_json()
+        address = data.get('address') if data else None
+        
+        if not address:
+            return jsonify({'success': False, 'error': 'Device address required'}), 400
+        
+        success, message = bluetooth_manager.pair_device(address)
+        return jsonify({'success': success, 'message': message})
+            
+    except Exception as e:
+        logger.error(f"Error pairing Bluetooth device: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/unpair', methods=['POST'])
+def unpair_bluetooth_device():
+    """Unpair a Bluetooth device"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        data = request.get_json()
+        address = data.get('address') if data else None
+        
+        if not address:
+            return jsonify({'success': False, 'error': 'Device address required'}), 400
+        
+        success, message = bluetooth_manager.unpair_device(address)
+        return jsonify({'success': success, 'message': message})
+            
+    except Exception as e:
+        logger.error(f"Error unpairing Bluetooth device: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/enumerate', methods=['POST'])
+def enumerate_bluetooth_services():
+    """Enumerate services on a Bluetooth device"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
+            
+        data = request.get_json()
+        address = data.get('address') if data else None
+        
+        if not address:
+            return jsonify({'success': False, 'error': 'Device address required'}), 400
+        
+        # Get detailed device info which includes services
+        device_details = bluetooth_manager._get_device_details(address)
+        services = device_details.get('services', [])
+        
+        return jsonify({'success': True, 'services': services})
+        
+    except Exception as e:
+        logger.error(f"Error enumerating Bluetooth services: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/diagnose', methods=['GET'])
+def diagnose_bluetooth():
+    """Diagnose Bluetooth scanning issues"""
+    try:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
+            return jsonify({'error': 'Bluetooth manager not available'}), 503
+            
+        diagnosis = bluetooth_manager.diagnose_scanning()
+        return jsonify(diagnosis)
+        
+    except Exception as e:
+        logger.error(f"Error diagnosing Bluetooth: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -6032,7 +6261,7 @@ def background_sync_loop(interval=SYNC_BACKGROUND_INTERVAL):
             background_thread_health['sync_last_run'] = time.time()
         except Exception as e:
             consecutive_errors += 1
-            logger.error(f"Background sync error (attempt {consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+            logger.error(f"Background sync error (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
             
             if consecutive_errors >= max_consecutive_errors:
                 logger.critical(f"Background sync failed {max_consecutive_errors} times consecutively! Resetting error counter but continuing...")
@@ -6096,7 +6325,7 @@ def background_arp_scan_loop():
             
         except Exception as e:
             consecutive_errors += 1
-            logger.error(f"Error in background ARP scan loop (attempt {consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+            logger.error(f"Error in background ARP scan loop (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
             
             if consecutive_errors >= max_consecutive_errors:
                 logger.critical(f"Background ARP scan failed {max_consecutive_errors} times consecutively! Resetting error counter but continuing...")
@@ -6144,7 +6373,7 @@ def background_health_monitor():
             time.sleep(15)  # Check every 15 seconds
             
         except Exception as e:
-            logger.error(f"Error in health monitor: {e}", exc_info=True)
+            logger.error(f"Error in health monitor: {e}")
             time.sleep(15)
 
 
@@ -7128,7 +7357,8 @@ def get_system_status_api():
         # Temperature (if available)
         try:
             if hasattr(psutil, 'sensors_temperatures'):
-                temps = psutil.sensors_temperatures()
+                temps_func = getattr(psutil, 'sensors_temperatures')
+                temps = temps_func()
                 temperature_data = {}
                 for name, entries in temps.items():
                     for entry in entries:
