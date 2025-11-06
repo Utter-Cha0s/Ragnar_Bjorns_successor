@@ -241,16 +241,30 @@ class BluetoothManager:
             result = subprocess.run(['bluetoothctl', 'scan', 'on'], 
                                   capture_output=True, text=True, timeout=10)
             
+            self.logger.info(f"bluetoothctl scan on result: returncode={result.returncode}, stdout='{result.stdout.strip()}', stderr='{result.stderr.strip()}'")
+            
             if result.returncode == 0:
                 self.scan_active = True
                 self.scan_start_time = time.time()
+                
+                # Wait a moment and verify scanning actually started
+                time.sleep(2)
+                actual_scan_status = self._check_scan_status()
                 
                 message = "Bluetooth device scan started"
                 if duration:
                     message += f" (will run for {duration} seconds)"
                 
+                if actual_scan_status is True:
+                    message += ". Scan is active and discovering devices."
+                elif actual_scan_status is False:
+                    message += ". Warning: Scan command succeeded but discovery is not active."
+                    self.logger.warning("Scan command succeeded but bluetoothctl shows discovery not active")
+                else:
+                    message += ". Warning: Cannot verify if scan is actually active."
+                
                 # Add troubleshooting info
-                message += ". Make sure nearby devices are in discoverable mode."
+                message += " Make sure nearby devices are in discoverable mode."
                     
                 self.logger.info(message)
                 return True, message
