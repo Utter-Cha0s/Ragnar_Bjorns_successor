@@ -1,0 +1,673 @@
+#!/usr/bin/env python3
+"""
+Bluetooth Low Energy (BLE) and Classic Bluetooth Management Module for Ragnar
+Handles all Bluetooth operations including scanning, pairing, and device management
+"""
+
+import subprocess
+import re
+import time
+import logging
+from typing import Dict, List, Optional, Tuple, Any
+import json
+import os
+
+class BluetoothManager:
+    """
+    Comprehensive Bluetooth management class for Ragnar
+    Supports both Classic Bluetooth and BLE operations
+    """
+    
+    def __init__(self, logger=None):
+        self.logger = logger or logging.getLogger(__name__)
+        self.scan_active = False
+        self.scan_start_time = 0.0
+        self.discovered_devices = {}
+        self.paired_devices = {}
+        
+    def check_bluetooth_availability(self) -> Tuple[bool, str]:
+        """
+        Check if Bluetooth is available on the system
+        Returns: (available, message)
+        """
+        try:
+            result = subprocess.run(['bluetoothctl', '--version'], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                return True, "Bluetooth available"
+            else:
+                return False, "bluetoothctl not found or not working"
+        except FileNotFoundError:
+            return False, "bluetoothctl command not found"
+        except subprocess.TimeoutExpired:
+            return False, "bluetoothctl command timed out"
+        except Exception as e:
+            return False, f"Error checking Bluetooth: {str(e)}"
+    
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Get comprehensive Bluetooth status
+        Returns detailed status information
+        """
+        status = {
+            'enabled': False,
+            'discoverable': False,
+            'pairable': False,
+            'scanning': self.scan_active,
+            'address': None,
+            'name': None,
+            'class': None,
+            'powered': False,
+            'error': None,
+            'controller_info': {}
+        }
+        
+        try:
+            # Check if Bluetooth controller exists and get detailed info
+            result = subprocess.run(['bluetoothctl', 'show'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                output = result.stdout
+                
+                # Parse detailed controller information
+                status['powered'] = 'Powered: yes' in output
+                status['enabled'] = status['powered']  # For backwards compatibility
+                status['discoverable'] = 'Discoverable: yes' in output
+                status['pairable'] = 'Pairable: yes' in output
+                
+                # Extract controller details
+                for line in output.split('\n'):
+                    line = line.strip()
+                    if line.startswith('Controller'):
+                        status['address'] = line.split()[1] if len(line.split()) > 1 else None
+                    elif line.startswith('Name:'):
+                        status['name'] = line.replace('Name:', '').strip()
+                    elif line.startswith('Class:'):
+                        status['class'] = line.replace('Class:', '').strip()
+                    elif line.startswith('Alias:'):
+                        status['controller_info']['alias'] = line.replace('Alias:', '').strip()
+                    elif line.startswith('Modalias:'):
+                        status['controller_info']['modalias'] = line.replace('Modalias:', '').strip()
+                        
+            else:
+                status['error'] = 'No Bluetooth controller found'
+                self.logger.warning("No Bluetooth controller available")
+                
+        except subprocess.TimeoutExpired:
+            status['error'] = 'Bluetooth status check timed out'
+            self.logger.error("Bluetooth status check timed out")
+        except Exception as e:
+            status['error'] = f'Error checking Bluetooth status: {str(e)}'
+            self.logger.error(f"Error checking Bluetooth status: {e}")
+        
+        return status
+    
+    def power_on(self) -> Tuple[bool, str]:
+        """
+        Enable/Power on Bluetooth
+        Returns: (success, message)
+        """
+        try:
+            self.logger.info("Enabling Bluetooth...")
+            result = subprocess.run(['bluetoothctl', 'power', 'on'], 
+                                  capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0:
+                # Wait a moment for Bluetooth to stabilize
+                time.sleep(2)
+                
+                # Verify it's actually enabled
+                status = self.get_status()
+                if status['enabled']:
+                    self.logger.info("Bluetooth enabled successfully")
+                    return True, "Bluetooth enabled successfully"
+                else:
+                    self.logger.warning("Bluetooth command succeeded but device not powered")
+                    return False, "Bluetooth power on command succeeded but device not enabled"
+            else:
+                error_msg = result.stderr.strip() or 'Failed to enable Bluetooth'
+                self.logger.error(f"Failed to enable Bluetooth: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error("Bluetooth enable command timed out")
+            return False, "Enable Bluetooth command timed out"
+        except Exception as e:
+            self.logger.error(f"Error enabling Bluetooth: {e}")
+            return False, f"Error enabling Bluetooth: {str(e)}"
+    
+    def power_off(self) -> Tuple[bool, str]:
+        """
+        Disable/Power off Bluetooth
+        Returns: (success, message)
+        """
+        try:
+            self.logger.info("Disabling Bluetooth...")
+            
+            # Stop scanning if active
+            if self.scan_active:
+                self.stop_scan()
+            
+            result = subprocess.run(['bluetoothctl', 'power', 'off'], 
+                                  capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0:
+                self.logger.info("Bluetooth disabled successfully")
+                return True, "Bluetooth disabled successfully"
+            else:
+                error_msg = result.stderr.strip() or 'Failed to disable Bluetooth'
+                self.logger.error(f"Failed to disable Bluetooth: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error("Bluetooth disable command timed out")
+            return False, "Disable Bluetooth command timed out"
+        except Exception as e:
+            self.logger.error(f"Error disabling Bluetooth: {e}")
+            return False, f"Error disabling Bluetooth: {str(e)}"
+    
+    def set_discoverable(self, discoverable: bool) -> Tuple[bool, str]:
+        """
+        Set Bluetooth discoverable mode
+        Args:
+            discoverable: True to make discoverable, False to hide
+        Returns: (success, message)
+        """
+        try:
+            mode = 'on' if discoverable else 'off'
+            action = 'discoverable' if discoverable else 'hidden'
+            
+            self.logger.info(f"Setting Bluetooth {action}...")
+            result = subprocess.run(['bluetoothctl', 'discoverable', mode], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                message = f"Bluetooth is now {action}"
+                self.logger.info(message)
+                return True, message
+            else:
+                error_msg = result.stderr.strip() or f'Failed to make Bluetooth {action}'
+                self.logger.error(f"Failed to set discoverable mode: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            return False, "Discoverable command timed out"
+        except Exception as e:
+            self.logger.error(f"Error setting discoverable mode: {e}")
+            return False, f"Error setting discoverable mode: {str(e)}"
+    
+    def start_scan(self, duration: Optional[int] = None) -> Tuple[bool, str]:
+        """
+        Start Bluetooth device discovery scan
+        Args:
+            duration: Optional scan duration in seconds
+        Returns: (success, message)
+        """
+        try:
+            self.logger.info("Starting Bluetooth device scan...")
+            
+            # Ensure Bluetooth is powered on first
+            status = self.get_status()
+            if not status['enabled']:
+                power_success, power_msg = self.power_on()
+                if not power_success:
+                    return False, f"Cannot start scan: {power_msg}"
+            
+            result = subprocess.run(['bluetoothctl', 'scan', 'on'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                self.scan_active = True
+                self.scan_start_time = time.time()
+                
+                message = "Bluetooth device scan started"
+                if duration:
+                    message += f" (will run for {duration} seconds)"
+                    
+                self.logger.info(message)
+                return True, message
+            else:
+                error_msg = result.stderr.strip() or 'Failed to start Bluetooth scan'
+                self.logger.error(f"Failed to start scan: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            return False, "Scan start command timed out"
+        except Exception as e:
+            self.logger.error(f"Error starting Bluetooth scan: {e}")
+            return False, f"Error starting scan: {str(e)}"
+    
+    def stop_scan(self) -> Tuple[bool, str]:
+        """
+        Stop Bluetooth device discovery scan
+        Returns: (success, message)
+        """
+        try:
+            self.logger.info("Stopping Bluetooth device scan...")
+            result = subprocess.run(['bluetoothctl', 'scan', 'off'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            # bluetoothctl scan off sometimes returns non-zero even when successful
+            success_indicators = ['success', 'Discovery stopped', 'Discovering: no']
+            output_text = (result.stdout + result.stderr).lower()
+            
+            # Check for success indicators or minor errors that don't matter
+            if (result.returncode == 0 or 
+                any(indicator.lower() in output_text for indicator in success_indicators) or
+                ('not available' not in output_text and 'failed' not in output_text)):
+                
+                self.scan_active = False
+                self.logger.info("Bluetooth scan stopped successfully")
+                return True, "Bluetooth scan stopped successfully"
+            else:
+                error_msg = result.stderr.strip() or 'Failed to stop Bluetooth scan'
+                self.logger.error(f"Failed to stop scan: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            return False, "Scan stop command timed out"
+        except Exception as e:
+            self.logger.error(f"Error stopping Bluetooth scan: {e}")
+            return False, f"Error stopping scan: {str(e)}"
+    
+    def get_discovered_devices(self, refresh: bool = True) -> Dict[str, Dict[str, Any]]:
+        """
+        Get list of discovered Bluetooth devices
+        Args:
+            refresh: Whether to refresh device information
+        Returns: Dictionary of devices keyed by MAC address
+        """
+        devices = {}
+        
+        try:
+            # Get basic device list
+            result = subprocess.run(['bluetoothctl', 'devices'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line.startswith('Device '):
+                        parts = line.split(None, 2)
+                        if len(parts) >= 2:
+                            address = parts[1]
+                            name = parts[2] if len(parts) > 2 else 'Unknown Device'
+                            
+                            device_info = {
+                                'address': address,
+                                'name': name,
+                                'rssi': None,
+                                'device_class': None,
+                                'device_type': 'Unknown',
+                                'services': [],
+                                'paired': False,
+                                'connected': False,
+                                'trusted': False,
+                                'last_seen': time.time()
+                            }
+                            
+                            # Get detailed device information if requested
+                            if refresh:
+                                detailed_info = self._get_device_details(address)
+                                device_info.update(detailed_info)
+                            
+                            devices[address] = device_info
+                            
+            self.discovered_devices = devices
+            
+        except subprocess.TimeoutExpired:
+            self.logger.error("Device list command timed out")
+        except Exception as e:
+            self.logger.error(f"Error getting device list: {e}")
+        
+        return devices
+    
+    def _get_device_details(self, address: str) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific Bluetooth device
+        Args:
+            address: MAC address of the device
+        Returns: Dictionary with detailed device information
+        """
+        details = {}
+        
+        try:
+            result = subprocess.run(['bluetoothctl', 'info', address], 
+                                  capture_output=True, text=True, timeout=8)
+            
+            if result.returncode == 0:
+                info_output = result.stdout
+                
+                # Parse device information
+                for line in info_output.split('\n'):
+                    line = line.strip()
+                    
+                    # RSSI (signal strength)
+                    if line.startswith('RSSI:'):
+                        try:
+                            details['rssi'] = int(line.split(':')[1].strip())
+                        except (ValueError, IndexError):
+                            pass
+                    
+                    # Device class
+                    elif line.startswith('Class:'):
+                        details['device_class'] = line.split(':', 1)[1].strip()
+                    
+                    # Device type/icon
+                    elif line.startswith('Icon:'):
+                        details['device_type'] = line.split(':', 1)[1].strip()
+                    
+                    # Connection status
+                    elif line.startswith('Connected:'):
+                        details['connected'] = 'yes' in line.lower()
+                    
+                    # Pairing status
+                    elif line.startswith('Paired:'):
+                        details['paired'] = 'yes' in line.lower()
+                    
+                    # Trust status
+                    elif line.startswith('Trusted:'):
+                        details['trusted'] = 'yes' in line.lower()
+                    
+                    # Services (UUIDs)
+                    elif line.startswith('UUID:'):
+                        if 'services' not in details:
+                            details['services'] = []
+                        
+                        # Extract UUID and service name
+                        uuid_part = line.split(':', 1)[1].strip()
+                        if '(' in uuid_part and ')' in uuid_part:
+                            uuid = uuid_part.split('(')[0].strip()
+                            service_name = uuid_part.split('(')[1].replace(')', '').strip()
+                            details['services'].append({
+                                'uuid': uuid,
+                                'name': service_name
+                            })
+                        else:
+                            details['services'].append({
+                                'uuid': uuid_part,
+                                'name': 'Unknown Service'
+                            })
+                
+        except Exception as e:
+            self.logger.warning(f"Error getting device details for {address}: {e}")
+        
+        return details
+    
+    def pair_device(self, address: str) -> Tuple[bool, str]:
+        """
+        Pair with a Bluetooth device
+        Args:
+            address: MAC address of the device to pair
+        Returns: (success, message)
+        """
+        try:
+            self.logger.info(f"Attempting to pair with device {address}...")
+            
+            # First check if device is discoverable
+            devices = self.get_discovered_devices(refresh=False)
+            if address not in devices:
+                return False, f"Device {address} not found. Start a scan first."
+            
+            result = subprocess.run(['bluetoothctl', 'pair', address], 
+                                  capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0 or 'Pairing successful' in result.stdout:
+                self.logger.info(f"Successfully paired with {address}")
+                return True, f"Successfully paired with {address}"
+            else:
+                error_msg = result.stderr.strip() or f'Failed to pair with {address}'
+                if 'already paired' in error_msg.lower():
+                    return True, f"Device {address} is already paired"
+                
+                self.logger.error(f"Failed to pair with {address}: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            return False, f"Pairing with {address} timed out"
+        except Exception as e:
+            self.logger.error(f"Error pairing with {address}: {e}")
+            return False, f"Error pairing with {address}: {str(e)}"
+    
+    def unpair_device(self, address: str) -> Tuple[bool, str]:
+        """
+        Unpair (remove) a Bluetooth device
+        Args:
+            address: MAC address of the device to unpair
+        Returns: (success, message)
+        """
+        try:
+            self.logger.info(f"Removing/unpairing device {address}...")
+            result = subprocess.run(['bluetoothctl', 'remove', address], 
+                                  capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0:
+                self.logger.info(f"Successfully removed device {address}")
+                return True, f"Successfully removed device {address}"
+            else:
+                error_msg = result.stderr.strip() or f'Failed to remove device {address}'
+                self.logger.error(f"Failed to remove {address}: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            return False, f"Remove device {address} command timed out"
+        except Exception as e:
+            self.logger.error(f"Error removing device {address}: {e}")
+            return False, f"Error removing device {address}: {str(e)}"
+    
+    def connect_device(self, address: str) -> Tuple[bool, str]:
+        """
+        Connect to a paired Bluetooth device
+        Args:
+            address: MAC address of the device to connect
+        Returns: (success, message)
+        """
+        try:
+            self.logger.info(f"Connecting to device {address}...")
+            result = subprocess.run(['bluetoothctl', 'connect', address], 
+                                  capture_output=True, text=True, timeout=20)
+            
+            if result.returncode == 0 or 'Connection successful' in result.stdout:
+                self.logger.info(f"Successfully connected to {address}")
+                return True, f"Successfully connected to {address}"
+            else:
+                error_msg = result.stderr.strip() or f'Failed to connect to {address}'
+                self.logger.error(f"Failed to connect to {address}: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            return False, f"Connection to {address} timed out"
+        except Exception as e:
+            self.logger.error(f"Error connecting to {address}: {e}")
+            return False, f"Error connecting to {address}: {str(e)}"
+    
+    def disconnect_device(self, address: str) -> Tuple[bool, str]:
+        """
+        Disconnect from a Bluetooth device
+        Args:
+            address: MAC address of the device to disconnect
+        Returns: (success, message)
+        """
+        try:
+            self.logger.info(f"Disconnecting from device {address}...")
+            result = subprocess.run(['bluetoothctl', 'disconnect', address], 
+                                  capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0:
+                self.logger.info(f"Successfully disconnected from {address}")
+                return True, f"Successfully disconnected from {address}"
+            else:
+                error_msg = result.stderr.strip() or f'Failed to disconnect from {address}'
+                self.logger.error(f"Failed to disconnect from {address}: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            return False, f"Disconnect from {address} timed out"
+        except Exception as e:
+            self.logger.error(f"Error disconnecting from {address}: {e}")
+            return False, f"Error disconnecting from {address}: {str(e)}"
+    
+    def get_paired_devices(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get list of paired Bluetooth devices
+        Returns: Dictionary of paired devices keyed by MAC address
+        """
+        paired_devices = {}
+        
+        try:
+            result = subprocess.run(['bluetoothctl', 'paired-devices'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line.startswith('Device '):
+                        parts = line.split(None, 2)
+                        if len(parts) >= 2:
+                            address = parts[1]
+                            name = parts[2] if len(parts) > 2 else 'Unknown Device'
+                            
+                            # Get detailed info
+                            device_info = self._get_device_details(address)
+                            device_info.update({
+                                'address': address,
+                                'name': name,
+                                'paired': True
+                            })
+                            
+                            paired_devices[address] = device_info
+                            
+        except Exception as e:
+            self.logger.error(f"Error getting paired devices: {e}")
+        
+        return paired_devices
+    
+    def scan_for_time(self, duration: int) -> Dict[str, Dict[str, Any]]:
+        """
+        Perform a timed Bluetooth scan
+        Args:
+            duration: Scan duration in seconds
+        Returns: Dictionary of discovered devices
+        """
+        self.logger.info(f"Starting {duration}-second Bluetooth scan...")
+        
+        # Start scan
+        success, message = self.start_scan()
+        if not success:
+            self.logger.error(f"Failed to start scan: {message}")
+            return {}
+        
+        # Wait for specified duration
+        time.sleep(duration)
+        
+        # Get discovered devices
+        devices = self.get_discovered_devices()
+        
+        # Stop scan
+        self.stop_scan()
+        
+        self.logger.info(f"Scan completed. Found {len(devices)} devices.")
+        return devices
+    
+    def export_devices_to_json(self, filepath: str) -> bool:
+        """
+        Export discovered devices to JSON file
+        Args:
+            filepath: Path to save the JSON file
+        Returns: Success status
+        """
+        try:
+            devices = self.get_discovered_devices()
+            
+            # Convert to serializable format
+            export_data = {
+                'timestamp': time.time(),
+                'scan_duration': time.time() - self.scan_start_time if self.scan_start_time else 0,
+                'device_count': len(devices),
+                'devices': devices
+            }
+            
+            with open(filepath, 'w') as f:
+                json.dump(export_data, f, indent=2, default=str)
+            
+            self.logger.info(f"Exported {len(devices)} devices to {filepath}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error exporting devices to JSON: {e}")
+            return False
+
+# Convenience functions for easy usage
+def quick_scan(duration: int = 10, logger=None) -> Dict[str, Dict[str, Any]]:
+    """
+    Perform a quick Bluetooth scan
+    Args:
+        duration: Scan duration in seconds
+        logger: Optional logger instance
+    Returns: Dictionary of discovered devices
+    """
+    bt_manager = BluetoothManager(logger)
+    return bt_manager.scan_for_time(duration)
+
+def get_bluetooth_info(logger=None) -> Dict[str, Any]:
+    """
+    Get basic Bluetooth system information
+    Args:
+        logger: Optional logger instance
+    Returns: Bluetooth status and device information
+    """
+    bt_manager = BluetoothManager(logger)
+    
+    available, msg = bt_manager.check_bluetooth_availability()
+    if not available:
+        return {'available': False, 'error': msg}
+    
+    status = bt_manager.get_status()
+    devices = bt_manager.get_discovered_devices() if status['enabled'] else {}
+    paired = bt_manager.get_paired_devices() if status['enabled'] else {}
+    
+    return {
+        'available': True,
+        'status': status,
+        'discovered_devices': devices,
+        'paired_devices': paired,
+        'device_counts': {
+            'discovered': len(devices),
+            'paired': len(paired)
+        }
+    }
+
+if __name__ == "__main__":
+    # Example usage and testing
+    import logging
+    
+    # Setup logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
+    print("🔵 Testing Bluetooth Manager")
+    print("=" * 40)
+    
+    # Create Bluetooth manager
+    bt = BluetoothManager(logger)
+    
+    # Check availability
+    available, msg = bt.check_bluetooth_availability()
+    print(f"Bluetooth Available: {available} - {msg}")
+    
+    if available:
+        # Get status
+        status = bt.get_status()
+        print(f"Bluetooth Status: {status}")
+        
+        # Test power on
+        if not status['enabled']:
+            success, msg = bt.power_on()
+            print(f"Power On: {success} - {msg}")
+        
+        # Quick scan
+        print("Starting 10-second scan...")
+        devices = bt.scan_for_time(10)
+        print(f"Found {len(devices)} devices:")
+        
+        for addr, device in devices.items():
+            print(f"  • {device['name']} ({addr}) - RSSI: {device.get('rssi', 'N/A')}")
