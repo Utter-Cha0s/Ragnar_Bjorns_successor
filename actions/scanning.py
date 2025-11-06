@@ -137,28 +137,89 @@ class NetworkScanner:
 
     def run_arp_scan(self):
         """Execute arp-scan to quickly discover hosts on the local network."""
-        command = ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '--localnet']
-        self.logger.info(f"Running arp-scan for host discovery: {' '.join(command)}")
+        # Try both --localnet and explicit subnet scanning for comprehensive discovery
+        commands = [
+            ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '--localnet'],
+            ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '192.168.1.0/24']
+        ]
+        
+        all_hosts = {}
+        
+        for command in commands:
+            self.logger.info(f"Running arp-scan for host discovery: {' '.join(command)}")
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=120)
+                hosts = self._parse_arp_scan_output(result.stdout)
+                self.logger.info(f"arp-scan command '{' '.join(command)}' discovered {len(hosts)} hosts")
+                all_hosts.update(hosts)  # Merge results from both scans
+            except FileNotFoundError:
+                self.logger.error("arp-scan command not found. Install arp-scan or adjust configuration.")
+                continue
+            except subprocess.TimeoutExpired as e:
+                self.logger.error(f"arp-scan timed out: {e}")
+                hosts = self._parse_arp_scan_output(e.stdout or "")
+                all_hosts.update(hosts)
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(f"arp-scan exited with code {e.returncode}: {e.stderr.strip() if e.stderr else 'no stderr'}")
+                hosts = self._parse_arp_scan_output(e.stdout or "")
+                all_hosts.update(hosts)
+            except Exception as e:
+                self.logger.error(f"Unexpected error running arp-scan: {e}")
+                continue
+        
+        self.logger.info(f"Total unique hosts discovered by all arp-scan methods: {len(all_hosts)}")
+        
+        # Supplementary ping sweep for hosts that don't respond to ARP
+        # This catches devices like 192.168.1.192 that may filter ARP but respond to ping
+        ping_discovered = self._ping_sweep_missing_hosts(all_hosts)
+        all_hosts.update(ping_discovered)
+        
+        self.logger.info(f"Final host count after arp-scan + ping sweep: {len(all_hosts)}")
+        return all_hosts
 
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=120)
-            hosts = self._parse_arp_scan_output(result.stdout)
-            self.logger.info(f"arp-scan discovered {len(hosts)} hosts")
-            return hosts
-        except FileNotFoundError:
-            self.logger.error("arp-scan command not found. Install arp-scan or adjust configuration.")
-            return {}
-        except subprocess.TimeoutExpired as e:
-            self.logger.error(f"arp-scan timed out: {e}")
-            hosts = self._parse_arp_scan_output(e.stdout or "")
-            return hosts
-        except subprocess.CalledProcessError as e:
-            self.logger.warning(f"arp-scan exited with code {e.returncode}: {e.stderr.strip() if e.stderr else 'no stderr'}")
-            hosts = self._parse_arp_scan_output(e.stdout or "")
-            return hosts
-        except Exception as e:
-            self.logger.error(f"Unexpected error running arp-scan: {e}")
-            return {}
+    def _ping_sweep_missing_hosts(self, arp_hosts):
+        """
+        Ping sweep to find hosts that don't respond to arp-scan but are alive.
+        This is particularly useful for devices that filter ARP broadcasts.
+        """
+        ping_discovered = {}
+        known_ips = set(arp_hosts.keys())
+        
+        # Check a few specific IPs that we know might be problematic
+        # You can extend this list based on your network knowledge
+        target_ips = ['192.168.1.192', '192.168.1.193', '192.168.1.194', '192.168.1.195']
+        
+        for ip in target_ips:
+            if ip in known_ips:
+                continue  # Already found by arp-scan
+                
+            # Quick ping test
+            try:
+                result = subprocess.run(['ping', '-c', '1', '-W', '2', ip], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    # Host responds to ping, try to get MAC via ARP table
+                    mac = self.get_mac_address(ip, "")
+                    if not mac or mac == "00:00:00:00:00:00":
+                        # Create pseudo-MAC for tracking
+                        ip_parts = ip.split('.')
+                        if len(ip_parts) == 4:
+                            pseudo_mac = f"00:00:{int(ip_parts[0]):02x}:{int(ip_parts[1]):02x}:{int(ip_parts[2]):02x}:{int(ip_parts[3]):02x}"
+                            mac = pseudo_mac
+                    
+                    ping_discovered[ip] = {
+                        "mac": mac or "00:00:00:00:00:00",
+                        "vendor": "Unknown (discovered by ping)"
+                    }
+                    self.logger.info(f"Ping sweep found additional host: {ip} (MAC: {mac})")
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception) as e:
+                self.logger.debug(f"Ping sweep: {ip} not reachable ({e})")
+                continue
+        
+        if ping_discovered:
+            self.logger.info(f"Ping sweep discovered {len(ping_discovered)} additional hosts not found by arp-scan")
+        
+        return ping_discovered
 
     def check_if_csv_scan_file_exists(self, csv_scan_file, csv_result_file, netkbfile):
         """
@@ -258,18 +319,20 @@ class NetworkScanner:
                     with open(netkbfile, 'r') as file:
                         reader = csv.DictReader(file)
                         existing_headers = reader.fieldnames
-                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports"]]
+                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"]]
                         for row in reader:
                             mac = row["MAC Address"]
                             ips = row["IPs"].split(';')
                             hostnames = row["Hostnames"].split(';')
                             alive = row["Alive"]
                             ports = row["Ports"].split(';')
+                            failed_pings = int(row.get("Failed_Pings", "0"))  # Default to 0 if missing
                             netkb_entries[mac] = {
                                 'IPs': set(ips) if ips[0] else set(),
                                 'Hostnames': set(hostnames) if hostnames[0] else set(),
                                 'Alive': alive,
-                                'Ports': set(ports) if ports[0] else set()
+                                'Ports': set(ports) if ports[0] else set(),
+                                'Failed_Pings': failed_pings
                             }
                             for action in existing_action_columns:
                                 netkb_entries[mac][action] = row.get(action, "")
@@ -298,10 +361,20 @@ class NetworkScanner:
 
                     # Check if IP is already associated with a different MAC
                     if ip in ip_to_mac and ip_to_mac[ip] != mac:
-                        # Mark the old MAC as not alive
+                        # Mark the old MAC as having a failed ping instead of immediately dead
                         old_mac = ip_to_mac[ip]
                         if old_mac in netkb_entries:
-                            netkb_entries[old_mac]['Alive'] = '0'
+                            max_failed_pings = self.shared_data.config.get('network_max_failed_pings', 15)
+                            current_failures = netkb_entries[old_mac].get('Failed_Pings', 0) + 1
+                            netkb_entries[old_mac]['Failed_Pings'] = current_failures
+                            
+                            # Only mark as dead after reaching failure threshold
+                            if current_failures >= max_failed_pings:
+                                netkb_entries[old_mac]['Alive'] = '0'
+                                self.logger.info(f"Old MAC {old_mac} marked offline after {current_failures} consecutive failed pings (IP reassigned to {mac})")
+                            else:
+                                netkb_entries[old_mac]['Alive'] = '1'  # Keep alive per 15-ping rule
+                                self.logger.debug(f"Old MAC {old_mac} failed ping {current_failures}/{max_failed_pings} due to IP reassignment - keeping alive")
 
                     # Update or create entry for the new MAC
                     ip_to_mac[ip] = mac
@@ -310,20 +383,34 @@ class NetworkScanner:
                         netkb_entries[mac]['Hostnames'].add(hostname)
                         netkb_entries[mac]['Alive'] = '1'
                         netkb_entries[mac]['Ports'].update(map(str, ports))
+                        netkb_entries[mac]['Failed_Pings'] = 0  # Reset failures since host is responsive
                     else:
                         netkb_entries[mac] = {
                             'IPs': {ip},
                             'Hostnames': {hostname},
                             'Alive': '1',
-                            'Ports': set(map(str, ports))
+                            'Ports': set(map(str, ports)),
+                            'Failed_Pings': 0  # New hosts start with 0 failed pings
                         }
                         for action in existing_action_columns:
                             netkb_entries[mac][action] = ""
 
-                # Update all existing entries to mark missing hosts as not alive
+                # Update all existing entries - implement 15-failed-pings rule instead of immediate death
+                max_failed_pings = self.shared_data.config.get('network_max_failed_pings', 15)
                 for mac in netkb_entries:
                     if mac not in alive_macs:
-                        netkb_entries[mac]['Alive'] = '0'
+                        # Host not found in current scan - increment failure count
+                        current_failures = netkb_entries[mac].get('Failed_Pings', 0)
+                        netkb_entries[mac]['Failed_Pings'] = current_failures + 1
+                        
+                        # Only mark as dead after reaching the failure threshold
+                        if netkb_entries[mac]['Failed_Pings'] >= max_failed_pings:
+                            netkb_entries[mac]['Alive'] = '0'
+                            self.logger.info(f"Host {mac} marked offline after {netkb_entries[mac]['Failed_Pings']} consecutive failed pings")
+                        else:
+                            # Keep alive until threshold reached
+                            netkb_entries[mac]['Alive'] = '1'  # Keep alive per 15-ping rule
+                            self.logger.debug(f"Host {mac} failed ping {netkb_entries[mac]['Failed_Pings']}/{max_failed_pings} - keeping alive per {max_failed_pings}-ping rule")
 
                 # Remove entries with multiple IP addresses for a single MAC address
                 netkb_entries = {mac: data for mac, data in netkb_entries.items() if len(data['IPs']) == 1}
@@ -332,14 +419,27 @@ class NetworkScanner:
 
                 with open(netkbfile, 'w', newline='') as file:
                     writer = csv.writer(file)
-                    writer.writerow(existing_headers)  # Use existing headers
+                    # Ensure Failed_Pings is included in headers
+                    if "Failed_Pings" not in existing_headers:
+                        # Insert Failed_Pings after Ports column
+                        headers_list = list(existing_headers)
+                        if "Ports" in headers_list:
+                            ports_index = headers_list.index("Ports")
+                            headers_list.insert(ports_index + 1, "Failed_Pings")
+                        else:
+                            headers_list.append("Failed_Pings")
+                        existing_headers = headers_list
+                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"]]
+                    
+                    writer.writerow(existing_headers)  # Write updated headers
                     for mac, data in sorted_netkb_entries:
                         row = [
                             mac,
                             ';'.join(sorted(data['IPs'], key=self.ip_key)),
                             ';'.join(sorted(data['Hostnames'])),
                             data['Alive'],
-                            ';'.join(sorted(data['Ports'], key=int))
+                            ';'.join(sorted(data['Ports'], key=int)),
+                            str(data.get('Failed_Pings', 0))  # Add Failed_Pings column
                         ]
                         row.extend(data.get(action, "") for action in existing_action_columns)
                         writer.writerow(row)

@@ -434,7 +434,11 @@ def sync_vulnerability_count():
 
 
 def sync_all_counts():
-    """Synchronize all counts (targets, ports, vulnerabilities, credentials) across data sources"""
+    """Synchronize all counts (targets, ports, vulnerabilities, credentials) across data sources.
+    
+    This function reads from netkb.csv as the single source of truth and applies the 15-ping
+    failure rule to determine which hosts are considered active.
+    """
     global last_sync_time, network_scan_cache
 
     with sync_lock:
@@ -445,187 +449,164 @@ def sync_all_counts():
             # Sync vulnerability count
             sync_vulnerability_count()
 
-            # Update WiFi-specific network data from scan results
-            aggregated_network_stats = update_wifi_network_data()
+            # ==============================================================================
+            # PRIMARY DATA SOURCE: Read from BOTH netkb.csv AND WiFi network file
+            # ==============================================================================
             
-            # IMPORTANT: Use ARP scan results to supplement but not override robust failure tracking
-            arp_hosts = network_scan_cache.get('arp_hosts', {})
-            if arp_hosts:
-                logger.debug(f"Found {len(arp_hosts)} hosts in ARP cache for supplementation")
-                # Don't override aggregated_network_stats if it exists (it has robust failure tracking)
-                # Instead, use ARP data to supplement the count only if aggregated_network_stats is missing
-                if not aggregated_network_stats:
-                    # Create minimal stats from ARP data only if no other data is available
-                    aggregated_network_stats = {
-                        'host_count': len(arp_hosts),
-                        'total_host_count': len(arp_hosts),
-                        'inactive_host_count': 0,
-                        'port_count': 0,
-                        'hosts': {}
-                    }
-                    logger.debug(f"Created stats from ARP data only (no network stats available): {len(arp_hosts)} hosts")
-                else:
-                    # Keep the robust failure tracking data intact, don't override with ARP count
-                    logger.debug(f"Keeping existing network stats with robust failure tracking instead of overriding with ARP count")
-            else:
-                logger.debug("No ARP hosts available for supplementation")
-
-            # Sync target and port counts from scan results
-            scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
-
-            logger.debug(f"Syncing targets/ports from directory: {scan_results_dir}")
-
-            # Create directory if it doesn't exist
+            aggregated_targets = 0
+            aggregated_ports = 0
+            total_target_count = 0
+            inactive_target_count = 0
+            current_snapshot = {}
+            
+            # STEP 1: Read from netkb.csv (if it has data)
+            netkb_hosts = {}
             try:
-                os.makedirs(scan_results_dir, exist_ok=True)
-                logger.debug(f"Ensured directory exists: {scan_results_dir}")
+                netkb_data = shared_data.read_data()
+                max_failed_pings = shared_data.config.get('network_max_failed_pings', 15)
+                
+                logger.info(f"[NETKB SYNC] Reading from netkb.csv with max_failed_pings={max_failed_pings}")
+                
+                for row in netkb_data:
+                    mac = row.get("MAC Address", "").strip()
+                    ip = row.get("IPs", "").strip()
+                    
+                    # Skip standalone entries
+                    if mac == "STANDALONE" or not ip:
+                        continue
+                    
+                    # Apply 15-ping failure rule:
+                    # Host is active if:
+                    # 1. Alive column is '1', OR
+                    # 2. Failed_Pings < max_failed_pings
+                    alive_status = row.get("Alive", "0")
+                    failed_pings = int(row.get("Failed_Pings", "0"))
+                    
+                    is_active = (alive_status == '1' or failed_pings < max_failed_pings)
+                    
+                    # Store in netkb_hosts dict
+                    netkb_hosts[ip] = {
+                        'alive': is_active,
+                        'alive_status': alive_status,
+                        'failed_pings': failed_pings,
+                        'ports': row.get("Ports", "").strip(),
+                        'mac': mac,
+                        'hostname': row.get("Hostnames", "").strip()
+                    }
+                
+                logger.info(f"[NETKB SYNC] Found {len(netkb_hosts)} hosts in netkb.csv")
+                
             except Exception as e:
-                logger.warning(f"Could not create scan_results directory: {e}")
-
-            unique_hosts = set()
-            csv_host_ports = {}
-            scan_files_found = []
-
-            if os.path.exists(scan_results_dir):
-                try:
-                    for filename in os.listdir(scan_results_dir):
-                        if filename.startswith('result_') and filename.endswith('.csv') and not filename.startswith('.'):
-                            scan_files_found.append(filename)
-                            filepath = os.path.join(scan_results_dir, filename)
-                            try:
-                                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                    reader = csv.reader(f)
-                                    for row in reader:
-                                        if len(row) >= 1 and row[0].strip():
-                                            ip = row[0].strip()
-                                            if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
-                                                unique_hosts.add(ip)
-                                                csv_host_ports.setdefault(ip, set())
-
-                                            if len(row) > 4:
-                                                for port_col in row[4:]:
-                                                    normalized_port = _normalize_port_value(port_col)
-                                                    if normalized_port:
-                                                        csv_host_ports.setdefault(ip, set()).add(normalized_port)
-                            except Exception as e:
-                                logger.debug(f"Could not read scan result file {filepath}: {e}")
-                                continue
-                except Exception as e:
-                    logger.warning(f"Could not process scan_results directory: {e}")
-            else:
-                logger.warning(f"Scan results directory does not exist: {scan_results_dir}")
-
-            logger.debug(f"Scan result files found: {scan_files_found}")
-            logger.debug(f"Unique hosts found: {list(unique_hosts)}")
-            aggregated_ports_from_csv = sum(len(ports) for ports in csv_host_ports.values())
-            logger.debug(f"Total port count from CSV: {aggregated_ports_from_csv}")
+                logger.error(f"[NETKB SYNC] ❌ Error reading from netkb.csv: {e}", exc_info=True)
             
-            # ALSO read ports from netkb file which has the most complete port data
-            # Count ports from LIVE hosts (detected by ARP), not just Alive=1 in netkb
-            netkb_port_count = 0
-            netkb_live_ips = set()
+            # STEP 2: Read from WiFi network file (primary source on this system)
+            wifi_hosts = {}
+            try:
+                wifi_network_data = read_wifi_network_data()
+                logger.info(f"[WIFI SYNC] Reading from WiFi network file")
+                
+                for row in wifi_network_data:
+                    ip = row.get("IPs", "").strip()
+                    
+                    if not ip:
+                        continue
+                    
+                    # WiFi network data uses 'Alive' field
+                    alive = row.get("Alive")
+                    is_active = alive in [True, 'True', '1', 1]
+                    
+                    wifi_hosts[ip] = {
+                        'alive': is_active,
+                        'ports': row.get("Ports", "").strip(),
+                        'mac': row.get("MAC Address", "").strip(),
+                        'hostname': row.get("Hostnames", "").strip(),
+                        'failed_ping_count': int(row.get("FailedPingCount", "0"))
+                    }
+                
+                logger.info(f"[WIFI SYNC] Found {len(wifi_hosts)} hosts in WiFi network file")
+                
+            except Exception as e:
+                logger.warning(f"[WIFI SYNC] Could not read WiFi network data: {e}")
             
-            # Get IPs of live hosts from ARP scan
-            if arp_hosts:
-                netkb_live_ips = set(arp_hosts.keys())
-                logger.info(f"[PORT COUNT] Counting ports for {len(netkb_live_ips)} ARP-detected live hosts: {list(netkb_live_ips)}")
-            else:
-                logger.warning(f"[PORT COUNT] No ARP hosts available for port counting!")
+            # STEP 3: Merge data from both sources (WiFi has priority if conflict)
+            all_ips = set(netkb_hosts.keys()) | set(wifi_hosts.keys())
             
-            logger.info(f"[PORT COUNT] Checking netkb file: {shared_data.netkbfile}, exists={os.path.exists(shared_data.netkbfile)}")
+            max_failed_pings = shared_data.config.get('network_max_failed_pings', 15)
             
-            if os.path.exists(shared_data.netkbfile):
-                try:
-                    with open(shared_data.netkbfile, 'r', encoding='utf-8', errors='ignore') as f:
-                        reader = csv.DictReader(f)
-                        row_count = 0
-                        for row in reader:
-                            row_count += 1
-                            ip = row.get('IPs', '').strip()
-                            ports_str = row.get('Ports', '').strip()
-                            alive_status = row.get('Alive', '').strip()
-                            
-                            # Count ports for hosts that are:
-                            # 1. In the ARP scan (confirmed alive) OR
-                            # 2. Marked as Alive=1 in netkb
-                            is_arp_live = ip in netkb_live_ips
-                            is_netkb_alive = alive_status == '1'
-                            
-                            if (is_arp_live or is_netkb_alive) and ports_str and ports_str != '0':
-                                port_list = [p.strip() for p in ports_str.split(';') if p.strip() and p.strip() != '0']
-                                if port_list:
-                                    netkb_port_count += len(port_list)
-                                    logger.info(f"[PORT COUNT] {ip}: {len(port_list)} ports ({ports_str}) - ARP={is_arp_live}, Alive={is_netkb_alive}")
-                                        
-                        logger.info(f"[PORT COUNT] Processed {row_count} rows from netkb")
-                    logger.info(f"[PORT COUNT] Total port count from netkb (live hosts): {netkb_port_count}")
-                    # Use netkb port count if it's higher (more complete)
-                    if netkb_port_count > aggregated_ports_from_csv:
-                        aggregated_ports_from_csv = netkb_port_count
-                        logger.info(f"[PORT COUNT] Using netkb port count as it's more complete: {netkb_port_count}")
+            for ip in all_ips:
+                netkb_entry = netkb_hosts.get(ip, {})
+                wifi_entry = wifi_hosts.get(ip, {})
+                
+                # Determine if host is active (prefer WiFi data if available)
+                if wifi_entry:
+                    is_active = wifi_entry['alive']
+                    failed_pings = wifi_entry.get('failed_ping_count', 0)
+                    source = "wifi"
+                elif netkb_entry:
+                    is_active = netkb_entry['alive']
+                    failed_pings = netkb_entry.get('failed_pings', 0)
+                    source = "netkb"
+                else:
+                    continue
+                
+                # Count all hosts for total
+                total_target_count += 1
+                
+                # Count active hosts
+                if is_active:
+                    aggregated_targets += 1
+                    
+                    # Count ports (prefer WiFi data, fallback to netkb)
+                    ports_str = wifi_entry.get('ports') or netkb_entry.get('ports', '')
+                    if ports_str and ports_str != '0':
+                        port_list = [p.strip() for p in ports_str.split(';') if p.strip() and p.strip() != '0']
+                        aggregated_ports += len(port_list)
                     else:
-                        logger.info(f"[PORT COUNT] Using CSV port count: {aggregated_ports_from_csv} (netkb had {netkb_port_count})")
-                except Exception as e:
-                    logger.error(f"[PORT COUNT] ERROR reading netkb file for port count: {e}", exc_info=True)
+                        port_list = []
+                    
+                    # Track in snapshot
+                    current_snapshot[ip] = {
+                        'alive': True,
+                        'ports': set(port_list),
+                        'failed_pings': failed_pings,
+                        'source': source
+                    }
+                    
+                    logger.debug(f"[SYNC] {ip}: ACTIVE from {source} (Failed_Pings={failed_pings}/{max_failed_pings})")
+                else:
+                    inactive_target_count += 1
+                    current_snapshot[ip] = {
+                        'alive': False,
+                        'ports': set(),
+                        'failed_pings': failed_pings,
+                        'source': source
+                    }
+                    logger.debug(f"[SYNC] {ip}: INACTIVE from {source} (Failed_Pings={failed_pings}/{max_failed_pings})")
+            
+            logger.info(f"[SYNC] ✅ Merged data from netkb.csv + WiFi network file:")
+            logger.info(f"  - Total unique IPs: {len(all_ips)}")
+            logger.info(f"  - Active: {aggregated_targets}")
+            logger.info(f"  - Inactive: {inactive_target_count}")
+            logger.info(f"  - Ports: {aggregated_ports}")
 
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
-            
-            # Initialize with defaults from CSV scan files
-            aggregated_targets = len(unique_hosts)
-            aggregated_ports = aggregated_ports_from_csv
-            total_target_count = aggregated_targets
-            inactive_target_count = 0
-            current_snapshot = {ip: {'alive': True, 'ports': csv_host_ports.get(ip, set())} for ip in unique_hosts}
 
-            # PRIORITIZE aggregated_network_stats (robust failure tracking) over CSV data
-            if aggregated_network_stats:
-                agg_host_count = aggregated_network_stats.get('host_count')
-                agg_total_host_count = aggregated_network_stats.get('total_host_count')
-                agg_inactive_count = aggregated_network_stats.get('inactive_host_count')
-                agg_port_count = aggregated_network_stats.get('port_count')
-                hosts_snapshot = aggregated_network_stats.get('hosts')
-
-                if hosts_snapshot:
-                    current_snapshot = hosts_snapshot
-
-                # Use robust failure tracking counts if available
-                if agg_host_count is not None:
-                    aggregated_targets = safe_int(agg_host_count)
-                    logger.info(f"[ROBUST TRACKING] Using active host count from WiFi network data: {aggregated_targets}")
-                if agg_total_host_count is not None:
-                    total_target_count = safe_int(agg_total_host_count)
-                    logger.info(f"[ROBUST TRACKING] Using total host count from WiFi network data: {total_target_count}")
-                else:
-                    total_target_count = aggregated_targets
-                if agg_inactive_count is not None:
-                    inactive_target_count = safe_int(agg_inactive_count)
-                    logger.info(f"[ROBUST TRACKING] Using inactive host count from WiFi network data: {inactive_target_count}")
-                else:
-                    inactive_target_count = max(total_target_count - aggregated_targets, 0)
-                if agg_port_count is not None:
-                    # Only use aggregated_network_stats port count if it's HIGHER than what we counted from netkb
-                    agg_ports_value = safe_int(agg_port_count)
-                    if agg_ports_value > aggregated_ports:
-                        logger.info(f"[PORT COUNT] Using aggregated_network_stats port count: {agg_ports_value} (higher than netkb: {aggregated_ports})")
-                        aggregated_ports = agg_ports_value
-                    else:
-                        logger.info(f"[PORT COUNT] Keeping netkb port count: {aggregated_ports} (aggregated_network_stats had: {agg_ports_value})")
-            else:
-                total_target_count = aggregated_targets
-                inactive_target_count = max(total_target_count - aggregated_targets, 0)
-
+            # Update shared data with counts from netkb.csv
             shared_data.targetnbr = aggregated_targets
             shared_data.total_targetnbr = total_target_count
             shared_data.inactive_targetnbr = inactive_target_count
             shared_data.portnbr = aggregated_ports
-            shared_data.networkkbnbr = total_target_count  # Use total target count for network KB count
-            logger.debug(f"Updated targets: {old_targets} -> {aggregated_targets}")
-            logger.debug(f"Updated ports: {old_ports} -> {aggregated_ports}")
-            logger.debug(f"Updated networkkbnbr: -> {total_target_count}")
+            shared_data.networkkbnbr = total_target_count
+            
+            logger.info(f"✅ Updated counts from netkb.csv:")
+            logger.info(f"  - Targets: {old_targets} -> {aggregated_targets}")
+            logger.info(f"  - Ports: {old_ports} -> {aggregated_ports}")
+            logger.info(f"  - Total hosts: {total_target_count}")
+            logger.info(f"  - Inactive hosts: {inactive_target_count}")
 
+            # Track new and lost hosts
             previous_snapshot = getattr(shared_data, 'network_hosts_snapshot', {}) or {}
-
             previous_active_hosts = {ip for ip, meta in previous_snapshot.items() if meta.get('alive', True)}
             current_active_hosts = {ip for ip, meta in current_snapshot.items() if meta.get('alive', True)}
 
@@ -1899,9 +1880,11 @@ def get_stable_network_data():
         recent_arp_data = network_scan_cache.get('arp_hosts', {})
         
         # Read NetKB data for additional enrichment (ports, MACs, etc.)
+        # CRITICAL FIX: Include ALL netkb data as primary source, not just enrichment
         netkb_data = []
         try:
             netkb_data = shared_data.read_data()
+            logger.info(f"Loaded {len(netkb_data)} entries from NetKB for stable API")
         except Exception as e:
             logger.warning(f"Could not read NetKB data for enrichment: {e}")
         
@@ -1970,7 +1953,43 @@ def get_stable_network_data():
             
             enriched_hosts.append(host_data)
         
-        # Add any new ARP discoveries not in network data
+        # CRITICAL FIX: Add ALL alive hosts from NetKB that weren't in network_data
+        for entry in netkb_data:
+            ip = entry.get('IPs', '').strip()
+            alive = entry.get('Alive', '0')
+            
+            # Skip if already processed or not alive
+            if not ip or ip in processed_ips or alive not in ['1', 1]:
+                continue
+                
+            processed_ips.add(ip)
+            
+            host_data = {
+                'ip': ip,
+                'hostname': entry.get('Hostnames', '').strip() or 'Unknown',
+                'mac': entry.get('MAC Address', '').strip() or 'Unknown', 
+                'status': 'up',
+                'ports': entry.get('Ports', '').strip() or 'Unknown',
+                'vulnerabilities': str(entry.get('Vulnerabilities', '0')).strip() or '0',
+                'last_scan': entry.get('LastSeen', '').strip() or 'Unknown',
+                'first_seen': entry.get('First_Seen', '').strip() or 'Unknown',
+                'os': entry.get('OS', '').strip() or 'Unknown',
+                'services': entry.get('Services', '').strip() or 'Unknown',
+                'source': 'netkb'
+            }
+            
+            # Enhance with recent ARP data if available
+            if ip in recent_arp_data:
+                arp_entry = recent_arp_data[ip]
+                if arp_entry.get('mac') and host_data['mac'] in ['Unknown', '00:00:00:00:00:00', '']:
+                    host_data['mac'] = arp_entry['mac']
+                if arp_entry.get('hostname') and host_data['hostname'] in ['Unknown', '']:
+                    host_data['hostname'] = arp_entry['hostname']
+                host_data['source'] = 'netkb+arp'
+            
+            enriched_hosts.append(host_data)
+        
+        # Add any new ARP discoveries not in network data or NetKB
         for ip, arp_entry in recent_arp_data.items():
             if ip not in processed_ips:
                 host_data = {
