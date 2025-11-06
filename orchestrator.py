@@ -193,7 +193,14 @@ class Orchestrator:
 
         # Check if attacks are enabled (skip attack actions if disabled, but allow scanning)
         enable_attacks = getattr(self.shared_data, 'enable_attacks', True)
-        attack_action_names = ['SSHConnector', 'FTPConnector', 'TelnetConnector', 'RDPConnector', 'SMBConnector', 'SQLConnector']
+        attack_action_names = [
+            'SSHBruteforce', 'FTPBruteforce', 'TelnetBruteforce', 
+            'RDPBruteforce', 'SMBBruteforce', 'SQLBruteforce',
+            'SSHConnector', 'FTPConnector', 'TelnetConnector', 
+            'RDPConnector', 'SMBConnector', 'SQLConnector',
+            'StealDataSQL', 'StealFilesFTP', 'StealFilesRDP', 
+            'StealFilesSMB', 'StealFilesSSH', 'StealFilesTelnet'
+        ]
         if not enable_attacks and action.action_name in attack_action_names:
             logger.debug(f"Skipping attack action {action.action_name} for {ip}:{action.port} - attacks are disabled")
             return False
