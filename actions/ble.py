@@ -76,6 +76,12 @@ class BluetoothManager:
                 status['discoverable'] = 'Discoverable: yes' in output
                 status['pairable'] = 'Pairable: yes' in output
                 
+                # Check actual scanning status from bluetoothctl
+                scan_status = self._check_scan_status()
+                if scan_status is not None:
+                    status['scanning'] = scan_status
+                    self.scan_active = scan_status  # Update internal state
+                
                 # Extract controller details
                 for line in output.split('\n'):
                     line = line.strip()
@@ -102,6 +108,24 @@ class BluetoothManager:
             self.logger.error(f"Error checking Bluetooth status: {e}")
         
         return status
+    
+    def _check_scan_status(self) -> Optional[bool]:
+        """
+        Check if scanning is actually active by checking bluetoothctl status
+        Returns: True if scanning, False if not scanning, None if unable to determine
+        """
+        try:
+            result = subprocess.run(['bluetoothctl', 'show'], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                output = result.stdout.lower()
+                if 'discovering: yes' in output:
+                    return True
+                elif 'discovering: no' in output:
+                    return False
+        except Exception:
+            pass
+        return None
     
     def power_on(self) -> Tuple[bool, str]:
         """
@@ -249,25 +273,40 @@ class BluetoothManager:
                                   capture_output=True, text=True, timeout=10)
             
             # bluetoothctl scan off sometimes returns non-zero even when successful
-            success_indicators = ['success', 'Discovery stopped', 'Discovering: no']
+            success_indicators = [
+                'success', 'Discovery stopped', 'Discovering: no', 
+                'discovery stopped', 'stopped discovery'
+            ]
             output_text = (result.stdout + result.stderr).lower()
             
-            # Check for success indicators or minor errors that don't matter
-            if (result.returncode == 0 or 
-                any(indicator.lower() in output_text for indicator in success_indicators) or
-                ('not available' not in output_text and 'failed' not in output_text)):
-                
+            # Check for success indicators or determine if scan actually stopped
+            scan_actually_stopped = False
+            if result.returncode == 0:
+                scan_actually_stopped = True
+            elif any(indicator.lower() in output_text for indicator in success_indicators):
+                scan_actually_stopped = True
+            elif 'not available' not in output_text and 'failed' not in output_text and 'error' not in output_text:
+                # If no clear error indicators, assume success
+                scan_actually_stopped = True
+            
+            if scan_actually_stopped:
                 self.scan_active = False
                 self.logger.info("Bluetooth scan stopped successfully")
                 return True, "Bluetooth scan stopped successfully"
             else:
-                error_msg = result.stderr.strip() or 'Failed to stop Bluetooth scan'
-                self.logger.error(f"Failed to stop scan: {error_msg}")
-                return False, error_msg
+                # Even if command failed, mark scan as inactive for safety
+                self.scan_active = False
+                error_msg = result.stderr.strip() or result.stdout.strip() or 'Failed to stop Bluetooth scan'
+                self.logger.warning(f"Scan stop command may have failed, but marking as stopped: {error_msg}")
+                return False, f"Scan stop completed with warning: {error_msg}"
                 
         except subprocess.TimeoutExpired:
+            # Mark scan as inactive even on timeout
+            self.scan_active = False
             return False, "Scan stop command timed out"
         except Exception as e:
+            # Mark scan as inactive even on error
+            self.scan_active = False
             self.logger.error(f"Error stopping Bluetooth scan: {e}")
             return False, f"Error stopping scan: {str(e)}"
     
@@ -287,7 +326,8 @@ class BluetoothManager:
             
             if result.returncode == 0:
                 for line in result.stdout.strip().split('\n'):
-                    if line.startswith('Device '):
+                    line = line.strip()
+                    if line and line.startswith('Device '):
                         parts = line.split(None, 2)
                         if len(parts) >= 2:
                             address = parts[1]

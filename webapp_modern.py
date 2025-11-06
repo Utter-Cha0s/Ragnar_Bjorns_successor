@@ -4444,7 +4444,7 @@ except Exception as e:
 def get_bluetooth_status():
     """Get current Bluetooth status"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'error': 'Bluetooth manager not available', 'enabled': False}), 503
             
         status = bluetooth_manager.get_status()
@@ -4458,7 +4458,7 @@ def get_bluetooth_status():
 def enable_bluetooth():
     """Enable Bluetooth"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         success, message = bluetooth_manager.power_on()
@@ -4472,7 +4472,7 @@ def enable_bluetooth():
 def disable_bluetooth():
     """Disable Bluetooth"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         success, message = bluetooth_manager.power_off()
@@ -4486,7 +4486,7 @@ def disable_bluetooth():
 def make_bluetooth_discoverable():
     """Make Bluetooth discoverable"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         success, message = bluetooth_manager.set_discoverable(True)
@@ -4500,7 +4500,7 @@ def make_bluetooth_discoverable():
 def hide_bluetooth_device():
     """Hide Bluetooth device (make non-discoverable)"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         success, message = bluetooth_manager.set_discoverable(False)
@@ -4514,7 +4514,7 @@ def hide_bluetooth_device():
 def start_bluetooth_scan():
     """Start Bluetooth device scan"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         data = request.get_json() or {}
@@ -4537,7 +4537,7 @@ def start_bluetooth_scan():
 def stop_bluetooth_scan():
     """Stop Bluetooth device scan"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         success, message = bluetooth_manager.stop_scan()
@@ -4556,7 +4556,7 @@ def stop_bluetooth_scan():
 def get_bluetooth_devices():
     """Get discovered Bluetooth devices"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'devices': [], 'error': 'Bluetooth manager not available'})
             
         devices = bluetooth_manager.get_discovered_devices()
@@ -4574,7 +4574,7 @@ def get_bluetooth_devices():
 def pair_bluetooth_device():
     """Pair with a Bluetooth device"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         data = request.get_json()
@@ -4594,7 +4594,7 @@ def pair_bluetooth_device():
 def unpair_bluetooth_device():
     """Unpair a Bluetooth device"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         data = request.get_json()
@@ -4614,7 +4614,7 @@ def unpair_bluetooth_device():
 def enumerate_bluetooth_services():
     """Enumerate services on a Bluetooth device"""
     try:
-        if not BLUETOOTH_AVAILABLE:
+        if not BLUETOOTH_AVAILABLE or bluetooth_manager is None:
             return jsonify({'success': False, 'error': 'Bluetooth manager not available'}), 503
             
         data = request.get_json()
