@@ -1324,7 +1324,7 @@ class WiFiManager:
             return False
 
     def enable_ap_mode_from_web(self):
-        """Enable AP mode from web interface - starts the cycling behavior"""
+        """Enable AP mode from web interface - uses endless loop behavior"""
         self.logger.info("AP mode requested from web interface")
         if self.wifi_connected:
             # If connected, disconnect first
@@ -1334,8 +1334,14 @@ class WiFiManager:
         if self.ap_mode_active:
             self.stop_ap_mode()
         
-        # Start AP with cycling enabled
-        return self.start_ap_mode_with_timeout()
+        # Start AP mode (endless loop will handle timeout management)
+        if self.endless_loop_active:
+            # Use endless loop AP mode
+            self._endless_loop_start_ap_mode()
+            return True
+        else:
+            # Fallback to regular AP mode if endless loop not active
+            return self.start_ap_mode()
     
     def start_ap_mode(self):
         """Start Access Point mode"""
