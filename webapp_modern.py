@@ -578,6 +578,52 @@ def sync_all_counts():
             inactive_target_count = 0
             current_snapshot = {ip: {'alive': True, 'ports': csv_host_ports.get(ip, set())} for ip in unique_hosts}
 
+            # CRITICAL FIX: Also count ALL alive hosts from netkb.csv
+            try:
+                netkb_data = shared_data.read_data()
+                netkb_alive_hosts = []
+                netkb_total_hosts = []
+                
+                for entry in netkb_data:
+                    ip = entry.get('IPs', '').strip()
+                    alive = entry.get('Alive', '0')
+                    if ip and ip not in ['STANDALONE']:
+                        netkb_total_hosts.append(ip)
+                        if alive in ['1', 1]:
+                            netkb_alive_hosts.append(ip)
+                
+                # Use the higher count between CSV scan results and netkb data
+                netkb_alive_count = len(set(netkb_alive_hosts))  # Remove duplicates
+                netkb_total_count = len(set(netkb_total_hosts))
+                
+                if netkb_alive_count > aggregated_targets:
+                    logger.info(f"[NETKB SYNC] Using netkb alive count: {netkb_alive_count} (higher than CSV: {aggregated_targets})")
+                    aggregated_targets = netkb_alive_count
+                    
+                if netkb_total_count > total_target_count:
+                    total_target_count = netkb_total_count
+                    
+                logger.debug(f"[NETKB SYNC] Found {netkb_alive_count} alive hosts and {netkb_total_count} total hosts in netkb")
+                
+                # Update snapshot with netkb data
+                for entry in netkb_data:
+                    ip = entry.get('IPs', '').strip()
+                    alive = entry.get('Alive', '0')
+                    if ip and ip not in ['STANDALONE']:
+                        ports = set()
+                        if entry.get('Ports'):
+                            for port in str(entry.get('Ports', '')).split(';'):
+                                if port.strip().isdigit():
+                                    ports.add(port.strip())
+                        
+                        current_snapshot[ip] = {
+                            'alive': alive in ['1', 1],
+                            'ports': ports
+                        }
+                        
+            except Exception as e:
+                logger.warning(f"[NETKB SYNC] Could not read netkb data for sync: {e}")
+
             # PRIORITIZE aggregated_network_stats (robust failure tracking) over CSV data
             if aggregated_network_stats:
                 agg_host_count = aggregated_network_stats.get('host_count')
