@@ -526,13 +526,18 @@ class NetworkScanner:
             Scans a specific port on the target IP.
             """
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
+            s.settimeout(5)  # Increased from 2 to 5 seconds for better reliability
             try:
-                con = s.connect((self.target, port))
+                s.connect((self.target, port))
                 self.open_ports[self.target].append(port)
-                con.close()
-            except:
-                pass
+                self.logger.debug(f"Port {port} OPEN on {self.target}")
+            except socket.timeout:
+                self.logger.debug(f"Port {port} timeout on {self.target}")
+            except socket.error as e:
+                # Connection refused or other socket errors mean port is closed
+                self.logger.debug(f"Port {port} closed on {self.target}: {e}")
+            except Exception as e:
+                self.logger.warning(f"Unexpected error scanning port {port} on {self.target}: {e}")
             finally:
                 s.close()  # Ensure the socket is closed
 
@@ -553,12 +558,21 @@ class NetworkScanner:
                     seen_ports.add(port)
                     ordered_ports.append(port)
 
+                self.logger.info(f"Scanning {self.target}: {len(ordered_ports)} ports (range: {self.portstart}-{self.portend}, extra: {len(extra_ports)} ports)")
+                self.logger.debug(f"Port scan list for {self.target}: {sorted(ordered_ports)[:20]}... (showing first 20)")
+
                 with ThreadPoolExecutor(max_workers=self.outer_instance.port_scan_workers) as executor:
                     futures = [executor.submit(self.scan_with_semaphore, port) for port in ordered_ports]
                     for future in futures:
                         future.result()
+                
+                if self.open_ports[self.target]:
+                    self.logger.info(f"✅ Found {len(self.open_ports[self.target])} open ports on {self.target}: {sorted(self.open_ports[self.target])}")
+                else:
+                    self.logger.warning(f"❌ No open ports found on {self.target} (scanned {len(ordered_ports)} ports)")
+                    
             except Exception as e:
-                self.logger.info(f"Maximum threads defined in the semaphore reached: {e}")
+                self.logger.error(f"Error during port scan of {self.target}: {e}")
 
         def scan_with_semaphore(self, port):
             """
