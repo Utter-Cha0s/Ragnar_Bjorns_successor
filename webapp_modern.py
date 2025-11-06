@@ -1899,9 +1899,11 @@ def get_stable_network_data():
         recent_arp_data = network_scan_cache.get('arp_hosts', {})
         
         # Read NetKB data for additional enrichment (ports, MACs, etc.)
+        # CRITICAL FIX: Include ALL netkb data as primary source, not just enrichment
         netkb_data = []
         try:
             netkb_data = shared_data.read_data()
+            logger.info(f"Loaded {len(netkb_data)} entries from NetKB for stable API")
         except Exception as e:
             logger.warning(f"Could not read NetKB data for enrichment: {e}")
         
@@ -1970,7 +1972,43 @@ def get_stable_network_data():
             
             enriched_hosts.append(host_data)
         
-        # Add any new ARP discoveries not in network data
+        # CRITICAL FIX: Add ALL alive hosts from NetKB that weren't in network_data
+        for entry in netkb_data:
+            ip = entry.get('IPs', '').strip()
+            alive = entry.get('Alive', '0')
+            
+            # Skip if already processed or not alive
+            if not ip or ip in processed_ips or alive not in ['1', 1]:
+                continue
+                
+            processed_ips.add(ip)
+            
+            host_data = {
+                'ip': ip,
+                'hostname': entry.get('Hostnames', '').strip() or 'Unknown',
+                'mac': entry.get('MAC Address', '').strip() or 'Unknown', 
+                'status': 'up',
+                'ports': entry.get('Ports', '').strip() or 'Unknown',
+                'vulnerabilities': str(entry.get('Vulnerabilities', '0')).strip() or '0',
+                'last_scan': entry.get('LastSeen', '').strip() or 'Unknown',
+                'first_seen': entry.get('First_Seen', '').strip() or 'Unknown',
+                'os': entry.get('OS', '').strip() or 'Unknown',
+                'services': entry.get('Services', '').strip() or 'Unknown',
+                'source': 'netkb'
+            }
+            
+            # Enhance with recent ARP data if available
+            if ip in recent_arp_data:
+                arp_entry = recent_arp_data[ip]
+                if arp_entry.get('mac') and host_data['mac'] in ['Unknown', '00:00:00:00:00:00', '']:
+                    host_data['mac'] = arp_entry['mac']
+                if arp_entry.get('hostname') and host_data['hostname'] in ['Unknown', '']:
+                    host_data['hostname'] = arp_entry['hostname']
+                host_data['source'] = 'netkb+arp'
+            
+            enriched_hosts.append(host_data)
+        
+        # Add any new ARP discoveries not in network data or NetKB
         for ip, arp_entry in recent_arp_data.items():
             if ip not in processed_ips:
                 host_data = {
