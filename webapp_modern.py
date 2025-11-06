@@ -4586,12 +4586,23 @@ def stop_bluetooth_scan():
         result = subprocess.run(['bluetoothctl', 'scan', 'off'], 
                               capture_output=True, text=True, timeout=10)
         
-        if result.returncode == 0:
+        # bluetoothctl scan off sometimes returns non-zero even when successful
+        # Check if the output contains success indicators or if it's just a minor error
+        success_indicators = ['success', 'Discovery stopped', 'Discovering: no']
+        output_text = (result.stdout + result.stderr).lower()
+        
+        if result.returncode == 0 or any(indicator.lower() in output_text for indicator in success_indicators):
             logger.info("Bluetooth scan stopped")
             # Clear scan state in shared data
             shared_data.bluetooth_scan_active = False
             return jsonify({'success': True, 'message': 'Bluetooth scan stopped'})
         else:
+            # For scan stop, be more lenient - if no critical error, assume success
+            if 'not available' not in output_text and 'failed' not in output_text:
+                logger.info("Bluetooth scan stopped (assumed success)")
+                shared_data.bluetooth_scan_active = False
+                return jsonify({'success': True, 'message': 'Bluetooth scan stopped'})
+            
             error_msg = result.stderr or 'Failed to stop Bluetooth scan'
             logger.error(f"Failed to stop Bluetooth scan: {error_msg}")
             return jsonify({'success': False, 'error': error_msg}), 500
