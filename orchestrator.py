@@ -606,9 +606,14 @@ class Orchestrator:
         # Log initial system status
         resource_monitor.log_system_status()
         last_resource_log_time = time.time()
-        last_vuln_scan_check = time.time()
+        last_vuln_scan_check = time.time()  # Already scanned in Phase 2
         last_network_scan_time = time.time()
         cycle_count = 0
+        
+        # Track discovered IPs to detect new hosts
+        current_data = self.shared_data.read_data()
+        known_ips = set(row.get("IPs", "") for row in current_data if row.get("IPs"))
+        logger.info(f"Initial IP count: {len(known_ips)} IPs discovered")
         
         logger.info("=" * 70)
         logger.info("ENTERING MAIN ORCHESTRATOR LOOP")
@@ -635,13 +640,32 @@ class Orchestrator:
             # ================================================================
             current_time = time.time()
             scan_interval = getattr(self.shared_data, 'scan_interval', scan_interval)
+            new_ips_detected = False
+            
             if current_time - last_network_scan_time >= scan_interval:
                 logger.info(f"→ Cycle Phase 1: ARP + Port Scan (interval: {scan_interval}s)")
                 if self.network_scanner:
                     self.shared_data.ragnarorch_status = "NetworkScanner"
+                    
+                    # Get current IPs before scan
+                    pre_scan_data = self.shared_data.read_data()
+                    pre_scan_ips = set(row.get("IPs", "") for row in pre_scan_data if row.get("IPs"))
+                    
+                    # Run the network scan
                     self.network_scanner.scan()
                     last_network_scan_time = current_time
-                    logger.info("✓ Network scan complete")
+                    
+                    # Check for new IPs after scan
+                    post_scan_data = self.shared_data.read_data()
+                    post_scan_ips = set(row.get("IPs", "") for row in post_scan_data if row.get("IPs"))
+                    new_ips = post_scan_ips - pre_scan_ips
+                    
+                    if new_ips:
+                        new_ips_detected = True
+                        logger.info(f"✓ Network scan complete - {len(new_ips)} NEW IP(s) discovered: {', '.join(sorted(new_ips))}")
+                        known_ips.update(new_ips)
+                    else:
+                        logger.info("✓ Network scan complete - no new IPs")
                 else:
                     logger.warning("Network scanner not available")
             else:
@@ -650,20 +674,37 @@ class Orchestrator:
             
             # ================================================================
             # CYCLE PHASE 2: Periodic Vulnerability Scan
+            # Triggers on:
+            #   - Every hour (3600 seconds)
+            #   - When new IPs are discovered
             # ================================================================
             scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', scan_vuln_running)
-            scan_vuln_interval = getattr(self.shared_data, 'scan_vuln_interval', scan_vuln_interval)
-            if scan_vuln_running and (time.time() - last_vuln_scan_check >= scan_vuln_interval):
-                logger.info(f"→ Cycle Phase 2: Vulnerability Scan (interval: {scan_vuln_interval}s)")
-                self.run_vulnerability_scans()
-                last_vuln_scan_check = time.time()
-                logger.info("✓ Vulnerability scan complete")
-            else:
-                if scan_vuln_running:
-                    remaining = int(scan_vuln_interval - (time.time() - last_vuln_scan_check))
-                    logger.debug(f"⊘ Vulnerability scan skipped (next in {remaining}s)")
+            scan_vuln_interval = 3600  # 1 hour = 3600 seconds
+            vuln_scan_triggered = False
+            
+            if scan_vuln_running:
+                time_since_last_vuln = time.time() - last_vuln_scan_check
+                
+                # Trigger conditions
+                interval_trigger = time_since_last_vuln >= scan_vuln_interval
+                new_ip_trigger = new_ips_detected
+                
+                if interval_trigger or new_ip_trigger:
+                    if interval_trigger:
+                        logger.info(f"→ Cycle Phase 2: Vulnerability Scan (hourly interval trigger)")
+                    if new_ip_trigger:
+                        logger.info(f"→ Cycle Phase 2: Vulnerability Scan (NEW IP trigger - {len(new_ips)} new hosts)")
+                    
+                    self.run_vulnerability_scans()
+                    last_vuln_scan_check = time.time()
+                    vuln_scan_triggered = True
+                    logger.info("✓ Vulnerability scan complete")
                 else:
-                    logger.debug("⊘ Vulnerability scanning disabled")
+                    remaining = int(scan_vuln_interval - time_since_last_vuln)
+                    remaining_minutes = remaining // 60
+                    logger.debug(f"⊘ Vulnerability scan skipped (next in {remaining_minutes} minutes)")
+            else:
+                logger.debug("⊘ Vulnerability scanning disabled")
             
             # ================================================================
             # CYCLE PHASE 3: Attack Phase (only if enabled)
