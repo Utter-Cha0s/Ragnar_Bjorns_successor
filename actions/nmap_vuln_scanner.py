@@ -412,7 +412,10 @@ class NmapVulnScanner:
                         return existing_value
                     return ';'.join(sorted({str(port) for port in merged}, key=int))
 
-                df.loc[mask, 'Ports'] = df.loc[mask, 'Ports'].apply(merge_ports)
+                # Create a copy to avoid SettingWithCopyWarning, then convert dtype properly
+                ports_subset = df.loc[mask, 'Ports'].copy()
+                updated_ports = ports_subset.apply(merge_ports)
+                df.loc[mask, 'Ports'] = updated_ports.astype(str)
 
             df.to_csv(netkb_path, index=False)
 
@@ -449,6 +452,8 @@ class NmapVulnScanner:
         try:
             final_summary_file = os.path.join(self.shared_data.vulnerabilities_dir, "final_vulnerability_summary.csv")
             df = pd.read_csv(self.summary_file)
+            # Convert NaN to empty string and ensure all values are strings
+            df["Vulnerabilities"] = df["Vulnerabilities"].fillna("").astype(str)
             summary_data = df.groupby(["IP", "Hostname", "MAC Address"])["Vulnerabilities"].apply(lambda x: "; ".join(set("; ".join(x).split("; ")))).reset_index()
             summary_data.to_csv(final_summary_file, index=False)
             logger.info(f"Summary saved to {final_summary_file}")
