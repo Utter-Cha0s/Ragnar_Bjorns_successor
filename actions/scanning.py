@@ -76,17 +76,7 @@ class NetworkScanner:
         self.port_scan_workers = max(2, min(6, cpu_count))
         self.host_scan_workers = max(2, min(6, cpu_count))
         self.semaphore = threading.Semaphore(min(4, max(1, cpu_count // 2 or 1)))
-        
-        # Try to initialize nmap, but fall back to socket-based scanning if unavailable
-        try:
-            self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
-            self.nmap_available = True
-            logger.info("Nmap is available for port scanning")
-        except Exception as e:
-            self.nm = None
-            self.nmap_available = False
-            logger.warning(f"Nmap not available, using Python socket-based port scanning: {e}")
-        
+        self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
         self.arp_scan_interface = "wlan0"
 
@@ -545,7 +535,7 @@ class NetworkScanner:
             Scans a specific port on the target IP.
             """
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(7)  # 7 seconds for better reliability
+            s.settimeout(10)  # 10 seconds for better reliability on Pi network
             try:
                 s.connect((self.target, port))
                 self.open_ports[self.target].append(port)
