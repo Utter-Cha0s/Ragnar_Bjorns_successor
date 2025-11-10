@@ -4,6 +4,7 @@
 # It manages the loading and execution of actions, handles retries for failed and successful actions, 
 # and updates the status of the orchestrator.
 #
+#
 # Key functionalities include:
 # - Initializing and loading actions from a configuration file, including network and vulnerability scanners.
 # - Managing the execution of actions on network targets, checking for open ports and handling retries based on success or failure.
@@ -13,6 +14,9 @@
 # - Implementing threading to manage concurrent execution of actions with a semaphore to limit active threads.
 # - Logging events and errors to ensure maintainability and ease of debugging.
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
+
+# VERSION: 11:10:18:45 - FIX: Vuln scans run EVERY 15min with force=True (no retry delays)
+ORCHESTRATOR_VERSION = "11:10:18:45"
 
 import json
 import importlib
@@ -52,14 +56,40 @@ class Orchestrator:
         self.semaphore = threading.Semaphore(2)  # Max 2 concurrent actions for Pi Zero W2
         
         # Thread pool executor for timeout-protected action execution
-        self.executor = ThreadPoolExecutor(
-            max_workers=2,  # Match semaphore limit for Pi Zero W2
-            thread_name_prefix="RagnarAction"
-        )
+        # IMPORTANT: executor is never shutdown during normal operation to prevent
+        # "cannot schedule new futures after shutdown" errors
+        self.executor = None
+        self.executor_lock = threading.Lock()
+        self._ensure_executor()
         
         # Default timeout for action execution (in seconds)
         self.action_timeout = getattr(self.shared_data, 'action_timeout', 300)  # 5 minutes default
         self.vuln_scan_timeout = getattr(self.shared_data, 'vuln_scan_timeout', 600)  # 10 minutes for vuln scans
+    
+    def _ensure_executor(self):
+        """Ensure the thread pool executor is created and available"""
+        with self.executor_lock:
+            # Check if executor is None, shutdown, or broken
+            needs_new_executor = (
+                self.executor is None or 
+                self.executor._shutdown or
+                getattr(self.executor, '_broken', False)
+            )
+            
+            if needs_new_executor:
+                # Clean up old executor if it exists
+                if self.executor is not None:
+                    try:
+                        self.executor.shutdown(wait=False, cancel_futures=True)
+                    except Exception as cleanup_error:
+                        logger.debug(f"Executor cleanup error (safe to ignore): {cleanup_error}")
+                
+                logger.info("Creating new ThreadPoolExecutor")
+                self.executor = ThreadPoolExecutor(
+                    max_workers=2,  # Match semaphore limit for Pi Zero W2
+                    thread_name_prefix="RagnarAction"
+                )
+            return self.executor
     
     def _verify_config_attributes(self):
         """Verify that all required configuration attributes exist on shared_data."""
@@ -169,15 +199,43 @@ class Orchestrator:
         Returns:
             str: 'success', 'failed', or 'timeout'
         """
+        future = None
         try:
-            future = self.executor.submit(action_callable)
+            # Ensure executor is available before using it
+            executor = self._ensure_executor()
+            future = executor.submit(action_callable)
             result = future.result(timeout=timeout)
             return result
         except FutureTimeoutError:
             logger.error(f"Action {action_name} timed out after {timeout} seconds")
             # Cancel the future to prevent resource leaks
-            future.cancel()
+            if future:
+                future.cancel()
             return 'timeout'
+        except RuntimeError as e:
+            if "cannot schedule new futures" in str(e):
+                logger.error(f"Executor shutdown detected for {action_name}, recreating executor...")
+                # Force recreate executor
+                with self.executor_lock:
+                    if self.executor:
+                        try:
+                            self.executor.shutdown(wait=False, cancel_futures=True)
+                        except:
+                            pass
+                        self.executor = None
+                    self._ensure_executor()
+                # Retry the action once with new executor
+                try:
+                    executor = self._ensure_executor()
+                    future = executor.submit(action_callable)
+                    result = future.result(timeout=timeout)
+                    return result
+                except Exception as retry_error:
+                    logger.error(f"Retry failed for {action_name}: {retry_error}")
+                    return 'failed'
+            else:
+                logger.error(f"Action {action_name} raised RuntimeError: {e}")
+                return 'failed'
         except Exception as e:
             logger.error(f"Action {action_name} raised exception: {e}")
             return 'failed'
@@ -454,11 +512,17 @@ class Orchestrator:
             self.shared_data.write_data(current_data)
             return False
 
-    def run_vulnerability_scans(self):
-        """Run vulnerability scans on all alive hosts with timeout protection"""
+    def run_vulnerability_scans(self, force=False):
+        """
+        Run vulnerability scans on all alive hosts with timeout protection
+        
+        Args:
+            force: If True, bypass retry delay checks (used for scheduled/startup scans)
+        """
         scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', True)
         
         if not scan_vuln_running or not self.nmap_vuln_scanner:
+            logger.warning("Vulnerability scanning disabled or scanner not available")
             return
             
         try:
@@ -466,11 +530,12 @@ class Orchestrator:
             alive_hosts = [row for row in current_data if row.get("Alive") == '1']
             
             if not alive_hosts:
-                logger.debug("No alive hosts found for vulnerability scanning")
+                logger.warning("No alive hosts found for vulnerability scanning")
                 return
                 
-            logger.info(f"Starting vulnerability scans on {len(alive_hosts)} alive hosts...")
+            logger.info(f"🔍 Starting vulnerability scans on {len(alive_hosts)} alive hosts (force={force})...")
             scans_performed = 0
+            scans_skipped = 0
             
             for row in alive_hosts:
                 ip = row.get("IPs", "")
@@ -478,34 +543,52 @@ class Orchestrator:
                     continue
                 
                 action_key = "NmapVulnScanner"
+                hostname = row.get("Hostnames", "Unknown")
                 
                 # Initialize action_key if not present
                 if action_key not in row:
                     row[action_key] = ""
                 
-                # Check success retry logic using helper
-                should_retry, reason = self._should_retry(action_key, row, 'success')
-                if not should_retry:
-                    continue
-                
-                # Check failed retry logic using helper
-                should_retry, reason = self._should_retry(action_key, row, 'failed')
-                if not should_retry:
-                    continue
+                # CRITICAL: When force=True, SKIP ALL retry logic and scan everything
+                if force:
+                    logger.info(f"🎯 Force scan enabled - scanning {ip} ({hostname})")
+                else:
+                    # Only check retry logic if this is NOT a forced/scheduled scan
+                    # Check success retry logic using helper
+                    should_retry, reason = self._should_retry(action_key, row, 'success')
+                    if not should_retry:
+                        logger.debug(f"Skipping {ip} ({hostname}): {reason}")
+                        scans_skipped += 1
+                        continue
+                    
+                    # Check failed retry logic using helper
+                    should_retry, reason = self._should_retry(action_key, row, 'failed')
+                    if not should_retry:
+                        logger.debug(f"Skipping {ip} ({hostname}): {reason}")
+                        scans_skipped += 1
+                        continue
                 
                 # Check system resources
                 if not resource_monitor.can_start_operation(
                     operation_name=f"vuln_scan_{ip}",
                     min_memory_mb=30
                 ):
-                    logger.warning(f"Insufficient resources to scan {ip} - skipping")
+                    logger.warning(f"Insufficient resources to scan {ip} ({hostname}) - skipping")
+                    scans_skipped += 1
                     continue
                 
                 try:
-                    logger.info(f"Vulnerability scanning {ip}...")
+                    logger.info(f"🔍 Vulnerability scanning {ip} ({hostname})...")
                     
                     # Execute vulnerability scan with timeout protection
-                    scan_callable = lambda: self.nmap_vuln_scanner.execute(ip, row, action_key)
+                    # Note: nmap_vuln_scanner is guaranteed to be not None here due to function entry check
+                    if self.nmap_vuln_scanner is None:
+                        logger.error("Vulnerability scanner became unavailable")
+                        continue
+                    
+                    # Type narrowing: Store reference to avoid repeated None checks
+                    vuln_scanner = self.nmap_vuln_scanner
+                    scan_callable = lambda: vuln_scanner.execute(ip, row, action_key)
                     result = self._execute_with_timeout(
                         scan_callable,
                         timeout=self.vuln_scan_timeout,
@@ -515,29 +598,29 @@ class Orchestrator:
                     # Update status using helper (timeout is treated as failed)
                     if result == 'timeout':
                         result_status = 'failed'
-                        logger.error(f"Vulnerability scan for {ip} timed out")
+                        logger.error(f"⏱️  Vulnerability scan for {ip} ({hostname}) TIMED OUT after {self.vuln_scan_timeout}s")
                     else:
                         result_status = 'success' if result == 'success' else 'failed'
                     
                     self._update_action_status(row, action_key, result_status)
                     
                     if result == 'success':
-                        logger.info(f"Vulnerability scan successful for {ip}")
+                        logger.info(f"✅ Vulnerability scan successful for {ip} ({hostname})")
                     else:
-                        logger.warning(f"Vulnerability scan failed for {ip}")
+                        logger.warning(f"❌ Vulnerability scan failed for {ip} ({hostname})")
                     
                     self.shared_data.write_data(current_data)
                     scans_performed += 1
                 except Exception as e:
-                    logger.error(f"Error scanning {ip}: {e}")
+                    logger.error(f"Error scanning {ip} ({hostname}): {e}")
                     self._update_action_status(row, action_key, 'failed')
                     self.shared_data.write_data(current_data)
             
             self.last_vuln_scan_time = datetime.now()
-            if scans_performed > 0:
-                logger.info(f"Completed {scans_performed} vulnerability scans")
+            if scans_performed > 0 or scans_skipped > 0:
+                logger.info(f"📊 Vulnerability scan complete: {scans_performed} scanned, {scans_skipped} skipped")
             else:
-                logger.debug("No vulnerability scans needed at this time")
+                logger.warning("⚠️  No vulnerability scans performed or skipped")
                 
         except Exception as e:
             logger.error(f"Error during vulnerability scanning cycle: {e}")
@@ -586,7 +669,7 @@ class Orchestrator:
         
         if scan_vuln_running and self.nmap_vuln_scanner:
             logger.info("Running initial vulnerability scan on all discovered hosts...")
-            self.run_vulnerability_scans()
+            self.run_vulnerability_scans(force=True)  # Force scan at startup
             logger.info("✓ Phase 2 complete: Vulnerability scan finished")
         else:
             logger.info("⊘ Phase 2 skipped: Vulnerability scanning disabled")
@@ -594,6 +677,8 @@ class Orchestrator:
         # ====================================================================
         # PHASE 3: Attack Phase (if enabled)
         # ====================================================================
+        logger.info("=" * 70)
+        logger.info(f"🔥 ORCHESTRATOR VERSION: {ORCHESTRATOR_VERSION} 🔥")
         logger.info("=" * 70)
         logger.info(f"ORCHESTRATOR STARTUP - PHASE 3: Attack Phase (enabled={enable_attacks})")
         logger.info("=" * 70)
@@ -606,9 +691,14 @@ class Orchestrator:
         # Log initial system status
         resource_monitor.log_system_status()
         last_resource_log_time = time.time()
-        last_vuln_scan_check = time.time()
+        last_vuln_scan_check = time.time()  # Already scanned in Phase 2
         last_network_scan_time = time.time()
         cycle_count = 0
+        
+        # Track discovered IPs to detect new hosts
+        current_data = self.shared_data.read_data()
+        known_ips = set(row.get("IPs", "") for row in current_data if row.get("IPs"))
+        logger.info(f"Initial IP count: {len(known_ips)} IPs discovered")
         
         logger.info("=" * 70)
         logger.info("ENTERING MAIN ORCHESTRATOR LOOP")
@@ -635,13 +725,32 @@ class Orchestrator:
             # ================================================================
             current_time = time.time()
             scan_interval = getattr(self.shared_data, 'scan_interval', scan_interval)
+            new_ips_detected = False
+            
             if current_time - last_network_scan_time >= scan_interval:
                 logger.info(f"→ Cycle Phase 1: ARP + Port Scan (interval: {scan_interval}s)")
                 if self.network_scanner:
                     self.shared_data.ragnarorch_status = "NetworkScanner"
+                    
+                    # Get current IPs before scan
+                    pre_scan_data = self.shared_data.read_data()
+                    pre_scan_ips = set(row.get("IPs", "") for row in pre_scan_data if row.get("IPs"))
+                    
+                    # Run the network scan
                     self.network_scanner.scan()
                     last_network_scan_time = current_time
-                    logger.info("✓ Network scan complete")
+                    
+                    # Check for new IPs after scan
+                    post_scan_data = self.shared_data.read_data()
+                    post_scan_ips = set(row.get("IPs", "") for row in post_scan_data if row.get("IPs"))
+                    new_ips = post_scan_ips - pre_scan_ips
+                    
+                    if new_ips:
+                        new_ips_detected = True
+                        logger.info(f"✓ Network scan complete - {len(new_ips)} NEW IP(s) discovered: {', '.join(sorted(new_ips))}")
+                        known_ips.update(new_ips)
+                    else:
+                        logger.info("✓ Network scan complete - no new IPs")
                 else:
                     logger.warning("Network scanner not available")
             else:
@@ -650,20 +759,37 @@ class Orchestrator:
             
             # ================================================================
             # CYCLE PHASE 2: Periodic Vulnerability Scan
+            # Triggers on:
+            #   - Every 15 minutes (900 seconds)
+            #   - When new IPs are discovered
             # ================================================================
             scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', scan_vuln_running)
-            scan_vuln_interval = getattr(self.shared_data, 'scan_vuln_interval', scan_vuln_interval)
-            if scan_vuln_running and (time.time() - last_vuln_scan_check >= scan_vuln_interval):
-                logger.info(f"→ Cycle Phase 2: Vulnerability Scan (interval: {scan_vuln_interval}s)")
-                self.run_vulnerability_scans()
-                last_vuln_scan_check = time.time()
-                logger.info("✓ Vulnerability scan complete")
-            else:
-                if scan_vuln_running:
-                    remaining = int(scan_vuln_interval - (time.time() - last_vuln_scan_check))
-                    logger.debug(f"⊘ Vulnerability scan skipped (next in {remaining}s)")
+            scan_vuln_interval = 900  # 15 minutes = 900 seconds (CHANGED FROM 3600)
+            vuln_scan_triggered = False
+            
+            if scan_vuln_running:
+                time_since_last_vuln = time.time() - last_vuln_scan_check
+                
+                # Trigger conditions
+                interval_trigger = time_since_last_vuln >= scan_vuln_interval
+                new_ip_trigger = new_ips_detected
+                
+                if interval_trigger or new_ip_trigger:
+                    if interval_trigger:
+                        logger.info(f"→ Cycle Phase 2: Vulnerability Scan (15-minute interval trigger)")
+                    if new_ip_trigger:
+                        logger.info(f"→ Cycle Phase 2: Vulnerability Scan (NEW IP trigger - {len(new_ips)} new hosts)")
+                    
+                    self.run_vulnerability_scans(force=True)  # Force scan on schedule/new IPs
+                    last_vuln_scan_check = time.time()
+                    vuln_scan_triggered = True
+                    logger.info("✓ Vulnerability scan complete")
                 else:
-                    logger.debug("⊘ Vulnerability scanning disabled")
+                    remaining = int(scan_vuln_interval - time_since_last_vuln)
+                    remaining_minutes = remaining // 60
+                    logger.debug(f"⊘ Vulnerability scan skipped (next in {remaining_minutes} minutes)")
+            else:
+                logger.debug("⊘ Vulnerability scanning disabled")
             
             # ================================================================
             # CYCLE PHASE 3: Attack Phase (only if enabled)
@@ -753,8 +879,12 @@ class Orchestrator:
         logger.info("Shutting down orchestrator...")
         try:
             # Shutdown the executor and wait for running tasks to complete (max 30 seconds)
-            self.executor.shutdown(wait=True, cancel_futures=False)
-            logger.info("Thread pool executor shutdown complete")
+            with self.executor_lock:
+                if self.executor is not None and not self.executor._shutdown:
+                    self.executor.shutdown(wait=True, cancel_futures=False)
+                    logger.info("Thread pool executor shutdown complete")
+                else:
+                    logger.info("Thread pool executor already shutdown or not created")
         except Exception as e:
             logger.error(f"Error during executor shutdown: {e}")
 

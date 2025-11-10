@@ -3,6 +3,13 @@
 # It scans for vulnerabilities on various ports and saves the results and progress.
 
 import os
+import sys
+
+# CRITICAL: Add parent directory to path FIRST to ensure local imports work
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)  # Insert at beginning to prioritize local modules
+
 import re
 import pandas as pd
 import subprocess
@@ -12,10 +19,10 @@ from typing import Dict, List, Optional, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn
+
+# Import local modules AFTER path is set
 from shared import SharedData
 from logger import Logger
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nmap_logger import nmap_logger
 
 logger = Logger(name="nmap_vuln_scanner.py", level=logging.INFO)
@@ -76,25 +83,38 @@ class NmapVulnScanner:
             self.shared_data.bjornstatustext2 = ip
 
             ports_to_scan = self.prepare_port_list(ports)
-            if not ports_to_scan:
-                logger.warning(f"No valid ports supplied for {ip}. Falling back to default vulnerability ports.")
-                ports_to_scan = self.get_default_vulnerability_ports()
-
-            logger.info(
-                f"Scanning {ip} on ports {','.join(ports_to_scan)} for vulnerabilities with aggressivity {self.shared_data.nmap_scan_aggressivity}"
-            )
             
-            # Prepare nmap command
-            nmap_command = [
-                "nmap",
-                self.shared_data.nmap_scan_aggressivity,
-                "-sV",
-                "--script",
-                "vulners.nse",
-                "-p",
-                ",".join(ports_to_scan),
-                ip,
-            ]
+            # Determine scan strategy based on detected ports
+            if not ports_to_scan:
+                # No ports detected - scan top 50 ports for vulnerabilities
+                logger.info(f"No ports detected for {ip}. Scanning top 50 ports for vulnerabilities.")
+                nmap_command = [
+                    "nmap",
+                    "-Pn",
+                    "-sT",  # TCP connect scan (works on Wi-Fi)
+                    "-sV",  # Service version detection
+                    "--script",
+                    "vulners.nse",
+                    "--top-ports",
+                    "50",
+                    ip,
+                ]
+            else:
+                # Ports detected - scan those specific ports
+                logger.info(
+                    f"Scanning {ip} on {len(ports_to_scan)} detected ports for vulnerabilities: {','.join(ports_to_scan[:10])}{'...' if len(ports_to_scan) > 10 else ''}"
+                )
+                nmap_command = [
+                    "nmap",
+                    "-Pn",  # Treat host as up (skip ping)
+                    "-sT",  # TCP connect scan (works on Wi-Fi)
+                    "-sV",  # Service version detection
+                    "--script",
+                    "vulners.nse",
+                    "-p",
+                    ",".join(ports_to_scan),
+                    ip,
+                ]
             
             # Execute nmap command with logging
             result = nmap_logger.run_nmap_command(
@@ -120,7 +140,13 @@ class NmapVulnScanner:
             if not port_vulnerabilities or all(len(v) == 0 for v in port_vulnerabilities.values()):
                 logger.warning(f"No vulnerabilities detected in scan output for {ip}")
             
-            self.update_summary_file(ip, hostname, mac, ",".join(ports_to_scan), vulnerability_summary)
+            # Determine port string for summary
+            if ports_to_scan:
+                scanned_ports_str = ",".join(ports_to_scan)
+            else:
+                scanned_ports_str = "top-50"
+            
+            self.update_summary_file(ip, hostname, mac, scanned_ports_str, vulnerability_summary)
             self.update_netkb_vulnerabilities(mac, ip, port_vulnerabilities, port_services)
 
             # Feed vulnerabilities into network intelligence system
@@ -391,7 +417,10 @@ class NmapVulnScanner:
                         return existing_value
                     return ';'.join(sorted({str(port) for port in merged}, key=int))
 
-                df.loc[mask, 'Ports'] = df.loc[mask, 'Ports'].apply(merge_ports)
+                # Create a copy to avoid SettingWithCopyWarning, then convert dtype properly
+                ports_subset = df.loc[mask, 'Ports'].copy()
+                updated_ports = ports_subset.apply(merge_ports)
+                df.loc[mask, 'Ports'] = updated_ports.astype(str)
 
             df.to_csv(netkb_path, index=False)
 
@@ -428,6 +457,8 @@ class NmapVulnScanner:
         try:
             final_summary_file = os.path.join(self.shared_data.vulnerabilities_dir, "final_vulnerability_summary.csv")
             df = pd.read_csv(self.summary_file)
+            # Convert NaN to empty string and ensure all values are strings
+            df["Vulnerabilities"] = df["Vulnerabilities"].fillna("").astype(str)
             summary_data = df.groupby(["IP", "Hostname", "MAC Address"])["Vulnerabilities"].apply(lambda x: "; ".join(set("; ".join(x).split("; ")))).reset_index()
             summary_data.to_csv(final_summary_file, index=False)
             logger.info(f"Summary saved to {final_summary_file}")
