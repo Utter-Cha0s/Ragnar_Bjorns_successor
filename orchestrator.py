@@ -15,8 +15,8 @@
 # - Logging events and errors to ensure maintainability and ease of debugging.
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
 
-# VERSION: 11:10:18:30 - Fix vulnerability scanner "cannot schedule new futures" bug (auto-recreate executor on error)
-ORCHESTRATOR_VERSION = "11:10:18:25"
+# VERSION: 11:10:18:45 - FIX: Vuln scans run EVERY 15min with force=True (no retry delays)
+ORCHESTRATOR_VERSION = "11:10:18:45"
 
 import json
 import importlib
@@ -522,6 +522,7 @@ class Orchestrator:
         scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', True)
         
         if not scan_vuln_running or not self.nmap_vuln_scanner:
+            logger.warning("Vulnerability scanning disabled or scanner not available")
             return
             
         try:
@@ -529,11 +530,12 @@ class Orchestrator:
             alive_hosts = [row for row in current_data if row.get("Alive") == '1']
             
             if not alive_hosts:
-                logger.debug("No alive hosts found for vulnerability scanning")
+                logger.warning("No alive hosts found for vulnerability scanning")
                 return
                 
-            logger.info(f"Starting vulnerability scans on {len(alive_hosts)} alive hosts...")
+            logger.info(f"🔍 Starting vulnerability scans on {len(alive_hosts)} alive hosts (force={force})...")
             scans_performed = 0
+            scans_skipped = 0
             
             for row in alive_hosts:
                 ip = row.get("IPs", "")
@@ -541,37 +543,42 @@ class Orchestrator:
                     continue
                 
                 action_key = "NmapVulnScanner"
+                hostname = row.get("Hostnames", "Unknown")
                 
                 # Initialize action_key if not present
                 if action_key not in row:
                     row[action_key] = ""
                 
-                # Only check retry logic if this is NOT a forced/scheduled scan
-                if not force:
+                # CRITICAL: When force=True, SKIP ALL retry logic and scan everything
+                if force:
+                    logger.info(f"🎯 Force scan enabled - scanning {ip} ({hostname})")
+                else:
+                    # Only check retry logic if this is NOT a forced/scheduled scan
                     # Check success retry logic using helper
                     should_retry, reason = self._should_retry(action_key, row, 'success')
                     if not should_retry:
-                        logger.debug(f"Skipping {ip}: {reason}")
+                        logger.debug(f"Skipping {ip} ({hostname}): {reason}")
+                        scans_skipped += 1
                         continue
                     
                     # Check failed retry logic using helper
                     should_retry, reason = self._should_retry(action_key, row, 'failed')
                     if not should_retry:
-                        logger.debug(f"Skipping {ip}: {reason}")
+                        logger.debug(f"Skipping {ip} ({hostname}): {reason}")
+                        scans_skipped += 1
                         continue
-                else:
-                    logger.debug(f"Force scan: bypassing retry delays for {ip}")
                 
                 # Check system resources
                 if not resource_monitor.can_start_operation(
                     operation_name=f"vuln_scan_{ip}",
                     min_memory_mb=30
                 ):
-                    logger.warning(f"Insufficient resources to scan {ip} - skipping")
+                    logger.warning(f"Insufficient resources to scan {ip} ({hostname}) - skipping")
+                    scans_skipped += 1
                     continue
                 
                 try:
-                    logger.info(f"Vulnerability scanning {ip}...")
+                    logger.info(f"🔍 Vulnerability scanning {ip} ({hostname})...")
                     
                     # Execute vulnerability scan with timeout protection
                     # Note: nmap_vuln_scanner is guaranteed to be not None here due to function entry check
@@ -591,29 +598,29 @@ class Orchestrator:
                     # Update status using helper (timeout is treated as failed)
                     if result == 'timeout':
                         result_status = 'failed'
-                        logger.error(f"Vulnerability scan for {ip} timed out")
+                        logger.error(f"⏱️  Vulnerability scan for {ip} ({hostname}) TIMED OUT after {self.vuln_scan_timeout}s")
                     else:
                         result_status = 'success' if result == 'success' else 'failed'
                     
                     self._update_action_status(row, action_key, result_status)
                     
                     if result == 'success':
-                        logger.info(f"Vulnerability scan successful for {ip}")
+                        logger.info(f"✅ Vulnerability scan successful for {ip} ({hostname})")
                     else:
-                        logger.warning(f"Vulnerability scan failed for {ip}")
+                        logger.warning(f"❌ Vulnerability scan failed for {ip} ({hostname})")
                     
                     self.shared_data.write_data(current_data)
                     scans_performed += 1
                 except Exception as e:
-                    logger.error(f"Error scanning {ip}: {e}")
+                    logger.error(f"Error scanning {ip} ({hostname}): {e}")
                     self._update_action_status(row, action_key, 'failed')
                     self.shared_data.write_data(current_data)
             
             self.last_vuln_scan_time = datetime.now()
-            if scans_performed > 0:
-                logger.info(f"Completed {scans_performed} vulnerability scans")
+            if scans_performed > 0 or scans_skipped > 0:
+                logger.info(f"📊 Vulnerability scan complete: {scans_performed} scanned, {scans_skipped} skipped")
             else:
-                logger.debug("No vulnerability scans needed at this time")
+                logger.warning("⚠️  No vulnerability scans performed or skipped")
                 
         except Exception as e:
             logger.error(f"Error during vulnerability scanning cycle: {e}")
@@ -753,11 +760,11 @@ class Orchestrator:
             # ================================================================
             # CYCLE PHASE 2: Periodic Vulnerability Scan
             # Triggers on:
-            #   - Every hour (3600 seconds)
+            #   - Every 15 minutes (900 seconds)
             #   - When new IPs are discovered
             # ================================================================
             scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', scan_vuln_running)
-            scan_vuln_interval = 3600  # 1 hour = 3600 seconds
+            scan_vuln_interval = 900  # 15 minutes = 900 seconds (CHANGED FROM 3600)
             vuln_scan_triggered = False
             
             if scan_vuln_running:
@@ -769,7 +776,7 @@ class Orchestrator:
                 
                 if interval_trigger or new_ip_trigger:
                     if interval_trigger:
-                        logger.info(f"→ Cycle Phase 2: Vulnerability Scan (hourly interval trigger)")
+                        logger.info(f"→ Cycle Phase 2: Vulnerability Scan (15-minute interval trigger)")
                     if new_ip_trigger:
                         logger.info(f"→ Cycle Phase 2: Vulnerability Scan (NEW IP trigger - {len(new_ips)} new hosts)")
                     
