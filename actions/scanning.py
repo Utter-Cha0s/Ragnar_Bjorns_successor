@@ -171,6 +171,90 @@ class NetworkScanner:
         self.logger.info(f"📋 arp-scan complete: {len(all_hosts)} hosts with MAC addresses discovered")
         return all_hosts
 
+    def run_nmap_network_scan(self, network_cidr, portstart, portend, extra_ports):
+        """
+        Use nmap to scan entire network for host discovery AND port scanning in one efficient sweep.
+        This is much faster and more reliable than ping sweeps.
+        Returns: dict of {ip: {'hostname': str, 'open_ports': [int]}}
+        """
+        self.logger.info(f"🚀 Starting nmap network-wide scan: {network_cidr}")
+        
+        # Build port list
+        ports_to_scan = list(range(portstart, portend))
+        extra_ports = extra_ports or []
+        ports_to_scan.extend(extra_ports)
+        
+        # Remove duplicates
+        seen_ports = set()
+        ordered_ports = []
+        for port in ports_to_scan:
+            if port not in seen_ports:
+                seen_ports.add(port)
+                ordered_ports.append(port)
+        
+        port_list = ','.join(map(str, ordered_ports))
+        
+        # Nmap arguments for network-wide scan:
+        # -Pn: Skip host discovery (treat all as online)
+        # -sT: TCP connect scan
+        # --open: Only show open ports
+        # -v: Verbose output
+        nmap_args = f"-Pn -sT -p{port_list} --open --host-timeout 30s -v"
+        
+        nmap_command = f"nmap {nmap_args} {network_cidr}"
+        self.logger.info(f"🔍 Executing: {nmap_command}")
+        self.logger.info(f"   Scanning {len(ordered_ports)} ports across entire {network_cidr} network")
+        
+        nmap_results = {}
+        
+        try:
+            scan_start = time.time()
+            self.nm.scan(hosts=network_cidr, arguments=nmap_args)
+            scan_duration = time.time() - scan_start
+            
+            all_hosts = self.nm.all_hosts()
+            self.logger.info(f"✅ Network scan complete in {scan_duration:.2f}s - found {len(all_hosts)} hosts with open ports")
+            
+            for host in all_hosts:
+                try:
+                    hostname = self.nm[host].hostname() or ''
+                    open_ports = []
+                    
+                    # Extract open TCP ports
+                    if 'tcp' in self.nm[host]:
+                        tcp_ports = self.nm[host]['tcp']
+                        for port in tcp_ports:
+                            if tcp_ports[port]['state'] == 'open':
+                                open_ports.append(port)
+                                self.logger.debug(f"   ✅ {host}: port {port}/tcp open ({tcp_ports[port].get('name', 'unknown')})")
+                    
+                    # Extract open UDP ports if scanned
+                    if 'udp' in self.nm[host]:
+                        udp_ports = self.nm[host]['udp']
+                        for port in udp_ports:
+                            if udp_ports[port]['state'] == 'open':
+                                open_ports.append(port)
+                                self.logger.debug(f"   ✅ {host}: port {port}/udp open")
+                    
+                    if open_ports:
+                        nmap_results[host] = {
+                            'hostname': hostname,
+                            'open_ports': sorted(open_ports)
+                        }
+                        self.logger.info(f"📍 {host} ({hostname or 'no hostname'}): {len(open_ports)} open ports - {sorted(open_ports)}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Error processing nmap results for {host}: {e}")
+                    continue
+            
+            self.logger.info(f"🎉 NMAP NETWORK SCAN COMPLETE: {len(nmap_results)} hosts with open ports discovered")
+            
+        except Exception as e:
+            self.logger.error(f"💥 Nmap network scan failed: {type(e).__name__}: {e}")
+            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
+        
+        return nmap_results
+
     def _ping_sweep_missing_hosts(self, arp_hosts):
         """
         Ping sweep to find hosts that don't respond to arp-scan but are alive.
