@@ -15,8 +15,8 @@
 # - Logging events and errors to ensure maintainability and ease of debugging.
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
 
-# VERSION: 11:10:17:40 - Hourly vuln scans + new IP detection
-ORCHESTRATOR_VERSION = "11:10:17:40"
+# VERSION: 11:10:18:07 - Force vuln scans at startup/schedule (bypass retry delays)
+ORCHESTRATOR_VERSION = "11:10:18:07"
 
 import json
 import importlib
@@ -458,8 +458,13 @@ class Orchestrator:
             self.shared_data.write_data(current_data)
             return False
 
-    def run_vulnerability_scans(self):
-        """Run vulnerability scans on all alive hosts with timeout protection"""
+    def run_vulnerability_scans(self, force=False):
+        """
+        Run vulnerability scans on all alive hosts with timeout protection
+        
+        Args:
+            force: If True, bypass retry delay checks (used for scheduled/startup scans)
+        """
         scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', True)
         
         if not scan_vuln_running or not self.nmap_vuln_scanner:
@@ -487,15 +492,21 @@ class Orchestrator:
                 if action_key not in row:
                     row[action_key] = ""
                 
-                # Check success retry logic using helper
-                should_retry, reason = self._should_retry(action_key, row, 'success')
-                if not should_retry:
-                    continue
-                
-                # Check failed retry logic using helper
-                should_retry, reason = self._should_retry(action_key, row, 'failed')
-                if not should_retry:
-                    continue
+                # Only check retry logic if this is NOT a forced/scheduled scan
+                if not force:
+                    # Check success retry logic using helper
+                    should_retry, reason = self._should_retry(action_key, row, 'success')
+                    if not should_retry:
+                        logger.debug(f"Skipping {ip}: {reason}")
+                        continue
+                    
+                    # Check failed retry logic using helper
+                    should_retry, reason = self._should_retry(action_key, row, 'failed')
+                    if not should_retry:
+                        logger.debug(f"Skipping {ip}: {reason}")
+                        continue
+                else:
+                    logger.debug(f"Force scan: bypassing retry delays for {ip}")
                 
                 # Check system resources
                 if not resource_monitor.can_start_operation(
@@ -597,7 +608,7 @@ class Orchestrator:
         
         if scan_vuln_running and self.nmap_vuln_scanner:
             logger.info("Running initial vulnerability scan on all discovered hosts...")
-            self.run_vulnerability_scans()
+            self.run_vulnerability_scans(force=True)  # Force scan at startup
             logger.info("✓ Phase 2 complete: Vulnerability scan finished")
         else:
             logger.info("⊘ Phase 2 skipped: Vulnerability scanning disabled")
@@ -708,7 +719,7 @@ class Orchestrator:
                     if new_ip_trigger:
                         logger.info(f"→ Cycle Phase 2: Vulnerability Scan (NEW IP trigger - {len(new_ips)} new hosts)")
                     
-                    self.run_vulnerability_scans()
+                    self.run_vulnerability_scans(force=True)  # Force scan on schedule/new IPs
                     last_vuln_scan_check = time.time()
                     vuln_scan_triggered = True
                     logger.info("✓ Vulnerability scan complete")
