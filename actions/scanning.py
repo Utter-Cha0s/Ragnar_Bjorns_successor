@@ -179,15 +179,18 @@ class NetworkScanner:
         """
         self.logger.info(f"🚀 Starting nmap network-wide scan: {network_cidr}")
         
-        # Build port list
-        ports_to_scan = list(range(portstart, portend))
-        extra_ports = extra_ports or []
-        ports_to_scan.extend(extra_ports)
+        # Most common ports - top 50 commonly used ports
+        common_ports = [
+            21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 
+            143, 443, 445, 993, 995, 1723, 3306, 3389, 5900, 8080,
+            # Add extra_ports for custom services
+            *( extra_ports or [] )
+        ]
         
-        # Remove duplicates
+        # Remove duplicates while preserving order
         seen_ports = set()
         ordered_ports = []
-        for port in ports_to_scan:
+        for port in common_ports:
             if port not in seen_ports:
                 seen_ports.add(port)
                 ordered_ports.append(port)
@@ -199,7 +202,8 @@ class NetworkScanner:
         # -sT: TCP connect scan
         # --open: Only show open ports
         # -v: Verbose output
-        nmap_args = f"-Pn -sT -p{port_list} --open --host-timeout 30s -v"
+        # --host-timeout 3m: 3 minute timeout per host
+        nmap_args = f"-Pn -sT -p{port_list} --open --host-timeout 3m -v"
         
         nmap_command = f"nmap {nmap_args} {network_cidr}"
         self.logger.info(f"🔍 Executing: {nmap_command}")
