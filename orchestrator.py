@@ -16,7 +16,7 @@
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
 
 # VERSION: 11:10:18:30 - Fix vulnerability scanner "cannot schedule new futures" bug (auto-recreate executor on error)
-ORCHESTRATOR_VERSION = "11:10:18:30"
+ORCHESTRATOR_VERSION = "11:10:18:25"
 
 import json
 import importlib
