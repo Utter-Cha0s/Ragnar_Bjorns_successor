@@ -557,7 +557,8 @@ class NetworkScanner:
                 port_list = ','.join(map(str, ordered_ports))
                 
                 # Nmap arguments: -Pn (skip ping), -sT (TCP connect), --host-timeout (per-host timeout)
-                nmap_args = f"-Pn -sT -p{port_list} --host-timeout 30s --open"
+                # Removed --open flag to see all port states (open, closed, filtered)
+                nmap_args = f"-Pn -sT -p{port_list} --host-timeout 30s"
                 
                 self.logger.debug(f"🔍 Executing nmap command for {self.target}: nmap {nmap_args} {self.target}")
                 
@@ -584,14 +585,28 @@ class NetworkScanner:
                         # Check TCP ports
                         if 'tcp' in host_data:
                             tcp_ports = host_data['tcp']
-                            self.logger.debug(f"🔌 TCP scan results for {self.target}: {len(tcp_ports)} ports scanned")
+                            self.logger.info(f"🔌 TCP scan results for {self.target}: {len(tcp_ports)} ports scanned")
+                            open_count = 0
+                            closed_count = 0
+                            filtered_count = 0
                             for port in tcp_ports:
                                 port_state = tcp_ports[port]['state']
                                 port_service = tcp_ports[port].get('name', 'unknown')
-                                self.logger.debug(f"  - Port {port}: {port_state} ({port_service})")
+                                
                                 if port_state == 'open':
                                     self.open_ports[self.target].append(port)
-                                    self.logger.info(f"✅ OPEN PORT FOUND: {port}/tcp on {self.target} ({port_service})")
+                                    self.logger.info(f"✅ OPEN PORT: {port}/tcp on {self.target} ({port_service})")
+                                    open_count += 1
+                                elif port_state == 'closed':
+                                    self.logger.debug(f"🚪 CLOSED PORT: {port}/tcp on {self.target} ({port_service})")
+                                    closed_count += 1
+                                elif port_state == 'filtered':
+                                    self.logger.debug(f"🛡️ FILTERED PORT: {port}/tcp on {self.target} ({port_service})")
+                                    filtered_count += 1
+                                else:
+                                    self.logger.debug(f"❓ UNKNOWN STATE: Port {port}/tcp = {port_state} on {self.target} ({port_service})")
+                            
+                            self.logger.info(f"📊 Port summary for {self.target}: {open_count} open, {closed_count} closed, {filtered_count} filtered")
                         else:
                             self.logger.warning(f"⚠️ No TCP results in nmap data for {self.target}")
                         
