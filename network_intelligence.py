@@ -417,17 +417,35 @@ class NetworkIntelligence:
             self.logger.error(f"Error resolving finding: {e}")
     
     def get_active_findings_for_dashboard(self) -> Dict:
-        """Get active findings for current network (dashboard view)"""
+        """Get active findings for current network (dashboard view)
+        
+        Checks both the current network ID and 'default_network' as fallback
+        to ensure vulnerabilities are displayed even when network ID changes.
+        """
         try:
             network_id = self.get_current_network_id()
             
+            # Get findings from current network
+            vulnerabilities = dict(self.active_vulnerabilities.get(network_id, {}))
+            credentials = dict(self.active_credentials.get(network_id, {}))
+            
+            # If current network has no findings, check default_network as fallback
+            if not vulnerabilities and not credentials and network_id != "default_network":
+                default_vulns = self.active_vulnerabilities.get("default_network", {})
+                default_creds = self.active_credentials.get("default_network", {})
+                
+                if default_vulns or default_creds:
+                    self.logger.info(f"Using default_network findings as fallback (current network: {network_id})")
+                    vulnerabilities.update(default_vulns)
+                    credentials.update(default_creds)
+            
             result = {
                 'network_id': network_id,
-                'vulnerabilities': self.active_vulnerabilities.get(network_id, {}),
-                'credentials': self.active_credentials.get(network_id, {}),
+                'vulnerabilities': vulnerabilities,
+                'credentials': credentials,
                 'counts': {
-                    'vulnerabilities': len(self.active_vulnerabilities.get(network_id, {})),
-                    'credentials': len(self.active_credentials.get(network_id, {}))
+                    'vulnerabilities': len(vulnerabilities),
+                    'credentials': len(credentials)
                 }
             }
             
