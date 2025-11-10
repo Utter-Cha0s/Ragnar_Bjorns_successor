@@ -12,6 +12,12 @@ from typing import Dict, List, Optional, Tuple, Any
 import json
 import os
 
+# Required attributes for Ragnar action framework
+b_class = "BLE"
+b_status = "bluetooth_scan"
+b_port = None
+b_parent = None
+
 class BluetoothManager:
     """
     Comprehensive Bluetooth management class for Ragnar
