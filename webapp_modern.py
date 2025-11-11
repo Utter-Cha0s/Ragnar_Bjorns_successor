@@ -3343,16 +3343,26 @@ def scan_single_host():
 def deep_scan_host():
     """Perform a deep scan on a single host using TCP connect scan (-sT) on all ports"""
     try:
+        # EXPLICIT DEBUG: Check what we received
+        logger.info(f"🎯 DEEP SCAN API ENDPOINT CALLED")
+        logger.info(f"   Request method: {request.method}")
+        logger.info(f"   Request content_type: {request.content_type}")
+        
         data = request.get_json()
+        logger.info(f"   Parsed JSON data: {data}")
+        logger.info(f"   Data type: {type(data)}")
+        
         if not data or 'ip' not in data:
+            logger.error(f"❌ Missing IP in request data!")
             return jsonify({'status': 'error', 'message': 'IP address is required'}), 400
         
         ip = data['ip']
+        logger.info(f"   Extracted IP: '{ip}' (type: {type(ip).__name__}, repr: {repr(ip)})")
+        
         portstart = data.get('portstart', 1)
         portend = data.get('portend', 65535)
 
-        # LOG: Button clicked - API endpoint called
-        logger.info(f"🎯 DEEP SCAN API ENDPOINT CALLED - IP: {ip}, Ports: {portstart}-{portend}")
+        logger.info(f"🎯 DEEP SCAN PARAMETERS - IP: [{ip}], Ports: {portstart}-{portend}")
 
         # Validate IP address format
         import ipaddress

@@ -1323,6 +1323,22 @@ class NetworkScanner:
         Returns:
             dict: {'success': bool, 'open_ports': list, 'hostname': str, 'message': str}
         """
+        # EXPLICIT DEBUG LOGGING - Check what we actually received
+        self.logger.info(f"🔍 DEEP SCAN METHOD CALLED")
+        self.logger.info(f"   Parameter ip = '{ip}' (type: {type(ip).__name__}, repr: {repr(ip)})")
+        self.logger.info(f"   Parameter portstart = {portstart}")
+        self.logger.info(f"   Parameter portend = {portend}")
+        self.logger.info(f"   Parameter progress_callback = {progress_callback}")
+        
+        if not ip:
+            self.logger.error(f"❌ CRITICAL ERROR: IP parameter is empty/None!")
+            return {
+                'success': False,
+                'open_ports': [],
+                'hostname': '',
+                'message': 'IP address is required but was empty'
+            }
+        
         self.logger.info(f"🔍 DEEP SCAN initiated for IP=[{ip}] ports [{portstart}-{portend}]")
         
         try:
