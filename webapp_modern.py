@@ -3351,6 +3351,9 @@ def deep_scan_host():
         portstart = data.get('portstart', 1)
         portend = data.get('portend', 65535)
 
+        # LOG: Button clicked - API endpoint called
+        logger.info(f"🎯 DEEP SCAN API ENDPOINT CALLED - IP: {ip}, Ports: {portstart}-{portend}")
+
         # Validate IP address format
         import ipaddress
         try:
