@@ -1328,9 +1328,14 @@ class NetworkScanner:
         try:
             # Use -sT for TCP connect scan (doesn't require root, works everywhere)
             # Scan ALL ports for comprehensive discovery
-            nmap_args = f"-Pn -sT -p{portstart}-{portend} --open -v"
+            # Add performance optimizations:
+            # --min-rate 1000: Minimum packet rate
+            # --max-retries 1: Don't retry failed connections
+            # -T4: Aggressive timing template
+            nmap_args = f"-Pn -sT -p{portstart}-{portend} --open -T4 --min-rate 1000 --max-retries 1 -v"
             
             self.logger.info(f"   Executing: nmap {nmap_args} {ip}")
+            self.logger.info(f"   This may take 1-3 minutes to scan all {portend - portstart + 1} ports...")
             scan_start = time.time()
             
             # Notify scan started
@@ -1341,8 +1346,13 @@ class NetworkScanner:
             
             scan_duration = time.time() - scan_start
             
+            self.logger.info(f"   Scan completed in {scan_duration:.2f}s")
+            self.logger.debug(f"   All hosts found by nmap: {self.nm.all_hosts()}")
+            
             if ip not in self.nm.all_hosts():
-                self.logger.warning(f"❌ Deep scan found no results for {ip}")
+                self.logger.warning(f"❌ Deep scan found no results for {ip} after {scan_duration:.2f}s")
+                self.logger.warning(f"   This could mean: 1) Host is down/firewalled, 2) No ports open, 3) Scan timeout")
+                self.logger.debug(f"   Nmap command was: nmap {nmap_args} {ip}")
                 return {
                     'success': False,
                     'open_ports': [],
@@ -1410,65 +1420,64 @@ class NetworkScanner:
         netkbfile = self.shared_data.netkbfile
         
         try:
-            # Read current NetKB
-            if os.path.exists(netkbfile):
-                df = pd.read_csv(netkbfile)
-            else:
+            # Read current NetKB using DictReader to match the CSV format
+            if not os.path.exists(netkbfile):
                 self.logger.warning(f"NetKB file not found: {netkbfile}")
                 return
             
-            # Find the row for this IP
-            ip_rows = df[df['IP Address'] == ip]
+            # Read the entire file into memory
+            netkb_entries = {}
+            with open(netkbfile, 'r') as file:
+                reader = csv.DictReader(file)
+                headers = reader.fieldnames
+                
+                for row in reader:
+                    mac = row['MAC Address']
+                    netkb_entries[mac] = row
             
-            if ip_rows.empty:
+            # Find the MAC address for this IP
+            target_mac = None
+            for mac, data in netkb_entries.items():
+                if ip in data.get('IPs', '').split(';'):
+                    target_mac = mac
+                    break
+            
+            if not target_mac:
                 self.logger.warning(f"IP {ip} not found in NetKB - cannot merge deep scan results")
                 return
             
-            idx = ip_rows.index[0]
-            
             # Get existing ports
-            existing_ports_str = df.at[idx, 'Ports']
+            existing_ports_str = netkb_entries[target_mac].get('Ports', '')
             existing_ports = set()
             
-            if pd.notna(existing_ports_str) and existing_ports_str:
-                # Parse existing ports (can be "22,80,443" or "22;80;443")
-                for sep in [',', ';']:
-                    if sep in str(existing_ports_str):
-                        existing_ports = set(str(existing_ports_str).split(sep))
-                        break
-                else:
-                    existing_ports = {str(existing_ports_str)}
-                
-                # Clean up the port numbers
-                existing_ports = {p.strip() for p in existing_ports if p.strip()}
+            if existing_ports_str:
+                # Parse existing ports (semicolon separated in NetKB)
+                existing_ports = {p.strip() for p in existing_ports_str.split(';') if p.strip()}
             
             # Merge with new ports from deep scan
-            new_ports = set(str(p) for p in open_ports)
+            new_ports = {str(p) for p in open_ports}
             merged_ports = existing_ports.union(new_ports)
             
-            # Update the NetKB row
-            df.at[idx, 'Ports'] = ','.join(sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 0))
+            # Update the entry
+            netkb_entries[target_mac]['Ports'] = ';'.join(sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 0))
             
             # Update hostname if we got one and it's not already set
-            if hostname and (pd.isna(df.at[idx, 'Hostnames']) or not df.at[idx, 'Hostnames']):
-                df.at[idx, 'Hostnames'] = hostname
+            existing_hostname = netkb_entries[target_mac].get('Hostnames', '')
+            if hostname and not existing_hostname:
+                netkb_entries[target_mac]['Hostnames'] = hostname
             
-            # Mark as deep scanned (add a flag column if it doesn't exist)
-            if 'Deep_Scanned' not in df.columns:
-                df['Deep_Scanned'] = ''
+            # Mark as deep scanned
+            netkb_entries[target_mac]['Deep_Scanned'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            netkb_entries[target_mac]['Deep_Scan_Ports'] = str(len(open_ports))
             
-            df.at[idx, 'Deep_Scanned'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Write back to file
+            with open(netkbfile, 'w', newline='') as file:
+                writer = csv.DictWriter(file, fieldnames=headers)
+                writer.writeheader()
+                for mac in sorted(netkb_entries.keys()):
+                    writer.writerow(netkb_entries[mac])
             
-            # Add deep scan port count
-            if 'Deep_Scan_Ports' not in df.columns:
-                df['Deep_Scan_Ports'] = ''
-            
-            df.at[idx, 'Deep_Scan_Ports'] = len(open_ports)
-            
-            # Save updated NetKB
-            df.to_csv(netkbfile, index=False)
-            
-            self.logger.info(f"📝 Merged deep scan results into NetKB: {ip} now has {len(merged_ports)} total ports")
+            self.logger.info(f"📝 Merged deep scan results into NetKB: {ip} (MAC: {target_mac}) now has {len(merged_ports)} total ports ({len(new_ports)} from deep scan)")
             
         except Exception as e:
             self.logger.error(f"Error merging deep scan results for {ip}: {e}")
