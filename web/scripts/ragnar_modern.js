@@ -811,7 +811,13 @@ function displayStableNetworkTable(data) {
         return;
     }
     
-    data.hosts.forEach(host => {
+    data.hosts.forEach((host, index) => {
+        // DEBUG: Log first few host objects to see structure
+        if (index < 3) {
+            console.log(`🔍 Host ${index}:`, host);
+            console.log(`   IP field:`, host.ip, typeof host.ip);
+        }
+        
         const row = document.createElement('tr');
         row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
         
@@ -849,10 +855,10 @@ function displayStableNetworkTable(data) {
             <td class="py-3 px-4">${vulnDisplay}</td>
             <td class="py-3 px-4">${lastScanDisplay}</td>
             <td class="py-3 px-4">
-                <button onclick="triggerDeepScan('${host.ip}')" 
+                <button onclick="console.log('🖱️ Button clicked for IP:', '${host.ip}'); triggerDeepScan('${host.ip}')" 
                         id="deep-scan-btn-${host.ip.replace(/\./g, '-')}"
                         class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
-                        title="Scan all 65535 ports with TCP connect (-sT)">
+                        title="Scan all 65535 ports with TCP connect (-sT). IP: ${host.ip}">
                     Deep Scan
                 </button>
             </td>
