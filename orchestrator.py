@@ -71,17 +71,30 @@ class Orchestrator:
     def _ensure_executor(self):
         """Ensure the thread pool executor is created and available"""
         with self.executor_lock:
-            # Check if executor is None, shutdown, or broken
-            needs_new_executor = (
-                self.executor is None or 
-                self.executor._shutdown or
-                getattr(self.executor, '_broken', False)
-            )
+            # Check if executor needs to be created or recreated
+            needs_new_executor = False
+            
+            if self.executor is None:
+                needs_new_executor = True
+            else:
+                # Try to submit a test task to check if executor is alive
+                try:
+                    # Submit a no-op task to verify executor is functional
+                    test_future = self.executor.submit(lambda: None)
+                    test_future.result(timeout=0.1)
+                except RuntimeError as e:
+                    # Executor is shutdown or broken
+                    if "cannot schedule new futures" in str(e) or "shutdown" in str(e):
+                        needs_new_executor = True
+                except Exception:
+                    # Any other error means executor might be broken
+                    needs_new_executor = True
             
             if needs_new_executor:
                 # Clean up old executor if it exists
                 if self.executor is not None:
                     try:
+                        # Force shutdown without waiting
                         self.executor.shutdown(wait=False, cancel_futures=True)
                     except Exception as cleanup_error:
                         logger.debug(f"Executor cleanup error (safe to ignore): {cleanup_error}")
@@ -888,11 +901,14 @@ class Orchestrator:
         try:
             # Shutdown the executor and wait for running tasks to complete (max 30 seconds)
             with self.executor_lock:
-                if self.executor is not None and not self.executor._shutdown:
-                    self.executor.shutdown(wait=True, cancel_futures=False)
-                    logger.info("Thread pool executor shutdown complete")
+                if self.executor is not None:
+                    try:
+                        self.executor.shutdown(wait=True, cancel_futures=False)
+                        logger.info("Thread pool executor shutdown complete")
+                    except Exception as e:
+                        logger.warning(f"Executor already shutdown or error during shutdown: {e}")
                 else:
-                    logger.info("Thread pool executor already shutdown or not created")
+                    logger.info("Thread pool executor not created or already shutdown")
         except Exception as e:
             logger.error(f"Error during executor shutdown: {e}")
 
