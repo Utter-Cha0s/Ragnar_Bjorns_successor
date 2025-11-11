@@ -3430,7 +3430,7 @@ def deep_scan_host():
         full_flag = str(data.get('full', '')).lower() in ['1','true','yes']
         use_top_ports = not (mode_flag in ['full','all','65535'] or full_flag)
         logger.info(
-            f"🎯 DEEP SCAN PARAMETERS - IP=[{ip}] Ports={portstart}-{portend} mode={'top100' if use_top_ports else 'full-range'}"
+            f"🎯 DEEP SCAN PARAMETERS - IP=[{ip}] Ports={portstart}-{portend} mode={'top3000' if use_top_ports else 'full-range'}"
         )
 
         # Validate IP address format
@@ -3470,7 +3470,7 @@ def deep_scan_host():
                 socketio.emit('deep_scan_update', {
                     'type': 'deep_scan_progress',
                     'ip': ip,
-                    'message': f"Parameters accepted: ip={ip} mode={'top100' if use_top_ports else 'full-range'} range={portstart}-{portend}"
+                    'message': f"Parameters accepted: ip={ip} mode={'top3000' if use_top_ports else 'full-range'} range={portstart}-{portend}"
                 })
 
                 # Perform the deep scan with progress callback
@@ -3513,11 +3513,11 @@ def deep_scan_host():
         
         return jsonify({
             'status': 'success',
-            'message': f"Started deep scan of {ip} (mode={'top100' if use_top_ports else 'full-range'})",
+            'message': f"Started deep scan of {ip} (mode={'top3000' if use_top_ports else 'full-range'})",
             'ip': ip,
             'portstart': portstart,
             'portend': portend,
-            'mode': 'top100' if use_top_ports else 'full-range'
+            'mode': 'top3000' if use_top_ports else 'full-range'
         })
         
     except Exception as e:

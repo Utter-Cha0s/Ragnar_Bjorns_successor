@@ -1311,8 +1311,8 @@ class NetworkScanner:
     def deep_scan_host(self, ip, portstart=1, portend=65535, progress_callback=None, use_top_ports=True):
         """Perform a deep scan on a single host using nmap -sT (TCP connect scan).
 
-        By default (use_top_ports=True) scans the TOP 100 most common ports via
-        ``nmap --top-ports 100`` for speed on constrained hardware like Pi Zero.
+        By default (use_top_ports=True) scans the TOP 3000 most common ports via
+        ``nmap --top-ports 3000`` for broader coverage while still faster than a full range scan.
         When use_top_ports=False, scans the full port range ``portstart-portend``.
 
         Results are merged with existing data without overwriting existing ports.
@@ -1322,7 +1322,7 @@ class NetworkScanner:
             portstart (int): Starting port if doing full-range scan.
             portend (int): Ending port if doing full-range scan.
             progress_callback (callable|None): Optional callback to emit progress events.
-            use_top_ports (bool): Whether to use nmap --top-ports 100 fast mode.
+            use_top_ports (bool): Whether to use nmap --top-ports 3000 fast/extended mode.
 
         Returns:
             dict: Scan outcome including success flag, open_ports list, hostname, timing and message.
@@ -1343,7 +1343,7 @@ class NetworkScanner:
                 'message': 'IP address is required but was empty'
             }
 
-        scan_mode = 'top100' if use_top_ports else 'full-range'
+        scan_mode = 'top3000' if use_top_ports else 'full-range'
         self.logger.info(f"🔍 DEEP SCAN INIT ip={ip} mode={scan_mode} range={portstart}-{portend}")
 
         # Quick connectivity test (best-effort)
@@ -1361,10 +1361,10 @@ class NetworkScanner:
         try:
             # Build nmap args depending on mode
             if use_top_ports:
-                # Fast scan of most common ports (top 100)
-                nmap_args = "-Pn -sT --top-ports 100 --open -T4 --min-rate 500 --max-retries 1 -v"
-                self.logger.info(f"🚀 EXECUTING DEEP SCAN (TOP 100): nmap {nmap_args} {ip}")
-                self.logger.info("   Mode: top100 common ports (fast)")
+                # Fast scan of most common ports (top 3000) for broader coverage while still faster than full range
+                nmap_args = "-Pn -sT --top-ports 3000 --open -T4 --min-rate 500 --max-retries 1 -v"
+                self.logger.info(f"🚀 EXECUTING DEEP SCAN (TOP 3000): nmap {nmap_args} {ip}")
+                self.logger.info("   Mode: top3000 common ports (fast/extended)")
             else:
                 # Full range scan (can be slow)
                 nmap_args = f"-Pn -sT -p{portstart}-{portend} --open -T4 --min-rate 1000 --max-retries 1 -v"
