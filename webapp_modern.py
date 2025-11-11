@@ -3339,6 +3339,88 @@ def scan_single_host():
         logger.error(f"Error scanning single host: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/api/scan/deep', methods=['POST'])
+def deep_scan_host():
+    """Perform a deep scan on a single host using TCP connect scan (-sT) on all ports"""
+    try:
+        data = request.get_json()
+        if not data or 'ip' not in data:
+            return jsonify({'status': 'error', 'message': 'IP address is required'}), 400
+        
+        ip = data['ip']
+        portstart = data.get('portstart', 1)
+        portend = data.get('portend', 65535)
+
+        # Validate IP address format
+        import ipaddress
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'Invalid IP address format'}), 400
+
+        # Start deep scan in background thread
+        def deep_scan_background():
+            try:
+                # Import the scanner
+                from actions.scanning import NetworkScanner
+                
+                # Create scanner instance
+                scanner = NetworkScanner(shared_data)
+                
+                # Emit scan started event
+                socketio.emit('deep_scan_update', {
+                    'type': 'deep_scan_started',
+                    'ip': ip,
+                    'message': f'Starting deep scan on {ip} (ports {portstart}-{portend})...'
+                })
+                
+                # Perform the deep scan
+                result = scanner.deep_scan_host(ip, portstart, portend)
+                
+                # Emit progress updates
+                if result['success']:
+                    socketio.emit('deep_scan_update', {
+                        'type': 'deep_scan_completed',
+                        'ip': ip,
+                        'open_ports': result['open_ports'],
+                        'hostname': result['hostname'],
+                        'port_details': result['port_details'],
+                        'scan_duration': result['scan_duration'],
+                        'message': result['message']
+                    })
+                    
+                    # Also emit a network update to refresh the table
+                    socketio.emit('network_update', {'refresh': True})
+                else:
+                    socketio.emit('deep_scan_update', {
+                        'type': 'deep_scan_error',
+                        'ip': ip,
+                        'message': result['message']
+                    })
+                    
+            except Exception as e:
+                logger.error(f"Error in deep scan background task for {ip}: {e}")
+                socketio.emit('deep_scan_update', {
+                    'type': 'deep_scan_error',
+                    'ip': ip,
+                    'message': f'Deep scan error: {str(e)}'
+                })
+
+        # Start the deep scan in a background thread
+        import threading
+        scan_thread = threading.Thread(target=deep_scan_background)
+        scan_thread.daemon = True
+        scan_thread.start()
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Started deep scan of {ip} (ports {portstart}-{portend})'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error initiating deep scan: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 # ============================================================================
 # SYSTEM MANAGEMENT ENDPOINTS
 # ============================================================================

@@ -374,6 +374,10 @@ function initializeSocket() {
         handleScanError(data);
     });
 
+    socket.on('deep_scan_update', function(data) {
+        handleDeepScanUpdate(data);
+    });
+
     socket.on('connect_error', function(error) {
         reconnectAttempts++;
         console.error('Connection error:', error);
@@ -844,6 +848,13 @@ function displayStableNetworkTable(data) {
             <td class="py-3 px-4">${portsDisplay}</td>
             <td class="py-3 px-4">${vulnDisplay}</td>
             <td class="py-3 px-4">${lastScanDisplay}</td>
+            <td class="py-3 px-4">
+                <button onclick="triggerDeepScan('${host.ip}')" 
+                        class="bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-colors"
+                        title="Scan all 65535 ports with TCP connect (-sT)">
+                    Deep Scan
+                </button>
+            </td>
         `;
         
         tableBody.appendChild(row);
@@ -1046,6 +1057,70 @@ function handleScanCompleted(data) {
 function handleScanError(data) {
     addConsoleMessage(`Scan error: ${data.error}`, 'error');
     resetScanButtons();
+}
+
+// ============================================================================
+// DEEP SCAN FUNCTIONS
+// ============================================================================
+
+async function triggerDeepScan(ip) {
+    try {
+        addConsoleMessage(`Starting deep scan on ${ip}...`, 'info');
+        
+        const response = await fetch('/api/scan/deep', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ ip: ip })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            addConsoleMessage(`Deep scan initiated for ${ip} - scanning all 65535 ports`, 'success');
+        } else {
+            addConsoleMessage(`Failed to start deep scan: ${data.message}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error triggering deep scan:', error);
+        addConsoleMessage(`Error starting deep scan: ${error.message}`, 'error');
+    }
+}
+
+function handleDeepScanUpdate(data) {
+    const { type, ip, message } = data;
+    
+    switch (type) {
+        case 'deep_scan_started':
+            addConsoleMessage(`🔍 ${message}`, 'info');
+            break;
+            
+        case 'deep_scan_completed':
+            const portCount = data.open_ports ? data.open_ports.length : 0;
+            const duration = data.scan_duration ? data.scan_duration.toFixed(2) : 'unknown';
+            addConsoleMessage(`✅ Deep scan of ${ip} complete: ${portCount} ports found in ${duration}s`, 'success');
+            
+            // Show detailed port information
+            if (data.open_ports && data.open_ports.length > 0) {
+                const portList = data.open_ports.slice(0, 10).join(', ');
+                const moreText = data.open_ports.length > 10 ? ` (+${data.open_ports.length - 10} more)` : '';
+                addConsoleMessage(`   Open ports: ${portList}${moreText}`, 'info');
+            }
+            
+            // Refresh network table to show updated port information
+            if (currentTab === 'network') {
+                loadNetworkData();
+            }
+            break;
+            
+        case 'deep_scan_error':
+            addConsoleMessage(`❌ Deep scan error for ${ip}: ${message}`, 'error');
+            break;
+            
+        default:
+            addConsoleMessage(`Deep scan update: ${message}`, 'info');
+    }
 }
 
 // ============================================================================

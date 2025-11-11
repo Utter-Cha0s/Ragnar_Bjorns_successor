@@ -455,7 +455,8 @@ class NetworkScanner:
                     with open(netkbfile, 'r') as file:
                         reader = csv.DictReader(file)
                         existing_headers = reader.fieldnames
-                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"]]
+                        # Preserve deep scan metadata columns alongside action columns
+                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings", "Deep_Scanned", "Deep_Scan_Ports"]]
                         for row in reader:
                             mac = row["MAC Address"]
                             ips = row["IPs"].split(';')
@@ -468,7 +469,10 @@ class NetworkScanner:
                                 'Hostnames': set(hostnames) if hostnames[0] else set(),
                                 'Alive': alive,
                                 'Ports': set(ports) if ports[0] else set(),
-                                'Failed_Pings': failed_pings
+                                'Failed_Pings': failed_pings,
+                                # Preserve deep scan metadata
+                                'Deep_Scanned': row.get("Deep_Scanned", ""),
+                                'Deep_Scan_Ports': row.get("Deep_Scan_Ports", "")
                             }
                             for action in existing_action_columns:
                                 netkb_entries[mac][action] = row.get(action, "")
@@ -518,15 +522,23 @@ class NetworkScanner:
                         netkb_entries[mac]['IPs'].add(ip)
                         netkb_entries[mac]['Hostnames'].add(hostname)
                         netkb_entries[mac]['Alive'] = '1'
+                        
+                        # CRITICAL: Merge ports instead of replacing to preserve deep scan results
+                        # Deep scan discoveries should NOT be lost during regular automated scans
                         netkb_entries[mac]['Ports'].update(map(str, ports))
+                        
                         netkb_entries[mac]['Failed_Pings'] = 0  # Reset failures since host is responsive
+                        # Preserve deep scan metadata during updates
+                        # (these fields are only set by deep_scan_host(), not regular scans)
                     else:
                         netkb_entries[mac] = {
                             'IPs': {ip},
                             'Hostnames': {hostname},
                             'Alive': '1',
                             'Ports': set(map(str, ports)),
-                            'Failed_Pings': 0  # New hosts start with 0 failed pings
+                            'Failed_Pings': 0,  # New hosts start with 0 failed pings
+                            'Deep_Scanned': "",  # Will be set by deep scan
+                            'Deep_Scan_Ports': ""  # Will be set by deep scan
                         }
                         for action in existing_action_columns:
                             netkb_entries[mac][action] = ""
@@ -555,7 +567,7 @@ class NetworkScanner:
 
                 with open(netkbfile, 'w', newline='') as file:
                     writer = csv.writer(file)
-                    # Ensure Failed_Pings is included in headers
+                    # Ensure Failed_Pings and Deep Scan columns are included in headers
                     if "Failed_Pings" not in existing_headers:
                         # Insert Failed_Pings after Ports column
                         headers_list = list(existing_headers)
@@ -565,7 +577,20 @@ class NetworkScanner:
                         else:
                             headers_list.append("Failed_Pings")
                         existing_headers = headers_list
-                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"]]
+                    
+                    # Add Deep Scan columns if not present
+                    if "Deep_Scanned" not in existing_headers:
+                        headers_list = list(existing_headers)
+                        headers_list.append("Deep_Scanned")
+                        existing_headers = headers_list
+                    
+                    if "Deep_Scan_Ports" not in existing_headers:
+                        headers_list = list(existing_headers)
+                        headers_list.append("Deep_Scan_Ports")
+                        existing_headers = headers_list
+                    
+                    # Update action columns list to exclude all metadata columns
+                    existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings", "Deep_Scanned", "Deep_Scan_Ports"]]
                     
                     writer.writerow(existing_headers)  # Write updated headers
                     for mac, data in sorted_netkb_entries:
@@ -577,7 +602,9 @@ class NetworkScanner:
                             ';'.join(sorted(data['Hostnames'])),
                             data['Alive'],
                             ';'.join(sorted(valid_ports, key=int)) if valid_ports else '',
-                            str(data.get('Failed_Pings', 0))  # Add Failed_Pings column
+                            str(data.get('Failed_Pings', 0)),
+                            data.get('Deep_Scanned', ''),
+                            data.get('Deep_Scan_Ports', '')
                         ]
                         row.extend(data.get(action, "") for action in existing_action_columns)
                         writer.writerow(row)
@@ -1280,6 +1307,158 @@ class NetworkScanner:
             updater.clean_scan_results(self.shared_data.scan_results_dir)
         except Exception as e:
             self.logger.error(f"Error in scan: {e}")
+
+    def deep_scan_host(self, ip, portstart=1, portend=65535):
+        """
+        Perform a thorough deep scan on a single host using -sT (TCP connect scan).
+        This scans ALL ports (1-65535) to find every possible open port.
+        Results are merged with existing data without overwriting.
+        
+        Args:
+            ip: Target IP address
+            portstart: Starting port (default 1)
+            portend: Ending port (default 65535)
+            
+        Returns:
+            dict: {'success': bool, 'open_ports': list, 'hostname': str, 'message': str}
+        """
+        self.logger.info(f"🔍 DEEP SCAN initiated for {ip} (ports {portstart}-{portend})")
+        
+        try:
+            # Use -sT for TCP connect scan (doesn't require root, works everywhere)
+            # Scan ALL ports for comprehensive discovery
+            nmap_args = f"-Pn -sT -p{portstart}-{portend} --open -v"
+            
+            self.logger.info(f"   Executing: nmap {nmap_args} {ip}")
+            scan_start = time.time()
+            
+            self.nm.scan(hosts=ip, arguments=nmap_args)
+            
+            scan_duration = time.time() - scan_start
+            
+            if ip not in self.nm.all_hosts():
+                self.logger.warning(f"❌ Deep scan found no results for {ip}")
+                return {
+                    'success': False,
+                    'open_ports': [],
+                    'hostname': '',
+                    'message': f'No open ports found on {ip}'
+                }
+            
+            # Extract results
+            hostname = self.nm[ip].hostname() or ''
+            open_ports = []
+            port_details = {}
+            
+            if 'tcp' in self.nm[ip]:
+                tcp_ports = self.nm[ip]['tcp']
+                for port in sorted(tcp_ports.keys()):
+                    if tcp_ports[port]['state'] == 'open':
+                        open_ports.append(port)
+                        service = tcp_ports[port].get('name', 'unknown')
+                        version = tcp_ports[port].get('version', '')
+                        port_details[port] = {
+                            'service': service,
+                            'version': version,
+                            'state': 'open'
+                        }
+                        self.logger.info(f"   ✅ Port {port}/tcp open - {service} {version}")
+            
+            # Now update the NetKB with deep scan results WITHOUT overwriting existing data
+            self._merge_deep_scan_results(ip, hostname, open_ports, port_details)
+            
+            self.logger.info(f"✅ DEEP SCAN COMPLETE for {ip}: {len(open_ports)} ports found in {scan_duration:.2f}s")
+            
+            return {
+                'success': True,
+                'open_ports': open_ports,
+                'hostname': hostname,
+                'port_details': port_details,
+                'scan_duration': scan_duration,
+                'message': f'Deep scan complete: {len(open_ports)} open ports discovered'
+            }
+            
+        except Exception as e:
+            self.logger.error(f"💥 Deep scan failed for {ip}: {e}")
+            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
+            return {
+                'success': False,
+                'open_ports': [],
+                'hostname': '',
+                'message': f'Deep scan error: {str(e)}'
+            }
+    
+    def _merge_deep_scan_results(self, ip, hostname, open_ports, port_details):
+        """
+        Merge deep scan results into NetKB without overwriting existing data.
+        Adds new ports while preserving all existing information.
+        """
+        netkbfile = self.shared_data.netkbfile
+        
+        try:
+            # Read current NetKB
+            if os.path.exists(netkbfile):
+                df = pd.read_csv(netkbfile)
+            else:
+                self.logger.warning(f"NetKB file not found: {netkbfile}")
+                return
+            
+            # Find the row for this IP
+            ip_rows = df[df['IP Address'] == ip]
+            
+            if ip_rows.empty:
+                self.logger.warning(f"IP {ip} not found in NetKB - cannot merge deep scan results")
+                return
+            
+            idx = ip_rows.index[0]
+            
+            # Get existing ports
+            existing_ports_str = df.at[idx, 'Ports']
+            existing_ports = set()
+            
+            if pd.notna(existing_ports_str) and existing_ports_str:
+                # Parse existing ports (can be "22,80,443" or "22;80;443")
+                for sep in [',', ';']:
+                    if sep in str(existing_ports_str):
+                        existing_ports = set(str(existing_ports_str).split(sep))
+                        break
+                else:
+                    existing_ports = {str(existing_ports_str)}
+                
+                # Clean up the port numbers
+                existing_ports = {p.strip() for p in existing_ports if p.strip()}
+            
+            # Merge with new ports from deep scan
+            new_ports = set(str(p) for p in open_ports)
+            merged_ports = existing_ports.union(new_ports)
+            
+            # Update the NetKB row
+            df.at[idx, 'Ports'] = ','.join(sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 0))
+            
+            # Update hostname if we got one and it's not already set
+            if hostname and (pd.isna(df.at[idx, 'Hostnames']) or not df.at[idx, 'Hostnames']):
+                df.at[idx, 'Hostnames'] = hostname
+            
+            # Mark as deep scanned (add a flag column if it doesn't exist)
+            if 'Deep_Scanned' not in df.columns:
+                df['Deep_Scanned'] = ''
+            
+            df.at[idx, 'Deep_Scanned'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Add deep scan port count
+            if 'Deep_Scan_Ports' not in df.columns:
+                df['Deep_Scan_Ports'] = ''
+            
+            df.at[idx, 'Deep_Scan_Ports'] = len(open_ports)
+            
+            # Save updated NetKB
+            df.to_csv(netkbfile, index=False)
+            
+            self.logger.info(f"📝 Merged deep scan results into NetKB: {ip} now has {len(merged_ports)} total ports")
+            
+        except Exception as e:
+            self.logger.error(f"Error merging deep scan results for {ip}: {e}")
+            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
 
     def start(self):
         """
