@@ -3343,26 +3343,51 @@ def scan_single_host():
 def deep_scan_host():
     """Perform a deep scan on a single host using TCP connect scan (-sT) on all ports"""
     try:
-        # EXPLICIT DEBUG: Check what we received
-        logger.info(f"🎯 DEEP SCAN API ENDPOINT CALLED")
-        logger.info(f"   Request method: {request.method}")
-        logger.info(f"   Request content_type: {request.content_type}")
-        
-        data = request.get_json()
-        logger.info(f"   Parsed JSON data: {data}")
-        logger.info(f"   Data type: {type(data)}")
-        
-        if not data or 'ip' not in data:
-            logger.error(f"❌ Missing IP in request data!")
-            return jsonify({'status': 'error', 'message': 'IP address is required'}), 400
-        
-        ip = data['ip']
-        logger.info(f"   Extracted IP: '{ip}' (type: {type(ip).__name__}, repr: {repr(ip)})")
-        
-        portstart = data.get('portstart', 1)
-        portend = data.get('portend', 65535)
+        # ===== REQUEST INTROSPECTION =====
+        logger.info("🎯 DEEP SCAN API ENDPOINT CALLED")
+        logger.info(f"   Method={request.method} Content-Type={request.content_type} Content-Length={request.content_length}")
+        # Log a safe subset of headers
+        try:
+            hdr_subset = {k: v for k, v in request.headers.items() if k in ['User-Agent','Content-Type','Origin','Referer']}
+            logger.debug(f"   Headers subset: {hdr_subset}")
+        except Exception as e_hdr:
+            logger.debug(f"   Could not log headers subset: {e_hdr}")
 
-        logger.info(f"🎯 DEEP SCAN PARAMETERS - IP: [{ip}], Ports: {portstart}-{portend}")
+        raw_body = request.get_data(cache=False)  # bytes
+        logger.debug(f"   Raw body repr: {raw_body!r}")
+
+        data = {}
+        # Robust JSON parsing with fallback to form/query
+        if request.content_type and 'application/json' in request.content_type.lower():
+            try:
+                data = request.get_json(force=True, silent=True) or {}
+            except Exception as json_err:
+                logger.error(f"   JSON parse error: {json_err}")
+                data = {}
+        if not data:
+            # Fallbacks
+            form_dict = request.form.to_dict() if request.form else {}
+            args_dict = request.args.to_dict() if request.args else {}
+            data = {**args_dict, **form_dict}
+        logger.info(f"   Parsed data: {data} (type={type(data).__name__})")
+
+        ip = (data.get('ip') or '').strip()
+        portstart_raw = data.get('portstart', 1)
+        portend_raw = data.get('portend', 65535)
+        try:
+            portstart = int(portstart_raw)
+        except (TypeError, ValueError):
+            portstart = 1
+        try:
+            portend = int(portend_raw)
+        except (TypeError, ValueError):
+            portend = 65535
+
+        if not ip:
+            logger.error("❌ Deep scan request missing IP (empty after parsing)")
+            return jsonify({'status': 'error', 'message': 'IP address is required'}), 400
+
+        logger.info(f"🎯 DEEP SCAN PARAMETERS - IP=[{ip}] Ports={portstart}-{portend}")
 
         # Validate IP address format
         import ipaddress
@@ -3438,7 +3463,10 @@ def deep_scan_host():
         
         return jsonify({
             'status': 'success',
-            'message': f'Started deep scan of {ip} (ports {portstart}-{portend})'
+            'message': f'Started deep scan of {ip} (ports {portstart}-{portend})',
+            'ip': ip,
+            'portstart': portstart,
+            'portend': portend
         })
         
     except Exception as e:
