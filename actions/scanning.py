@@ -196,8 +196,9 @@ class NetworkScanner:
                 ordered_ports.append(port)
         
         port_list = ','.join(map(str, ordered_ports))
+        
 
-        nmap_args = f"-Pn -sT --top-ports 3000 --open -T4 --min-rate 500 --max-retries 1 -v"
+        nmap_args = f"-Pn -sS -p{port_list} --open --min-rate 5000 --max-retries 1 --host-timeout 10s -v"
         
         nmap_command = f"nmap {nmap_args} {network_cidr}"
         self.logger.info(f"🔍 Executing: {nmap_command}")
