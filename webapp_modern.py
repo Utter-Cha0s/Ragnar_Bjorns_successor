@@ -947,6 +947,7 @@ def update_wifi_network_data():
                                     ip = row[0].strip()
                                     ports = set()
                                     if len(row) > 4 and row[4]:
+                                        # Parse ports from semicolon-separated list
                                         for port_entry in row[4].split(';'):
                                             normalized = _normalize_port_value(port_entry)
                                             if normalized:
@@ -963,6 +964,16 @@ def update_wifi_network_data():
                                     'last_successful_ping': row[7] if len(row) > 7 else '',
                                     'last_ping_attempt': row[8] if len(row) > 8 else ''
                                 }
+                        
+                        # Log loaded data for debugging
+                        total_ports_loaded = sum(len(data['ports']) for data in existing_data.values())
+                        logger.debug(f"[WIFI DATA LOAD] Loaded {len(existing_data)} hosts with {total_ports_loaded} total ports from {wifi_network_file}")
+                        
+                        # Log hosts with many ports (likely from deep scans)
+                        for ip, data in existing_data.items():
+                            if len(data['ports']) > 10:
+                                logger.debug(f"[WIFI DATA LOAD] {ip} has {len(data['ports'])} ports (likely from deep scan)")
+                                
             except Exception as e:
                 logger.debug(f"Could not read existing WiFi network file: {e}")
 
@@ -994,13 +1005,24 @@ def update_wifi_network_data():
 
                                         # Update or add entry
                                         if ip in existing_data:
-                                            # Merge data
+                                            # Merge data - PRESERVE ALL EXISTING PORTS (including deep scan results)
+                                            existing_ports_before = len(existing_data[ip]['ports'])
+                                            
                                             if hostname and hostname != 'Unknown':
                                                 existing_data[ip]['hostname'] = hostname
                                             if mac and mac != 'Unknown':
                                                 existing_data[ip]['mac'] = mac
                                             existing_data[ip]['alive'] = alive
+                                            
+                                            # CRITICAL: Add new ports to existing set, don't replace
                                             existing_data[ip]['ports'].update(ports)
+                                            
+                                            existing_ports_after = len(existing_data[ip]['ports'])
+                                            if existing_ports_after > existing_ports_before:
+                                                logger.debug(f"[PORT PRESERVATION] {ip}: Added {existing_ports_after - existing_ports_before} new ports (total: {existing_ports_after})")
+                                            elif existing_ports_before > 0:
+                                                logger.debug(f"[PORT PRESERVATION] {ip}: Preserved {existing_ports_before} existing ports")
+                                            
                                             existing_data[ip]['last_seen'] = current_time
                                             # Reset failure counter on successful scan
                                             existing_data[ip]['failed_ping_count'] = 0
@@ -1137,6 +1159,12 @@ def update_wifi_network_data():
 
         # Write updated data to WiFi-specific file
         try:
+            # Count ports before writing for debugging
+            total_ports_to_write = sum(len(data['ports']) for data in existing_data.values())
+            hosts_with_many_ports = sum(1 for data in existing_data.values() if len(data['ports']) > 10)
+            
+            logger.debug(f"[WIFI DATA WRITE] Writing {len(existing_data)} hosts with {total_ports_to_write} total ports ({hosts_with_many_ports} hosts with >10 ports)")
+            
             with open(wifi_network_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(['IP', 'Hostname', 'Alive', 'MAC', 'Ports', 'LastSeen', 'FailedPingCount', 'LastSuccessfulPing', 'LastPingAttempt'])
@@ -1154,6 +1182,11 @@ def update_wifi_network_data():
                             return value
 
                     ports_str = ';'.join(sorted((port for port in data['ports'] if port), key=port_sort_key))
+                    
+                    # Log hosts with many ports being written
+                    if len(data['ports']) > 10:
+                        logger.debug(f"[WIFI DATA WRITE] {ip}: Writing {len(data['ports'])} ports to file")
+                    
                     writer.writerow([
                         ip,
                         data['hostname'],
@@ -1166,7 +1199,7 @@ def update_wifi_network_data():
                         data.get('last_ping_attempt', '')
                     ])
 
-            logger.info(f"Updated WiFi network data file: {wifi_network_file} with {len(existing_data)} entries (removed {len(stale_hosts)} stale hosts)")
+            logger.info(f"✅ Updated WiFi network data file: {wifi_network_file} with {len(existing_data)} entries (removed {len(stale_hosts)} stale hosts, preserved {total_ports_to_write} ports)")
         except Exception as e:
             logger.error(f"Error writing WiFi network data file: {e}")
 
