@@ -874,19 +874,13 @@ function displayStableNetworkTable(data) {
             <td class="py-3 px-4">${vulnDisplay}</td>
             <td class="py-3 px-4">${lastScanDisplay}</td>
             <td class="py-3 px-4">
-                <div class="flex space-x-2">
-                    <button onclick="scanSingleHost('${host.ip}')"
-                            class="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded text-xs">
-                        Rescan
-                    </button>
-                    <button onclick="console.log('🖱️ Button clicked for IP:', '${host.ip}', 'Type:', typeof '${host.ip}'); console.log('🖱️ Host object:', ${JSON.stringify(host).replace(/"/g, '&quot;')}); triggerDeepScan('${host.ip}')" 
-                            id="deep-scan-btn-${host.ip.replace(/\./g, '-')}"
-                            data-scan-status="idle"
-                            class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
-                            title="Scan all 65535 ports with TCP connect (-sT). IP: ${host.ip}">
-                        Deep Scan
-                    </button>
-                </div>
+                <button onclick="triggerDeepScan('${host.ip}')" 
+                        id="deep-scan-btn-${host.ip.replace(/\./g, '-')}"
+                        data-scan-status="idle"
+                        class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
+                        title="Scan all 65535 ports with TCP connect (-sT). IP: ${host.ip}">
+                    Deep Scan
+                </button>
             </td>
         `;
         
@@ -1821,19 +1815,13 @@ function renderHostRow(normalized) {
         <td class="py-3 px-4 text-sm">${formatVulnerabilityCell(normalized)}</td>
         <td class="py-3 px-4 text-sm">${formatLastScanCell(normalized.lastScan)}</td>
         <td class="py-3 px-4">
-            <div class="flex space-x-2">
-                <button data-ip="${ip}" onclick="scanSingleHost(this.dataset.ip)"
-                        class="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded text-xs">
-                    Rescan
-                </button>
-                <button onclick="triggerDeepScan('${normalized.ip}')" 
-                        id="deep-scan-btn-${normalized.ip.replace(/\./g, '-')}"
-                        data-scan-status="idle"
-                        class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
-                        title="Scan all 65535 ports with TCP connect (-sT). IP: ${normalized.ip}">
-                    Deep Scan
-                </button>
-            </div>
+            <button onclick="triggerDeepScan('${normalized.ip}')" 
+                    id="deep-scan-btn-${normalized.ip.replace(/\./g, '-')}"
+                    data-scan-status="idle"
+                    class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
+                    title="Scan all 65535 ports with TCP connect (-sT). IP: ${normalized.ip}">
+                Deep Scan
+            </button>
         </td>
     `;
 }
