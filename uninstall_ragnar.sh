@@ -68,9 +68,9 @@ stop_services() {
     fi
 
     # Kill any processes on port 8000
-    if lsof -i:8000 > /dev/null; then
+    if lsof -w -i:8000 2>/dev/null > /dev/null; then
         log "INFO" "Killing processes on port 8000..."
-        lsof -ti:8000 | xargs kill -9
+        lsof -w -ti:8000 2>/dev/null | xargs kill -9
     fi
 
     log "SUCCESS" "All services stopped"

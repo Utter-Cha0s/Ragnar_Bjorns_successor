@@ -731,7 +731,7 @@ setup_services() {
     cat > $ragnar_PATH/kill_port_8000.sh << 'EOF'
 #!/bin/bash
 PORT=8000
-PIDS=$(lsof -t -i:$PORT)
+PIDS=$(lsof -w -t -i:$PORT 2>/dev/null)
 if [ -n "$PIDS" ]; then
     echo "Killing PIDs using port $PORT: $PIDS"
     kill -9 $PIDS
@@ -758,7 +758,7 @@ Restart=always
 User=root
 
 # Check open files and restart if it reached the limit (ulimit -n buffer of 1000)
-ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT - 1000 )); while :; do TOTAL_OPEN_FILES=\$(lsof | wc -l); if [ "\$TOTAL_OPEN_FILES" -ge "\$THRESHOLD" ]; then echo "File descriptor threshold reached: \$TOTAL_OPEN_FILES (threshold: \$THRESHOLD). Restarting service."; systemctl restart ragnar.service; exit 0; fi; sleep 10; done &'
+ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT - 1000 )); while :; do TOTAL_OPEN_FILES=\$(lsof -w 2>/dev/null | wc -l); if [ "\$TOTAL_OPEN_FILES" -ge "\$THRESHOLD" ]; then echo "File descriptor threshold reached: \$TOTAL_OPEN_FILES (threshold: \$THRESHOLD). Restarting service."; systemctl restart ragnar.service; exit 0; fi; sleep 10; done &'
 
 [Install]
 WantedBy=multi-user.target

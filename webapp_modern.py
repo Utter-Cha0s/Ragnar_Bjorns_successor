@@ -6413,9 +6413,18 @@ def background_sync_loop(interval=SYNC_BACKGROUND_INTERVAL):
     
     while not shared_data.webapp_should_exit:
         try:
-            sync_all_counts()
-            consecutive_errors = 0  # Reset on success
-            background_thread_health['sync_last_run'] = time.time()
+            # Use a timeout thread to prevent infinite blocking
+            import threading
+            sync_thread = threading.Thread(target=sync_all_counts, daemon=True)
+            sync_thread.start()
+            sync_thread.join(timeout=30)  # 30 second timeout
+            
+            if sync_thread.is_alive():
+                logger.error("Background sync thread timed out after 30 seconds! Skipping this cycle.")
+                consecutive_errors += 1
+            else:
+                consecutive_errors = 0  # Reset on success
+                background_thread_health['sync_last_run'] = time.time()
         except Exception as e:
             consecutive_errors += 1
             logger.error(f"Background sync error (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
@@ -6441,8 +6450,23 @@ def background_arp_scan_loop():
             if current_time - network_scan_last_update >= ARP_SCAN_INTERVAL:
                 logger.debug("Running background ARP scan...")
                 
-                # Run ARP scan
-                arp_hosts = run_arp_scan_localnet('wlan0')
+                # Run ARP scan with timeout protection
+                import threading
+                arp_hosts = {}
+                
+                def run_arp():
+                    nonlocal arp_hosts
+                    arp_hosts = run_arp_scan_localnet('wlan0')
+                
+                arp_thread = threading.Thread(target=run_arp, daemon=True)
+                arp_thread.start()
+                arp_thread.join(timeout=25)  # 25 second timeout (less than ARP_SCAN_INTERVAL)
+                
+                if arp_thread.is_alive():
+                    logger.error("Background ARP scan timed out after 25 seconds! Skipping this cycle.")
+                    consecutive_errors += 1
+                    time.sleep(ARP_SCAN_INTERVAL)
+                    continue
                 
                 # Update cache
                 network_scan_cache['arp_hosts'] = arp_hosts
