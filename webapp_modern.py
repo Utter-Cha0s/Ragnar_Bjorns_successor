@@ -4192,16 +4192,31 @@ def connect_wifi():
         if not wifi_manager or not hasattr(wifi_manager, 'wifi_manager'):
             return jsonify({'success': False, 'error': 'Wi-Fi manager not available'}), 503
         
+        # Log the connection attempt
+        logger.info(f"API: Attempting to connect to WiFi network: {ssid}")
+        
+        # Check if currently in AP mode
+        was_in_ap_mode = wifi_manager.wifi_manager.ap_mode_active
+        if was_in_ap_mode:
+            logger.info(f"API: Currently in AP mode, will stop AP before connecting to {ssid}")
+        
         # Try to connect
         success = wifi_manager.wifi_manager.connect_to_network(ssid, password)
         
-        if success and save_network:
-            # Add to known networks if connection successful
-            wifi_manager.wifi_manager.add_known_network(ssid, password, priority)
-        
-        message = 'Connected successfully' if success else 'Connection failed'
-        if success and is_ap_client_request():
-            message = 'Connected successfully! Ragnar will now use this network. You can disconnect from this AP.'
+        if success:
+            logger.info(f"API: Successfully connected to {ssid}")
+            # Add to known networks if connection successful and save requested
+            if save_network:
+                wifi_manager.wifi_manager.add_known_network(ssid, password, priority)
+            
+            message = 'Connected successfully'
+            if is_ap_client_request():
+                message = 'Connected successfully! Ragnar will now use this network. You can disconnect from this AP.'
+        else:
+            logger.error(f"API: Failed to connect to {ssid}")
+            message = 'Connection failed. Please check the password and try again.'
+            if was_in_ap_mode:
+                message += ' Note: AP mode was stopped to attempt connection.'
         
         return jsonify({
             'success': success,
@@ -4210,6 +4225,8 @@ def connect_wifi():
         
     except Exception as e:
         logger.error(f"Error connecting to Wi-Fi: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/wifi/disconnect', methods=['POST'])
@@ -6209,6 +6226,15 @@ def get_current_status():
     except Exception as e:
         logger.debug(f"Unable to refresh gamification stats: {e}")
 
+    # Get WiFi status details from WiFi manager
+    wifi_status = {}
+    try:
+        wifi_manager = getattr(shared_data, 'ragnar_instance', None)
+        if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
+            wifi_status = wifi_manager.wifi_manager.get_status()
+    except Exception as e:
+        logger.debug(f"Could not get WiFi status from manager: {e}")
+
     return {
         'ragnar_status': safe_str(shared_data.ragnarstatustext),
         'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
@@ -6224,7 +6250,10 @@ def get_current_status():
         'level': safe_int(shared_data.levelnbr),
         'points': safe_int(shared_data.coinnbr),
         'coins': safe_int(shared_data.coinnbr),
-        'wifi_connected': safe_bool(shared_data.wifi_connected),
+        'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
+        'current_ssid': wifi_status.get('current_ssid'),
+        'ap_mode_active': wifi_status.get('ap_mode_active', False),
+        'ap_ssid': wifi_status.get('ap_ssid'),
         'bluetooth_active': safe_bool(shared_data.bluetooth_active),
         'pan_connected': safe_bool(shared_data.pan_connected),
         'usb_active': safe_bool(shared_data.usb_active),
@@ -6396,9 +6425,18 @@ def background_sync_loop(interval=SYNC_BACKGROUND_INTERVAL):
     
     while not shared_data.webapp_should_exit:
         try:
-            sync_all_counts()
-            consecutive_errors = 0  # Reset on success
-            background_thread_health['sync_last_run'] = time.time()
+            # Use a timeout thread to prevent infinite blocking
+            import threading
+            sync_thread = threading.Thread(target=sync_all_counts, daemon=True)
+            sync_thread.start()
+            sync_thread.join(timeout=30)  # 30 second timeout
+            
+            if sync_thread.is_alive():
+                logger.error("Background sync thread timed out after 30 seconds! Skipping this cycle.")
+                consecutive_errors += 1
+            else:
+                consecutive_errors = 0  # Reset on success
+                background_thread_health['sync_last_run'] = time.time()
         except Exception as e:
             consecutive_errors += 1
             logger.error(f"Background sync error (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
@@ -6424,8 +6462,23 @@ def background_arp_scan_loop():
             if current_time - network_scan_last_update >= ARP_SCAN_INTERVAL:
                 logger.debug("Running background ARP scan...")
                 
-                # Run ARP scan
-                arp_hosts = run_arp_scan_localnet('wlan0')
+                # Run ARP scan with timeout protection
+                import threading
+                arp_hosts = {}
+                
+                def run_arp():
+                    nonlocal arp_hosts
+                    arp_hosts = run_arp_scan_localnet('wlan0')
+                
+                arp_thread = threading.Thread(target=run_arp, daemon=True)
+                arp_thread.start()
+                arp_thread.join(timeout=25)  # 25 second timeout (less than ARP_SCAN_INTERVAL)
+                
+                if arp_thread.is_alive():
+                    logger.error("Background ARP scan timed out after 25 seconds! Skipping this cycle.")
+                    consecutive_errors += 1
+                    time.sleep(ARP_SCAN_INTERVAL)
+                    continue
                 
                 # Update cache
                 network_scan_cache['arp_hosts'] = arp_hosts

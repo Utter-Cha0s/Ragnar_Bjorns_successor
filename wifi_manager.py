@@ -584,10 +584,36 @@ class WiFiManager:
             self.stop_ap_mode()
             self._endless_loop_wifi_search()
 
-    def _check_known_networks_available(self):
-        """Check if any known WiFi networks are currently available without disrupting AP mode"""
+    def get_system_wifi_profiles(self):
+        """Get all WiFi connection profiles from NetworkManager (system-wide)"""
         try:
-            if not self.known_networks:
+            result = subprocess.run(['nmcli', '-t', '-f', 'NAME,TYPE', 'con', 'show'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            wifi_profiles = []
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line and ':' in line:
+                        parts = line.split(':')
+                        if len(parts) >= 2 and parts[1] == '802-11-wireless':
+                            wifi_profiles.append(parts[0])
+            
+            self.logger.debug(f"Found {len(wifi_profiles)} system WiFi profiles: {wifi_profiles}")
+            return wifi_profiles
+            
+        except Exception as e:
+            self.logger.error(f"Error getting system WiFi profiles: {e}")
+            return []
+
+    def _check_known_networks_available(self):
+        """Check if any known WiFi networks (Ragnar or system) are currently available without disrupting AP mode"""
+        try:
+            # Get both Ragnar's known networks AND system profiles
+            ragnar_known = [net['ssid'] for net in self.known_networks]
+            system_profiles = self.get_system_wifi_profiles()
+            all_known = list(set(ragnar_known + system_profiles))  # Combine and deduplicate
+            
+            if not all_known:
                 return False
             
             # Try a quick scan using iwlist (less disruptive)
@@ -602,9 +628,8 @@ class WiFiManager:
                             if ssid and ssid != '<hidden>':
                                 available_ssids.append(ssid)
                     
-                    # Check if any known networks are available
-                    known_ssids = [net['ssid'] for net in self.known_networks]
-                    for known_ssid in known_ssids:
+                    # Check if any known networks (Ragnar or system) are available
+                    for known_ssid in all_known:
                         if known_ssid in available_ssids:
                             self.logger.info(f"Known network '{known_ssid}' detected while in AP mode")
                             return True
@@ -766,13 +791,17 @@ class WiFiManager:
             return None
     
     def scan_networks(self):
-        """Scan for available Wi-Fi networks"""
+        """Scan for available Wi-Fi networks and mark those with system profiles"""
         try:
             # If we're in AP mode, use special AP scanning method
             if self.ap_mode_active:
                 return self.scan_networks_while_ap()
             
             self.logger.info("Scanning for Wi-Fi networks...")
+            
+            # Get system WiFi profiles to mark known networks
+            system_profiles = self.get_system_wifi_profiles()
+            ragnar_known = [net['ssid'] for net in self.known_networks]
             
             # Trigger a new scan
             subprocess.run(['nmcli', 'dev', 'wifi', 'rescan'], 
@@ -788,11 +817,14 @@ class WiFiManager:
                     if line and ':' in line:
                         parts = line.split(':')
                         if len(parts) >= 3 and parts[0]:  # SSID not empty
+                            ssid = parts[0]
+                            # Mark as known if EITHER in Ragnar's list OR has system profile
+                            is_known = ssid in ragnar_known or ssid in system_profiles
                             networks.append({
-                                'ssid': parts[0],
+                                'ssid': ssid,
                                 'signal': int(parts[1]) if parts[1].isdigit() else 0,
                                 'security': parts[2] if parts[2] else 'Open',
-                                'known': parts[0] in [net['ssid'] for net in self.known_networks]
+                                'known': is_known
                             })
             
             # Remove duplicates and sort by signal strength
@@ -816,6 +848,10 @@ class WiFiManager:
         try:
             self.logger.info("Scanning networks while in AP mode using smart strategies")
             self.ap_logger.info("Starting network scan while in AP mode (non-disruptive)")
+            
+            # Get system WiFi profiles to mark known networks
+            system_profiles = self.get_system_wifi_profiles()
+            ragnar_known = [net['ssid'] for net in self.known_networks]
             
             # Strategy 1: Return cached networks if we have recent data (within 5 minutes for fresher data)
             if hasattr(self, 'cached_networks') and hasattr(self, 'last_scan_time'):
@@ -889,8 +925,9 @@ class WiFiManager:
                         for network in sorted(networks, key=lambda x: x.get('signal', 0), reverse=True):
                             if network['ssid'] not in seen_ssids:
                                 seen_ssids.add(network['ssid'])
-                                # Add known network flag
-                                network['known'] = network['ssid'] in [net['ssid'] for net in self.known_networks]
+                                # Add known network flag - check BOTH Ragnar and system profiles
+                                ssid = network['ssid']
+                                network['known'] = ssid in ragnar_known or ssid in system_profiles
                                 unique_networks.append(network)
                         
                         # Cache the results
@@ -1063,37 +1100,77 @@ class WiFiManager:
         return False
     
     def connect_to_network(self, ssid, password=None):
-        """Connect to a specific Wi-Fi network"""
+        """Connect to a specific Wi-Fi network - NEVER deletes existing system profiles"""
         try:
             self.logger.info(f"Connecting to network: {ssid}")
-            
-            # Check if connection already exists
-            result = subprocess.run(['nmcli', 'con', 'show', ssid], 
-                                  capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                # Connection exists, try to activate it
-                self.logger.info(f"Using existing connection for {ssid}")
-                result = subprocess.run(['nmcli', 'con', 'up', ssid], 
-                                      capture_output=True, text=True, timeout=30)
+            if password:
+                self.logger.info(f"Password provided: {'*' * len(password)} (length: {len(password)})")
             else:
-                # Create new connection
+                self.logger.info("No password provided (open network or will use saved credentials)")
+            
+            # CRITICAL: If in AP mode, stop it first before connecting to WiFi
+            if self.ap_mode_active:
+                self.logger.info("Stopping AP mode before connecting to WiFi network...")
+                self.stop_ap_mode()
+                time.sleep(2)  # Give system time to clean up AP mode
+            
+            # IMPORTANT: NEVER delete existing NetworkManager profiles!
+            # Check if a connection profile already exists
+            check_result = subprocess.run(['nmcli', 'con', 'show', ssid], 
+                                         capture_output=True, text=True)
+            profile_exists = check_result.returncode == 0
+            
+            if profile_exists:
+                self.logger.info(f"Found existing connection profile for {ssid}")
+                
+                # If password is provided and profile exists, try to update the password
+                if password:
+                    self.logger.info(f"Updating password for existing profile {ssid}")
+                    update_cmd = ['nmcli', 'con', 'modify', ssid, 'wifi-sec.psk', password]
+                    subprocess.run(update_cmd, capture_output=True, text=True)
+                
+                # Try to activate the existing connection
+                self.logger.info(f"Activating existing connection profile for {ssid}")
+                cmd = ['nmcli', 'con', 'up', ssid]
+            else:
+                # No existing profile - create a new one
+                self.logger.info(f"No existing profile found for {ssid}, creating new connection")
                 cmd = ['nmcli', 'dev', 'wifi', 'connect', ssid]
                 if password:
                     cmd.extend(['password', password])
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            self.logger.info(f"Executing: {' '.join(cmd[:3])} {ssid} {'password ***' if password else ''}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
                 # Wait a moment and verify connection
+                self.logger.info(f"Connection command succeeded, verifying connection...")
                 time.sleep(5)
-                return self.check_wifi_connection()
+                connected = self.check_wifi_connection()
+                if connected:
+                    self.logger.info(f"Successfully connected to {ssid}")
+                else:
+                    self.logger.warning(f"Connection command succeeded but verification failed for {ssid}")
+                return connected
             else:
-                self.logger.error(f"nmcli error: {result.stderr}")
+                error_msg = result.stderr.strip()
+                self.logger.error(f"nmcli connection failed for {ssid}: {error_msg}")
+                
+                # Parse common errors
+                if "Secrets were required, but not provided" in error_msg:
+                    self.logger.error("Password was required but not provided or incorrect")
+                elif "No network with SSID" in error_msg:
+                    self.logger.error(f"Network {ssid} not found in range")
+                
                 return False
                 
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"Connection attempt to {ssid} timed out after 30 seconds")
+            return False
         except Exception as e:
             self.logger.error(f"Error connecting to {ssid}: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return False
 
     def disconnect_wifi(self):
@@ -1149,25 +1226,18 @@ class WiFiManager:
             return False
     
     def remove_known_network(self, ssid):
-        """Remove a network from the known networks list"""
+        """Remove a network from Ragnar's known networks list - does NOT delete system NetworkManager profiles"""
         try:
             original_count = len(self.known_networks)
             self.known_networks = [net for net in self.known_networks if net['ssid'] != ssid]
             
             if len(self.known_networks) < original_count:
                 self.save_wifi_config()
-                self.logger.info(f"Removed known network: {ssid}")
-                
-                # Also remove from NetworkManager
-                try:
-                    subprocess.run(['nmcli', 'con', 'delete', ssid], 
-                                 capture_output=True, timeout=10)
-                except:
-                    pass  # Ignore errors, connection might not exist
-                
+                self.logger.info(f"Removed {ssid} from Ragnar's known networks list")
+                self.logger.info(f"NOTE: System NetworkManager profile for {ssid} was NOT deleted - it remains available")
                 return True
             else:
-                self.logger.warning(f"Network {ssid} not found in known networks")
+                self.logger.warning(f"Network {ssid} not found in Ragnar's known networks")
                 return False
                 
         except Exception as e:
@@ -1814,11 +1884,22 @@ port=0
             self.logger.error(f"Error in AP cleanup: {e}")
     
     def get_status(self):
-        """Get current Wi-Fi manager status"""
+        """Get current Wi-Fi manager status with real-time SSID check"""
+        # Always get fresh connection status and SSID
+        wifi_connected = self.check_wifi_connection()
+        current_ssid = self.get_current_ssid() if wifi_connected else None
+        
+        # Update internal state
+        self.wifi_connected = wifi_connected
+        if current_ssid:
+            self.current_ssid = current_ssid
+        elif not wifi_connected:
+            self.current_ssid = None
+        
         status = {
-            'wifi_connected': self.wifi_connected,
+            'wifi_connected': wifi_connected,
             'ap_mode_active': self.ap_mode_active,
-            'current_ssid': self.current_ssid,
+            'current_ssid': current_ssid,
             'known_networks_count': len(self.known_networks),
             'connection_attempts': self.connection_attempts,
             'startup_complete': self.startup_complete,
