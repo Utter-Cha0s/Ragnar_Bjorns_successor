@@ -2205,7 +2205,7 @@ async function verifyServiceRestart() {
         }
     };
     
-    // Start the checking process
+    // Start the checking process after 10s
     checkService();
 }
 
