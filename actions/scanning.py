@@ -172,11 +172,7 @@ class NetworkScanner:
         return all_hosts
 
     def run_nmap_network_scan(self, network_cidr, portstart, portend, extra_ports):
-        """
-        Use nmap to scan entire network for host discovery AND port scanning in one efficient sweep.
-        This is much faster and more reliable than ping sweeps.
-        Returns: dict of {ip: {'hostname': str, 'open_ports': [int]}}
-        """
+
         self.logger.info(f"🚀 Starting nmap network-wide scan: {network_cidr}")
         
         # Most common ports - top 50 commonly used ports
@@ -197,14 +193,7 @@ class NetworkScanner:
         
         port_list = ','.join(map(str, ordered_ports))
         
-        # Nmap arguments for network-wide scan:
-        # -Pn: Skip host discovery (treat all as online)
-        # -sS: SYN scan (requires root, 10x faster than -sT)
-        # --open: Only show open ports
-        # --min-rate 5000: Send at least 5000 probes per second
-        # --max-retries 1: No slow resends
-        # --host-timeout 10s: Limit per-host time strictly
-        # -v: Verbose output
+
         nmap_args = f"-Pn -sS -p{port_list} --open --min-rate 5000 --max-retries 1 --host-timeout 10s -v"
         
         nmap_command = f"nmap {nmap_args} {network_cidr}"
@@ -874,10 +863,7 @@ class NetworkScanner:
             self.use_nmap_results = False
 
         def scan_network_and_write_to_csv(self):
-            """
-            Scans the network using nmap for host/port discovery and arp-scan for MAC addresses.
-            Merges results to get complete host information (IP, MAC, hostname, ports).
-            """
+
             self.outer_instance.check_if_csv_scan_file_exists(self.csv_scan_file, self.csv_result_file, self.netkbfile)
             with self.outer_instance.lock:
                 try:
@@ -1085,11 +1071,7 @@ class NetworkScanner:
                 if self.df.empty or 'Alive' not in self.df.columns or 'Ports' not in self.df.columns:
                     self.logger.warning("DataFrame is empty or missing required columns for port calculation")
                     return
-                
-                # The Alive column is persisted as strings ("1"/"0").
-                # Convert to string and compare against "1" to ensure
-                # compatibility with legacy data written by earlier
-                # components.
+
                 alive_mask = self.df['Alive'].astype(str).str.strip() == '1'
                 alive_df = self.df[alive_mask].copy()
                 
@@ -1309,24 +1291,6 @@ class NetworkScanner:
             self.logger.error(f"Error in scan: {e}")
 
     def deep_scan_host(self, ip, portstart=1, portend=65535, progress_callback=None, use_top_ports=True):
-        """Perform a deep scan on a single host using nmap -sT (TCP connect scan).
-
-        By default (use_top_ports=True) scans the TOP 3000 most common ports via
-        ``nmap --top-ports 3000`` for broader coverage while still faster than a full range scan.
-        When use_top_ports=False, scans the full port range ``portstart-portend``.
-
-        Results are merged with existing data without overwriting existing ports.
-
-        Args:
-            ip (str): Target IPv4 address.
-            portstart (int): Starting port if doing full-range scan.
-            portend (int): Ending port if doing full-range scan.
-            progress_callback (callable|None): Optional callback to emit progress events.
-            use_top_ports (bool): Whether to use nmap --top-ports 3000 fast/extended mode.
-
-        Returns:
-            dict: Scan outcome including success flag, open_ports list, hostname, timing and message.
-        """
         # Debug input parameters (single consolidated line for easier grepping)
         self.logger.info("🔍 DEEP SCAN METHOD CALLED")
         self.logger.info(
@@ -1361,10 +1325,10 @@ class NetworkScanner:
         try:
             # Build nmap args depending on mode
             if use_top_ports:
-                # Fast scan of most common ports (top 3000) for broader coverage while still faster than full range
-                nmap_args = "-Pn -sT --top-ports 3000 --open -T4 --min-rate 500 --max-retries 1 -v"
-                self.logger.info(f"🚀 EXECUTING DEEP SCAN (TOP 3000): nmap {nmap_args} {ip}")
-                self.logger.info("   Mode: top3000 common ports (fast/extended)")
+                # Fast scan of most common ports (top 30000) for broader coverage while still faster than full range
+                nmap_args = "-Pn -sT --top-ports 30000 --open -T4 --min-rate 500 --max-retries 1 -v"
+                self.logger.info(f"🚀 EXECUTING DEEP SCAN (TOP 30000): nmap {nmap_args} {ip}")
+                self.logger.info("   Mode: top30000 common ports (fast/extended)")
             else:
                 # Full range scan (can be slow)
                 nmap_args = f"-Pn -sT -p{portstart}-{portend} --open -T4 --min-rate 1000 --max-retries 1 -v"
