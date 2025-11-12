@@ -2123,10 +2123,10 @@ async function performUpdate() {
             addConsoleMessage('System will restart automatically...', 'info');
             updateElement('update-info', 'Update completed. System restarting...');
             
-            // Check for updates again after a delay
-            setTimeout(() => {
-                checkForUpdates();
-            }, 30000); // Check again in 30 seconds
+            // Wait for service restart and verify it's back up
+            setTimeout(async () => {
+                await verifyServiceRestart();
+            }, 10000); // Start checking after 10 seconds
         } else {
             addConsoleMessage(`Update failed: ${data.error || 'Unknown error'}`, 'error');
             updateElement('update-btn-text', 'Update System');
@@ -2142,6 +2142,71 @@ async function performUpdate() {
         updateBtn.disabled = false;
         updateBtn.className = 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
     }
+}
+
+async function verifyServiceRestart() {
+    let attempts = 0;
+    const maxAttempts = 12; // Try for up to 2 minutes (12 attempts * 10 seconds)
+    
+    addConsoleMessage('Verifying service is back online...', 'info');
+    updateElement('update-info', 'Verifying service restart...');
+    
+    const checkService = async () => {
+        attempts++;
+        
+        try {
+            // Try to fetch the stats endpoint as a health check
+            const response = await fetch('/api/stats', {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 5000
+            });
+            
+            if (response.ok) {
+                // Service is back up
+                addConsoleMessage('✅ Service verified online after update', 'success');
+                updateElement('update-info', 'Update completed successfully. Service is online.');
+                
+                // Reset the update button
+                const updateBtn = document.getElementById('update-btn');
+                updateElement('update-btn-text', 'Update System');
+                updateBtn.disabled = false;
+                updateBtn.className = 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
+                
+                // Check for updates to refresh status
+                setTimeout(() => {
+                    checkForUpdates();
+                }, 5000);
+                
+                return; // Success, exit the checking loop
+            } else {
+                throw new Error(`HTTP ${response.status}`);
+            }
+        } catch (error) {
+            console.log(`Service check attempt ${attempts}/${maxAttempts} failed:`, error.message);
+            
+            if (attempts >= maxAttempts) {
+                // Max attempts reached, service might not have restarted properly
+                addConsoleMessage('⚠️ Service restart verification timeout. Manual check may be needed.', 'warning');
+                updateElement('update-info', 'Update completed, but service verification timed out.');
+                
+                // Reset the update button
+                const updateBtn = document.getElementById('update-btn');
+                updateElement('update-btn-text', 'Update System');
+                updateBtn.disabled = false;
+                updateBtn.className = 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
+                
+                return; // Exit the checking loop
+            }
+            
+            // Continue checking
+            addConsoleMessage(`Service check ${attempts}/${maxAttempts} - waiting for restart...`, 'info');
+            setTimeout(checkService, 10000); // Check again in 10 seconds
+        }
+    };
+    
+    // Start the checking process
+    checkService();
 }
 
 async function checkForUpdatesQuiet() {
