@@ -2024,7 +2024,8 @@ def get_stable_network_data():
         # Process network data first (most stable)
         for entry in network_data:
             ip = entry.get('IPs', '').strip()  # Fixed: Use 'IPs' not 'IP'
-            if not ip or ip in processed_ips:
+            # Skip if empty, already processed, or is STANDALONE
+            if not ip or ip in processed_ips or ip == 'STANDALONE':
                 continue
                 
             processed_ips.add(ip)
@@ -2075,8 +2076,8 @@ def get_stable_network_data():
             ip = entry.get('IPs', '').strip()
             alive = entry.get('Alive', '0')
             
-            # Skip if already processed or not alive
-            if not ip or ip in processed_ips or alive not in ['1', 1]:
+            # Skip if already processed, not alive, or is STANDALONE
+            if not ip or ip in processed_ips or ip == 'STANDALONE' or alive not in ['1', 1]:
                 continue
                 
             processed_ips.add(ip)
@@ -2125,7 +2126,17 @@ def get_stable_network_data():
                 enriched_hosts.append(host_data)
         
         # Sort by IP address for consistent display
-        enriched_hosts.sort(key=lambda x: tuple(map(int, x['ip'].split('.'))))
+        # Handle non-IP values like "STANDALONE" gracefully
+        def safe_ip_sort_key(host):
+            ip = host.get('ip', '')
+            try:
+                # Try to parse as IP address
+                return (0, tuple(map(int, ip.split('.'))))
+            except (ValueError, AttributeError):
+                # Non-IP values (like "STANDALONE") sort to the end
+                return (1, ip)
+        
+        enriched_hosts.sort(key=safe_ip_sort_key)
         
         response = jsonify({
             'success': True,
