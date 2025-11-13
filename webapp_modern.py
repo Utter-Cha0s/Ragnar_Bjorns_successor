@@ -26,8 +26,9 @@ import importlib
 import hashlib
 import ipaddress
 import socket
-from datetime import datetime, timedelta
-from flask import Flask, render_template, jsonify, request, send_from_directory, Response
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+from flask import Flask, render_template, jsonify, request, send_from_directory, Response, make_response
 from flask_socketio import SocketIO, emit
 try:
     from flask_cors import CORS  # type: ignore
@@ -95,6 +96,21 @@ SEP_SCAN_COMMAND = ['sudo', 'sep-scan']
 MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 
 
+def _normalize_value(value, default='Unknown'):
+    """Normalize a value, handling nan, None, empty strings, etc."""
+    if value is None:
+        return default
+    
+    # Convert to string
+    str_value = str(value).strip()
+    
+    # Check for pandas nan or various empty representations
+    if not str_value or str_value.lower() in ['nan', 'none', 'null', '']:
+        return default
+    
+    return str_value
+
+
 def _is_valid_ipv4(value):
     try:
         ipaddress.ip_address(value)
@@ -105,6 +121,37 @@ def _is_valid_ipv4(value):
 
 def _normalize_mac(mac):
     return mac.lower() if mac else ''
+
+
+def _parse_attack_timestamp(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (ValueError, OSError):
+            return None
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+
+        if cleaned.endswith('Z') and '+' not in cleaned:
+            cleaned = cleaned[:-1] + '+00:00'
+
+        parsers = (
+            lambda v: datetime.fromisoformat(v),
+            lambda v: datetime.strptime(v, '%Y-%m-%d %H:%M:%S'),
+            lambda v: datetime.strptime(v, '%Y-%m-%dT%H:%M:%S'),
+        )
+
+        for parser in parsers:
+            try:
+                return parser(cleaned)
+            except ValueError:
+                continue
+
+    return None
 
 
 def _parse_arp_scan_output(output):
@@ -254,6 +301,9 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
                     row['Hostnames'] = ';'.join(sorted(set(existing_hostnames)))
 
                 row['Alive'] = alive_value
+                # CRITICAL: NEVER clear the Ports field here!
+                # Ports are managed by scanning.py - we only update Alive/MAC/Hostname
+                # Preserve existing ports to prevent data loss
                 updated_row = row
                 break
 
@@ -267,7 +317,10 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
                 # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
                 new_row['MAC Address'] = ''
             new_row['Alive'] = alive_value
-            new_row['Ports'] = ''
+            # CRITICAL: Don't set Ports to '' - preserve existing ports if they exist
+            # The Ports field should only be updated by scanning.py during actual port scans
+            # Leave it empty for new entries, but scanning.py will populate it
+            new_row['Ports'] = new_row.get('Ports', '')  # Preserve if exists, empty if new
             rows.append(new_row)
             updated_row = new_row
 
@@ -1992,22 +2045,23 @@ def get_stable_network_data():
         # Process network data first (most stable)
         for entry in network_data:
             ip = entry.get('IPs', '').strip()  # Fixed: Use 'IPs' not 'IP'
-            if not ip or ip in processed_ips:
+            # Skip if empty, already processed, or is STANDALONE
+            if not ip or ip in processed_ips or ip == 'STANDALONE':
                 continue
                 
             processed_ips.add(ip)
             
             host_data = {
                 'ip': ip,
-                'hostname': entry.get('Hostnames', '').strip() or 'Unknown',
-                'mac': entry.get('MAC Address', '').strip() or 'Unknown',
+                'hostname': _normalize_value(entry.get('Hostnames'), 'Unknown'),
+                'mac': _normalize_value(entry.get('MAC Address'), 'Unknown'),
                 'status': 'up' if entry.get('Alive') in [True, 'True', '1', 1] else 'unknown',
-                'ports': entry.get('Ports', '').strip() or 'Unknown',
-                'vulnerabilities': str(entry.get('Vulnerabilities', '0')).strip() or '0',
-                'last_scan': entry.get('LastSeen', '').strip() or 'Never',
-                'first_seen': entry.get('First_Seen', '').strip() or 'Unknown',
-                'os': entry.get('OS', '').strip() or 'Unknown',
-                'services': entry.get('Services', '').strip() or 'Unknown',
+                'ports': _normalize_value(entry.get('Ports'), 'Unknown'),
+                'vulnerabilities': _normalize_value(entry.get('Vulnerabilities'), '0'),
+                'last_scan': _normalize_value(entry.get('LastSeen'), 'Never'),
+                'first_seen': _normalize_value(entry.get('First_Seen'), 'Unknown'),
+                'os': _normalize_value(entry.get('OS'), 'Unknown'),
+                'services': _normalize_value(entry.get('Services'), 'Unknown'),
                 'source': 'network_data'
             }
             
@@ -2043,23 +2097,23 @@ def get_stable_network_data():
             ip = entry.get('IPs', '').strip()
             alive = entry.get('Alive', '0')
             
-            # Skip if already processed or not alive
-            if not ip or ip in processed_ips or alive not in ['1', 1]:
+            # Skip if already processed, not alive, or is STANDALONE
+            if not ip or ip in processed_ips or ip == 'STANDALONE' or alive not in ['1', 1]:
                 continue
                 
             processed_ips.add(ip)
             
             host_data = {
                 'ip': ip,
-                'hostname': entry.get('Hostnames', '').strip() or 'Unknown',
-                'mac': entry.get('MAC Address', '').strip() or 'Unknown', 
+                'hostname': _normalize_value(entry.get('Hostnames'), 'Unknown'),
+                'mac': _normalize_value(entry.get('MAC Address'), 'Unknown'), 
                 'status': 'up',
-                'ports': entry.get('Ports', '').strip() or 'Unknown',
-                'vulnerabilities': str(entry.get('Vulnerabilities', '0')).strip() or '0',
-                'last_scan': entry.get('LastSeen', '').strip() or 'Unknown',
-                'first_seen': entry.get('First_Seen', '').strip() or 'Unknown',
-                'os': entry.get('OS', '').strip() or 'Unknown',
-                'services': entry.get('Services', '').strip() or 'Unknown',
+                'ports': _normalize_value(entry.get('Ports'), 'Unknown'),
+                'vulnerabilities': _normalize_value(entry.get('Vulnerabilities'), '0'),
+                'last_scan': _normalize_value(entry.get('LastSeen'), 'Unknown'),
+                'first_seen': _normalize_value(entry.get('First_Seen'), 'Unknown'),
+                'os': _normalize_value(entry.get('OS'), 'Unknown'),
+                'services': _normalize_value(entry.get('Services'), 'Unknown'),
                 'source': 'netkb'
             }
             
@@ -2093,7 +2147,17 @@ def get_stable_network_data():
                 enriched_hosts.append(host_data)
         
         # Sort by IP address for consistent display
-        enriched_hosts.sort(key=lambda x: tuple(map(int, x['ip'].split('.'))))
+        # Handle non-IP values like "STANDALONE" gracefully
+        def safe_ip_sort_key(host):
+            ip = host.get('ip', '')
+            try:
+                # Try to parse as IP address
+                return (0, tuple(map(int, ip.split('.'))))
+            except (ValueError, AttributeError):
+                # Non-IP values (like "STANDALONE") sort to the end
+                return (1, ip)
+        
+        enriched_hosts.sort(key=safe_ip_sort_key)
         
         response = jsonify({
             'success': True,
@@ -2482,18 +2546,19 @@ def attack_logs():
             days_back = int(request.args.get('days', 7))
             
             attack_log_dir = os.path.join(shared_data.logsdir, 'attacks')
-            
+
             if not os.path.exists(attack_log_dir):
                 return jsonify({
                     'attack_logs': [],
                     'total_count': 0,
                     'message': 'No attack logs found'
                 })
-            
+
             # Collect logs from recent days
             all_logs = []
+            latest_log_time_all = None
             cutoff_date = datetime.now() - timedelta(days=days_back)
-            
+
             for log_file in os.listdir(attack_log_dir):
                 if not log_file.startswith('attacks_') or not log_file.endswith('.json'):
                     continue
@@ -2513,13 +2578,18 @@ def attack_logs():
                     with open(log_path, 'r', encoding='utf-8') as f:
                         logs = json.load(f)
                         all_logs.extend(logs)
+
+                        for entry in logs:
+                            parsed_time = _parse_attack_timestamp(entry.get('timestamp'))
+                            if parsed_time and (latest_log_time_all is None or parsed_time > latest_log_time_all):
+                                latest_log_time_all = parsed_time
                 except Exception as e:
                     logger.error(f"Error reading attack log file {log_file}: {e}")
                     continue
-            
+
             # Apply filters
             filtered_logs = all_logs
-            
+
             if ip_filter:
                 filtered_logs = [log for log in filtered_logs if log.get('target_ip') == ip_filter]
             
@@ -2531,17 +2601,23 @@ def attack_logs():
             
             # Sort by timestamp (most recent first)
             filtered_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-            
+
             # Apply limit
             filtered_logs = filtered_logs[:limit]
-            
+
             # Generate summary statistics
             total_count = len(all_logs)
             filtered_count = len(filtered_logs)
             success_count = len([log for log in filtered_logs if log.get('status') == 'success'])
             failed_count = len([log for log in filtered_logs if log.get('status') == 'failed'])
-            
-            return jsonify({
+
+            filtered_latest = None
+            for entry in filtered_logs:
+                parsed_time = _parse_attack_timestamp(entry.get('timestamp'))
+                if parsed_time and (filtered_latest is None or parsed_time > filtered_latest):
+                    filtered_latest = parsed_time
+
+            response_payload = {
                 'attack_logs': filtered_logs,
                 'total_count': total_count,
                 'filtered_count': filtered_count,
@@ -2554,8 +2630,41 @@ def attack_logs():
                     'days': days_back,
                     'limit': limit
                 }
-            })
-            
+            }
+
+            etag_source = json.dumps({
+                'attack_logs': filtered_logs,
+                'total_count': total_count,
+                'filtered_count': filtered_count,
+                'success_count': success_count,
+                'failed_count': failed_count
+            }, sort_keys=True).encode('utf-8')
+
+            etag_value = f'W/"attack-{hashlib.md5(etag_source).hexdigest()}"'
+
+            last_modified_dt = filtered_latest or latest_log_time_all
+            if last_modified_dt and last_modified_dt.tzinfo is None:
+                last_modified_dt = last_modified_dt.replace(tzinfo=timezone.utc)
+
+            if_none_match = request.headers.get('If-None-Match', '')
+            if if_none_match:
+                etag_matches = [tag.strip() for tag in if_none_match.split(',') if tag.strip()]
+                if etag_value in etag_matches:
+                    response = make_response('', 304)
+                    response.headers['ETag'] = etag_value
+                    response.headers['Cache-Control'] = 'no-cache'
+                    if last_modified_dt:
+                        response.headers['Last-Modified'] = format_datetime(last_modified_dt.astimezone(timezone.utc), usegmt=True)
+                    return response
+
+            response = jsonify(response_payload)
+            response.headers['ETag'] = etag_value
+            response.headers['Cache-Control'] = 'no-cache'
+            if last_modified_dt:
+                response.headers['Last-Modified'] = format_datetime(last_modified_dt.astimezone(timezone.utc), usegmt=True)
+
+            return response
+
         except Exception as e:
             logger.error(f"Error retrieving attack logs: {e}")
             return jsonify({
@@ -4181,6 +4290,15 @@ def reset_vulnerabilities():
             except Exception as e:
                 logger.error(f"Error clearing vulnerability scan files: {e}")
         
+        # CRITICAL: Clear scan history cache so all hosts will be rescanned
+        scanned_ports_history_file = os.path.join('data', 'output', 'vulnerabilities', 'scanned_ports_history.json')
+        if os.path.exists(scanned_ports_history_file):
+            try:
+                os.remove(scanned_ports_history_file)
+                logger.info("✅ Cleared scan history cache - all hosts will be rescanned on next vulnerability scan")
+            except Exception as e:
+                logger.error(f"Error clearing scan history cache: {e}")
+        
         # Reset vulnerability counter
         shared_data.vulnnbr = 0
         
@@ -5433,8 +5551,17 @@ def get_stats():
         # Add scan results count
         if os.path.exists(shared_data.netkbfile):
             import pandas as pd
-            df = pd.read_csv(shared_data.netkbfile)
-            stats['scan_results_count'] = safe_int(len(df[df['Alive'] == 1]) if 'Alive' in df.columns else len(df))
+            try:
+                # Robust CSV parsing - skip malformed rows
+                try:
+                    df = pd.read_csv(shared_data.netkbfile, on_bad_lines='warn')
+                except TypeError:
+                    # Fallback for older pandas
+                    df = pd.read_csv(shared_data.netkbfile, error_bad_lines=False, warn_bad_lines=True)
+                stats['scan_results_count'] = safe_int(len(df[df['Alive'] == 1]) if 'Alive' in df.columns else len(df))
+            except Exception as e:
+                logger.warning(f"Could not read netkb for stats: {e}")
+                stats['scan_results_count'] = 0
         
         # Add threat intelligence stats
         if threat_intelligence:
@@ -6287,7 +6414,12 @@ def legacy_netkb_json():
             return jsonify({'ips': [], 'ports': {}, 'actions': []})
             
         import pandas as pd
-        df = pd.read_csv(netkb_file)
+        # Robust CSV parsing - skip malformed rows
+        try:
+            df = pd.read_csv(netkb_file, on_bad_lines='warn')
+        except TypeError:
+            # Fallback for older pandas
+            df = pd.read_csv(netkb_file, error_bad_lines=False, warn_bad_lines=True)
         data = df[df['Alive'] == 1] if 'Alive' in df.columns else df
         
         # Get available actions from actions file

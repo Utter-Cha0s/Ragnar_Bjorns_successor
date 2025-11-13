@@ -455,6 +455,12 @@ class SharedData:
         self.y_bottom = 0  # Initialize y_bottom for image positioning
         self.x_center1 = 0  # Alternative positioning
         self.y_bottom1 = 0  # Alternative positioning
+        
+        # In-memory scan results for immediate orchestrator access
+        # Stores latest live hosts from scanner without waiting for CSV writes
+        self.latest_scan_results = None  # List of host dicts with 'MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports', etc.
+        self.latest_scan_timestamp = 0.0  # Time when last scan completed
+        self._scan_results_lock = threading.Lock()  # Thread-safe access to scan results
 
     def load_gamification_data(self):
         """Load persistent gamification progress from disk."""
@@ -893,14 +899,65 @@ class SharedData:
             raise
 
 
+    def set_latest_scan_results(self, scan_data):
+        """Store fresh scan results in memory for immediate orchestrator access.
+        
+        Args:
+            scan_data: List of dictionaries with keys: 'MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports', etc.
+        """
+        with self._scan_results_lock:
+            self.latest_scan_results = scan_data
+            self.latest_scan_timestamp = time.time()
+            logger.info(f"📋 Stored {len(scan_data)} live hosts in memory for immediate orchestrator access")
+    
+    def get_latest_scan_results(self):
+        """Retrieve fresh scan results from memory if available.
+        
+        Returns:
+            List of host dictionaries if available, None otherwise
+        """
+        with self._scan_results_lock:
+            if self.latest_scan_results is not None:
+                age_seconds = time.time() - self.latest_scan_timestamp
+                logger.info(f"📋 Retrieved {len(self.latest_scan_results)} hosts from memory (age: {age_seconds:.1f}s)")
+            return self.latest_scan_results
+    
     def read_data(self):
-        """Read data from the CSV file."""
+        """Read data from the CSV file with robust error handling."""
         self.initialize_csv()  # Ensure CSV is initialized with correct headers
         data = []
-        with open(self.netkbfile, 'r') as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                data.append(row)
+        try:
+            with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
+                reader = csv.DictReader(file)
+                expected_fieldnames = reader.fieldnames
+                
+                for line_num, row in enumerate(reader, start=2):  # Start at 2 (after header)
+                    try:
+                        # Check if row has extra fields (malformed)
+                        if len(row) > len(expected_fieldnames) if expected_fieldnames else False:
+                            logger.warning(f"Skipping malformed row {line_num} in netkb.csv: too many fields")
+                            continue
+                        
+                        # Only add rows with valid MAC address
+                        if row.get("MAC Address") and row["MAC Address"].strip():
+                            data.append(row)
+                    except Exception as row_error:
+                        logger.warning(f"Error reading row {line_num} in netkb.csv: {row_error}")
+                        continue
+                        
+        except Exception as e:
+            logger.error(f"Error reading netkb.csv: {e}")
+            # If file is corrupted, try to restore from backup
+            backup_file = f"{self.netkbfile}.backup"
+            if os.path.exists(backup_file):
+                logger.info(f"Attempting to restore from backup: {backup_file}")
+                try:
+                    import shutil
+                    shutil.copy2(backup_file, self.netkbfile)
+                    return self.read_data()  # Retry reading
+                except Exception as restore_error:
+                    logger.error(f"Could not restore from backup: {restore_error}")
+        
         return data
 
     def write_data(self, data):
@@ -909,15 +966,43 @@ class SharedData:
             actions = json.load(file)
         action_names = [action["b_class"] for action in actions if "b_class" in action]
 
-        # Read existing CSV file if it exists
+        # Read existing CSV file if it exists with error handling
+        existing_headers = []
+        existing_data = []
+        
         if os.path.exists(self.netkbfile):
-            with open(self.netkbfile, 'r') as file:
-                reader = csv.DictReader(file)
-                existing_headers = reader.fieldnames
-                existing_data = list(reader)
-        else:
-            existing_headers = []
-            existing_data = []
+            try:
+                with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
+                    reader = csv.DictReader(file)
+                    existing_headers = list(reader.fieldnames) if reader.fieldnames else []
+                    
+                    for line_num, row in enumerate(reader, start=2):
+                        try:
+                            # Skip malformed rows
+                            if len(row) > len(existing_headers) if existing_headers else False:
+                                logger.warning(f"Skipping malformed row {line_num} during write_data")
+                                continue
+                            existing_data.append(row)
+                        except Exception as row_error:
+                            logger.warning(f"Error reading row {line_num}: {row_error}")
+                            continue
+                            
+            except Exception as read_error:
+                logger.error(f"Error reading netkbfile for write_data: {read_error}")
+                # Try backup if available
+                backup_file = f"{self.netkbfile}.backup"
+                if os.path.exists(backup_file):
+                    logger.info("Attempting to restore from backup before write")
+                    try:
+                        import shutil
+                        shutil.copy2(backup_file, self.netkbfile)
+                        # Retry read
+                        with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
+                            reader = csv.DictReader(file)
+                            existing_headers = list(reader.fieldnames) if reader.fieldnames else []
+                            existing_data = list(reader)
+                    except Exception as restore_error:
+                        logger.error(f"Could not restore from backup: {restore_error}")
 
         # Check for missing action columns and add them
         new_headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"] + action_names
@@ -941,14 +1026,47 @@ class SharedData:
                 # Add new row
                 mac_to_existing_row[mac_address] = new_row
 
-        # Write updated data back to CSV
-        with open(self.netkbfile, 'w', newline='') as file:
-            writer = csv.DictWriter(file, fieldnames=headers)
-            writer.writeheader()
-
-            # Write all data
-            for row in mac_to_existing_row.values():
-                writer.writerow(row)
+        # Write updated data back to CSV with backup protection
+        import tempfile
+        import shutil
+        
+        # Only write if we have data to write
+        if not mac_to_existing_row:
+            self.print("Warning: No data to write to netkb.csv - skipping write")
+            return
+        
+        # Create backup of existing file if it exists and has content
+        if os.path.exists(self.netkbfile) and os.path.getsize(self.netkbfile) > 100:
+            backup_file = f"{self.netkbfile}.backup"
+            try:
+                shutil.copy2(self.netkbfile, backup_file)
+                self.print(f"Created backup: {backup_file}")
+            except Exception as backup_error:
+                logger.warning(f"Could not create backup: {backup_error}")
+        
+        # Write to temporary file first (atomic operation)
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.netkbfile), suffix='.tmp')
+        try:
+            with os.fdopen(temp_fd, 'w', newline='') as file:
+                writer = csv.DictWriter(file, fieldnames=headers)
+                writer.writeheader()
+                
+                # Write all data
+                for row in mac_to_existing_row.values():
+                    writer.writerow(row)
+            
+            # Verify temp file has content before replacing original
+            if os.path.getsize(temp_path) > 50:  # At least headers
+                shutil.move(temp_path, self.netkbfile)
+                self.print(f"Successfully wrote {len(mac_to_existing_row)} entries to netkb.csv")
+            else:
+                logger.error("Temp file is too small - aborting write to prevent data loss")
+                os.unlink(temp_path)
+        except Exception as write_error:
+            logger.error(f"Error writing netkb.csv: {write_error}")
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
 
     def update_stats(self, persist=True):
         """Update gamification stats using lifetime achievements rather than volatile counts."""

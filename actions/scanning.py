@@ -438,33 +438,68 @@ class NetworkScanner:
             try:
                 netkb_entries = {}
                 existing_action_columns = []
+                existing_headers = None
 
-                # Read existing CSV file
+                # Read existing CSV file with robust error handling
                 if os.path.exists(netkbfile):
-                    with open(netkbfile, 'r') as file:
-                        reader = csv.DictReader(file)
-                        existing_headers = reader.fieldnames
-                        # Preserve deep scan metadata columns alongside action columns
-                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings", "Deep_Scanned", "Deep_Scan_Ports"]]
-                        for row in reader:
-                            mac = row["MAC Address"]
-                            ips = row["IPs"].split(';')
-                            hostnames = row["Hostnames"].split(';')
-                            alive = row["Alive"]
-                            ports = row["Ports"].split(';')
-                            failed_pings = int(row.get("Failed_Pings", "0"))  # Default to 0 if missing
-                            netkb_entries[mac] = {
-                                'IPs': set(ips) if ips[0] else set(),
-                                'Hostnames': set(hostnames) if hostnames[0] else set(),
-                                'Alive': alive,
-                                'Ports': set(ports) if ports[0] else set(),
-                                'Failed_Pings': failed_pings,
-                                # Preserve deep scan metadata
-                                'Deep_Scanned': row.get("Deep_Scanned", ""),
-                                'Deep_Scan_Ports': row.get("Deep_Scan_Ports", "")
-                            }
-                            for action in existing_action_columns:
-                                netkb_entries[mac][action] = row.get(action, "")
+                    try:
+                        with open(netkbfile, 'r', newline='', encoding='utf-8') as file:
+                            reader = csv.DictReader(file)
+                            existing_headers = list(reader.fieldnames) if reader.fieldnames else []
+                            # Preserve deep scan metadata columns alongside action columns
+                            existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings", "Deep_Scanned", "Deep_Scan_Ports"]]
+                            
+                            for line_num, row in enumerate(reader, start=2):
+                                try:
+                                    # Skip malformed rows
+                                    if not row.get("MAC Address") or not row["MAC Address"].strip():
+                                        self.logger.warning(f"Skipping row {line_num} with empty MAC address")
+                                        continue
+                                    
+                                    mac = row["MAC Address"]
+                                    ips = row.get("IPs", "").split(';')
+                                    hostnames = row.get("Hostnames", "").split(';')
+                                    alive = row.get("Alive", "0")
+                                    ports = row.get("Ports", "").split(';')
+                                    
+                                    # Safely parse Failed_Pings with fallback for empty strings
+                                    failed_pings_str = row.get("Failed_Pings", "0")
+                                    try:
+                                        failed_pings = int(failed_pings_str) if failed_pings_str and failed_pings_str.strip() else 0
+                                    except ValueError:
+                                        self.logger.warning(f"Error parsing Failed_Pings in row {line_num}: invalid value '{failed_pings_str}', defaulting to 0")
+                                        failed_pings = 0
+                                    
+                                    netkb_entries[mac] = {
+                                        'IPs': set(ips) if ips[0] else set(),
+                                        'Hostnames': set(hostnames) if hostnames[0] else set(),
+                                        'Alive': alive,
+                                        'Ports': set(ports) if ports[0] else set(),
+                                        'Failed_Pings': failed_pings,
+                                        # Preserve deep scan metadata
+                                        'Deep_Scanned': row.get("Deep_Scanned", ""),
+                                        'Deep_Scan_Ports': row.get("Deep_Scan_Ports", "")
+                                    }
+                                    for action in existing_action_columns:
+                                        netkb_entries[mac][action] = row.get(action, "")
+                                        
+                                except Exception as row_error:
+                                    self.logger.warning(f"Error parsing row {line_num} in netkb: {row_error}")
+                                    continue
+                                    
+                    except Exception as read_error:
+                        self.logger.error(f"Error reading netkb file: {read_error}")
+                        # Try to restore from backup
+                        backup_file = f"{netkbfile}.backup"
+                        if os.path.exists(backup_file):
+                            self.logger.info("Attempting to restore netkb from backup")
+                            try:
+                                import shutil
+                                shutil.copy2(backup_file, netkbfile)
+                                # Retry reading with recursive call
+                                return self.update_netkb(netkbfile, netkb_data, alive_macs)
+                            except Exception as restore_error:
+                                self.logger.error(f"Could not restore from backup: {restore_error}")
 
                 ip_to_mac = {}  # Dictionary to track IP to MAC associations
 
@@ -493,7 +528,7 @@ class NetworkScanner:
                         # Mark the old MAC as having a failed ping instead of immediately dead
                         old_mac = ip_to_mac[ip]
                         if old_mac in netkb_entries:
-                            max_failed_pings = self.shared_data.config.get('network_max_failed_pings', 15)
+                            max_failed_pings = self.shared_data.config.get('network_max_failed_pings', 30)
                             current_failures = netkb_entries[old_mac].get('Failed_Pings', 0) + 1
                             netkb_entries[old_mac]['Failed_Pings'] = current_failures
                             
@@ -502,7 +537,7 @@ class NetworkScanner:
                                 netkb_entries[old_mac]['Alive'] = '0'
                                 self.logger.info(f"Old MAC {old_mac} marked offline after {current_failures} consecutive failed pings (IP reassigned to {mac})")
                             else:
-                                netkb_entries[old_mac]['Alive'] = '1'  # Keep alive per 15-ping rule
+                                netkb_entries[old_mac]['Alive'] = '1'  # Keep alive per 30-ping rule
                                 self.logger.debug(f"Old MAC {old_mac} failed ping {current_failures}/{max_failed_pings} due to IP reassignment - keeping alive")
 
                     # Update or create entry for the new MAC
@@ -532,8 +567,8 @@ class NetworkScanner:
                         for action in existing_action_columns:
                             netkb_entries[mac][action] = ""
 
-                # Update all existing entries - implement 15-failed-pings rule instead of immediate death
-                max_failed_pings = self.shared_data.config.get('network_max_failed_pings', 15)
+                # Update all existing entries - implement 30-failed-pings rule instead of immediate death
+                max_failed_pings = self.shared_data.config.get('network_max_failed_pings', 30)
                 for mac in netkb_entries:
                     if mac not in alive_macs:
                         # Host not found in current scan - increment failure count
@@ -546,7 +581,7 @@ class NetworkScanner:
                             self.logger.info(f"Host {mac} marked offline after {netkb_entries[mac]['Failed_Pings']} consecutive failed pings")
                         else:
                             # Keep alive until threshold reached
-                            netkb_entries[mac]['Alive'] = '1'  # Keep alive per 15-ping rule
+                            netkb_entries[mac]['Alive'] = '1'  # Keep alive per 30-ping rule
                             self.logger.debug(f"Host {mac} failed ping {netkb_entries[mac]['Failed_Pings']}/{max_failed_pings} - keeping alive per {max_failed_pings}-ping rule")
 
                 # Remove entries with multiple IP addresses for a single MAC address
@@ -554,49 +589,77 @@ class NetworkScanner:
 
                 sorted_netkb_entries = sorted(netkb_entries.items(), key=lambda x: self.ip_key(sorted(x[1]['IPs'])[0]))
 
-                with open(netkbfile, 'w', newline='') as file:
-                    writer = csv.writer(file)
-                    # Ensure Failed_Pings and Deep Scan columns are included in headers
-                    if "Failed_Pings" not in existing_headers:
-                        # Insert Failed_Pings after Ports column
-                        headers_list = list(existing_headers)
-                        if "Ports" in headers_list:
-                            ports_index = headers_list.index("Ports")
-                            headers_list.insert(ports_index + 1, "Failed_Pings")
-                        else:
-                            headers_list.append("Failed_Pings")
-                        existing_headers = headers_list
+                # Only write if we have data
+                if not sorted_netkb_entries:
+                    self.logger.warning("No entries to write to netkb - skipping write")
+                    return
+                
+                # Initialize headers if not read from file
+                if existing_headers is None:
+                    existing_headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"]
+                
+                # Use atomic write with temp file
+                import tempfile
+                import shutil
+                temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(netkbfile), suffix='.tmp')
+                
+                try:
+                    with os.fdopen(temp_fd, 'w', newline='') as file:
+                        writer = csv.writer(file)
+                        # Ensure Failed_Pings and Deep Scan columns are included in headers
+                        if "Failed_Pings" not in existing_headers:
+                            # Insert Failed_Pings after Ports column
+                            headers_list = list(existing_headers)
+                            if "Ports" in headers_list:
+                                ports_index = headers_list.index("Ports")
+                                headers_list.insert(ports_index + 1, "Failed_Pings")
+                            else:
+                                headers_list.append("Failed_Pings")
+                            existing_headers = headers_list
+                        
+                        # Add Deep Scan columns if not present
+                        if "Deep_Scanned" not in existing_headers:
+                            headers_list = list(existing_headers)
+                            headers_list.append("Deep_Scanned")
+                            existing_headers = headers_list
+                        
+                        if "Deep_Scan_Ports" not in existing_headers:
+                            headers_list = list(existing_headers)
+                            headers_list.append("Deep_Scan_Ports")
+                            existing_headers = headers_list
+                        
+                        # Update action columns list to exclude all metadata columns
+                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings", "Deep_Scanned", "Deep_Scan_Ports"]]
+                        
+                        writer.writerow(existing_headers)  # Write updated headers
+                        for mac, data in sorted_netkb_entries:
+                            # Filter out empty strings from ports before sorting
+                            valid_ports = [p for p in data['Ports'] if p]
+                            row = [
+                                mac,
+                                ';'.join(sorted(data['IPs'], key=self.ip_key)),
+                                ';'.join(sorted(data['Hostnames'])),
+                                data['Alive'],
+                                ';'.join(sorted(valid_ports, key=int)) if valid_ports else '',
+                                str(data.get('Failed_Pings', 0)),
+                                data.get('Deep_Scanned', ''),
+                                data.get('Deep_Scan_Ports', '')
+                            ]
+                            row.extend(data.get(action, "") for action in existing_action_columns)
+                            writer.writerow(row)
                     
-                    # Add Deep Scan columns if not present
-                    if "Deep_Scanned" not in existing_headers:
-                        headers_list = list(existing_headers)
-                        headers_list.append("Deep_Scanned")
-                        existing_headers = headers_list
-                    
-                    if "Deep_Scan_Ports" not in existing_headers:
-                        headers_list = list(existing_headers)
-                        headers_list.append("Deep_Scan_Ports")
-                        existing_headers = headers_list
-                    
-                    # Update action columns list to exclude all metadata columns
-                    existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings", "Deep_Scanned", "Deep_Scan_Ports"]]
-                    
-                    writer.writerow(existing_headers)  # Write updated headers
-                    for mac, data in sorted_netkb_entries:
-                        # Filter out empty strings from ports before sorting
-                        valid_ports = [p for p in data['Ports'] if p]
-                        row = [
-                            mac,
-                            ';'.join(sorted(data['IPs'], key=self.ip_key)),
-                            ';'.join(sorted(data['Hostnames'])),
-                            data['Alive'],
-                            ';'.join(sorted(valid_ports, key=int)) if valid_ports else '',
-                            str(data.get('Failed_Pings', 0)),
-                            data.get('Deep_Scanned', ''),
-                            data.get('Deep_Scan_Ports', '')
-                        ]
-                        row.extend(data.get(action, "") for action in existing_action_columns)
-                        writer.writerow(row)
+                    # Verify temp file before replacing original
+                    if os.path.getsize(temp_path) > 50:
+                        shutil.move(temp_path, netkbfile)
+                        self.logger.info(f"✅ Updated netkb.csv with {len(sorted_netkb_entries)} entries")
+                    else:
+                        self.logger.error("Temp file too small - aborting write")
+                        os.unlink(temp_path)
+                except Exception as write_error:
+                    self.logger.error(f"Error writing netkb: {write_error}")
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                    raise
             except Exception as e:
                 self.logger.error(f"Error in update_netkb: {e}")
 
@@ -1223,6 +1286,7 @@ class NetworkScanner:
     def scan(self):
         """
         Initiates the network scan, updates the netkb file, and displays the results.
+        Now also stores results in memory for immediate orchestrator access.
         """
         try:
             self.shared_data.ragnarorch_status = "NetworkScanner"
@@ -1277,6 +1341,15 @@ class NetworkScanner:
                         writer.writerow([ip, hostname, alive, mac] + [str(port) if port in ports else '' for port in all_ports])
 
             self.update_netkb(netkbfile, netkb_data, alive_macs)
+            
+            # Store fresh scan results in memory for immediate orchestrator access
+            # This eliminates race conditions with CSV file writes
+            try:
+                live_hosts = self.shared_data.read_data()  # Read the just-updated netkb
+                self.shared_data.set_latest_scan_results(live_hosts)
+                self.logger.info(f"✅ Scan results handed off to memory - orchestrator can proceed immediately")
+            except Exception as e:
+                self.logger.error(f"Failed to store scan results in memory: {e}")
 
             if self.displaying_csv:
                 self.display_csv(csv_result_file)
@@ -1486,15 +1559,31 @@ class NetworkScanner:
                     netkb_entries[target_mac]['Deep_Scanned'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     netkb_entries[target_mac]['Deep_Scan_Ports'] = str(len(open_ports))
                     
-                    # Write back to file
-                    if headers:  # Ensure headers exist
-                        with open(netkbfile, 'w', newline='') as file:
-                            writer = csv.DictWriter(file, fieldnames=headers)
-                            writer.writeheader()
-                            for mac in sorted(netkb_entries.keys()):
-                                writer.writerow(netkb_entries[mac])
+                    # Write back to file using atomic operation
+                    if headers and netkb_entries:  # Ensure headers and data exist
+                        import tempfile
+                        import shutil
+                        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(netkbfile), suffix='.tmp')
+                        
+                        try:
+                            with os.fdopen(temp_fd, 'w', newline='') as file:
+                                writer = csv.DictWriter(file, fieldnames=headers)
+                                writer.writeheader()
+                                for mac in sorted(netkb_entries.keys()):
+                                    writer.writerow(netkb_entries[mac])
+                            
+                            # Verify and replace
+                            if os.path.getsize(temp_path) > 50:
+                                shutil.move(temp_path, netkbfile)
+                            else:
+                                self.logger.error("Temp file too small after deep scan merge - aborting write")
+                                os.unlink(temp_path)
+                        except Exception as write_error:
+                            self.logger.error(f"Error writing netkb after deep scan: {write_error}")
+                            if os.path.exists(temp_path):
+                                os.unlink(temp_path)
                     else:
-                        self.logger.warning(f"No headers found for NetKB file - skipping write")
+                        self.logger.warning(f"No headers or entries found for NetKB file - skipping write")
                     
                     self.logger.info(f"📝 Merged deep scan results into NetKB: {ip} (MAC: {target_mac}) now has {len(merged_ports)} total ports ({len(new_ports)} from deep scan)")
             
@@ -1524,14 +1613,31 @@ class NetworkScanner:
             if not os.path.exists(wifi_network_file):
                 self.logger.warning(f"WiFi-specific network file not found: {wifi_network_file}")
             else:
-                # Read WiFi network file
+                # Read WiFi network file with robust error handling
                 wifi_entries = []
-                with open(wifi_network_file, 'r', encoding='utf-8', errors='ignore') as file:
-                    reader = csv.DictReader(file)
-                    wifi_headers = reader.fieldnames
+                try:
+                    # Try pandas first (handles malformed rows)
+                    import pandas as pd
+                    try:
+                        df = pd.read_csv(wifi_network_file, on_bad_lines='warn', encoding='utf-8', encoding_errors='ignore')
+                    except TypeError:  # pandas < 1.3
+                        df = pd.read_csv(wifi_network_file, error_bad_lines=False, warn_bad_lines=True, encoding='utf-8', encoding_errors='ignore')
                     
-                    for row in reader:
-                        wifi_entries.append(row)
+                    wifi_headers = list(df.columns)
+                    wifi_entries = df.to_dict('records')
+                except Exception as pandas_error:
+                    self.logger.warning(f"Pandas CSV read failed, falling back to csv module: {pandas_error}")
+                    # Fallback to csv module with line-by-line error handling
+                    with open(wifi_network_file, 'r', encoding='utf-8', errors='ignore') as file:
+                        reader = csv.DictReader(file)
+                        wifi_headers = reader.fieldnames
+                        
+                        for line_num, row in enumerate(reader, start=2):  # Start at 2 (after header)
+                            try:
+                                wifi_entries.append(row)
+                            except Exception as row_error:
+                                self.logger.warning(f"Skipping malformed row {line_num} in WiFi file: {row_error}")
+                                continue
                 
                 # Find the entry for this IP
                 target_entry = None
@@ -1565,12 +1671,27 @@ class NetworkScanner:
                     # Update LastSeen timestamp
                     target_entry['LastSeen'] = datetime.now().isoformat()
                     
-                    # Write back to file
+                    # Write back to file using atomic write pattern
                     if wifi_headers:  # Ensure headers exist
-                        with open(wifi_network_file, 'w', newline='', encoding='utf-8') as file:
-                            writer = csv.DictWriter(file, fieldnames=wifi_headers)
-                            writer.writeheader()
-                            writer.writerows(wifi_entries)
+                        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(wifi_network_file), suffix='.tmp')
+                        try:
+                            with os.fdopen(temp_fd, 'w', newline='', encoding='utf-8') as file:
+                                writer = csv.DictWriter(file, fieldnames=wifi_headers)
+                                writer.writeheader()
+                                writer.writerows(wifi_entries)
+                            
+                            # Verify temp file has reasonable size before replacing original
+                            if os.path.getsize(temp_path) > 50:
+                                shutil.move(temp_path, wifi_network_file)
+                                self.logger.debug(f"✅ Atomically updated WiFi network file for {ip}")
+                            else:
+                                self.logger.error(f"Temp WiFi file too small ({os.path.getsize(temp_path)} bytes) - not replacing original")
+                                os.unlink(temp_path)
+                        except Exception as write_error:
+                            self.logger.error(f"Failed to write WiFi network file: {write_error}")
+                            if os.path.exists(temp_path):
+                                os.unlink(temp_path)
+                            raise
                     else:
                         self.logger.warning(f"No headers found for WiFi network file - skipping write")
                     

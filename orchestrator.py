@@ -279,6 +279,19 @@ class Orchestrator:
         """Process all IPs with alive status set to 1"""
         any_action_executed = False
         action_executed_status = None
+        
+        # Debug: Log what we're processing
+        alive_hosts = [row for row in current_data if row.get("Alive") == '1']
+        logger.debug(f"Processing {len(alive_hosts)} alive hosts out of {len(current_data)} total hosts")
+        logger.debug(f"Available actions: {len(self.actions)} (parent+child actions)")
+        
+        if not alive_hosts:
+            logger.warning("No alive hosts to process - all hosts have Alive != '1'")
+            return False
+        
+        if not self.actions:
+            logger.warning("No actions loaded - check actions.json configuration")
+            return False
 
         # Process all parent actions (those without dependencies) across ALL hosts
         for action in self.actions:
@@ -325,13 +338,19 @@ class Orchestrator:
                             self.shared_data.ragnarorch_status = action_executed_status
                     
                     # Continue processing remaining hosts for this child action
+        
+        # Debug: Log summary if nothing executed
+        if not any_action_executed:
+            logger.debug(f"No actions executed on {len(alive_hosts)} alive hosts - all actions skipped (likely due to retry delays, missing ports, or disabled attacks)")
 
         return any_action_executed
 
 
     def execute_action(self, action, ip, ports, row, action_key, current_data):
         """Execute an action on a target with timeout protection"""
+        # Check if action requires a specific port
         if hasattr(action, 'port') and str(action.port) not in ports:
+            logger.debug(f"Skipping {action.action_name} for {ip} - required port {action.port} not in {ports}")
             return False
 
         # Check if attacks are enabled (skip attack actions if disabled, but allow scanning)
@@ -771,7 +790,15 @@ class Orchestrator:
                 time.sleep(30)
                 continue
             
-            current_data = self.shared_data.read_data()
+            # Prefer fresh in-memory scan results over CSV file reads
+            # This eliminates race conditions and provides instant access to live hosts
+            current_data = self.shared_data.get_latest_scan_results()
+            if current_data is not None:
+                logger.debug("✅ Using fresh scan results from memory (no CSV read needed)")
+            else:
+                logger.debug("📄 No in-memory results available - falling back to netkb.csv file read")
+                current_data = self.shared_data.read_data()
+            
             any_action_executed = False
             action_retry_pending = False
             
@@ -796,8 +823,11 @@ class Orchestrator:
                         self.shared_data.ragnarorch_status = "NetworkScanner"
                         self.network_scanner.scan()
                         last_network_scan_time = time.time()
-                        # Re-read the updated data after the scan
-                        current_data = self.shared_data.read_data()
+                        # Get fresh results from memory (scanner hands them off immediately)
+                        current_data = self.shared_data.get_latest_scan_results()
+                        if current_data is None:
+                            logger.debug("No in-memory results after scan - reading from CSV")
+                            current_data = self.shared_data.read_data()
                         if enable_attacks:
                             any_action_executed = self.process_alive_ips(current_data)
                     else:
