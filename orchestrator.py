@@ -279,6 +279,19 @@ class Orchestrator:
         """Process all IPs with alive status set to 1"""
         any_action_executed = False
         action_executed_status = None
+        
+        # Debug: Log what we're processing
+        alive_hosts = [row for row in current_data if row.get("Alive") == '1']
+        logger.debug(f"Processing {len(alive_hosts)} alive hosts out of {len(current_data)} total hosts")
+        logger.debug(f"Available actions: {len(self.actions)} (parent+child actions)")
+        
+        if not alive_hosts:
+            logger.warning("No alive hosts to process - all hosts have Alive != '1'")
+            return False
+        
+        if not self.actions:
+            logger.warning("No actions loaded - check actions.json configuration")
+            return False
 
         # Process all parent actions (those without dependencies) across ALL hosts
         for action in self.actions:
@@ -325,13 +338,19 @@ class Orchestrator:
                             self.shared_data.ragnarorch_status = action_executed_status
                     
                     # Continue processing remaining hosts for this child action
+        
+        # Debug: Log summary if nothing executed
+        if not any_action_executed:
+            logger.debug(f"No actions executed on {len(alive_hosts)} alive hosts - all actions skipped (likely due to retry delays, missing ports, or disabled attacks)")
 
         return any_action_executed
 
 
     def execute_action(self, action, ip, ports, row, action_key, current_data):
         """Execute an action on a target with timeout protection"""
+        # Check if action requires a specific port
         if hasattr(action, 'port') and str(action.port) not in ports:
+            logger.debug(f"Skipping {action.action_name} for {ip} - required port {action.port} not in {ports}")
             return False
 
         # Check if attacks are enabled (skip attack actions if disabled, but allow scanning)
