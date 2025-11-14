@@ -73,7 +73,6 @@ class NmapVulnScanner:
     def __init__(self, shared_data):
         self.shared_data = shared_data
         self.scan_results = []
-        self.summary_file = self.shared_data.vuln_summary_file
         
         # Incremental scan tracking file
         self.scanned_ports_file = os.path.join(
@@ -81,22 +80,12 @@ class NmapVulnScanner:
             'scanned_ports_history.json'
         )
         
-        # Initialize SQLite database manager
+        # Initialize SQLite database manager (SINGLE SOURCE OF TRUTH)
         self.db = get_db(currentdir=shared_data.currentdir)
         
-        self.create_summary_file()
         self.load_scanned_ports_history()
-        logger.debug("NmapVulnScanner initialized with incremental scanning support.")
+        logger.debug("NmapVulnScanner initialized with SQLite database and incremental scanning.")
 
-    def create_summary_file(self):
-        """
-        Creates a summary file for vulnerabilities if it does not exist.
-        """
-        if not os.path.exists(self.summary_file):
-            os.makedirs(self.shared_data.vulnerabilities_dir, exist_ok=True)
-            df = pd.DataFrame(columns=["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"])
-            df.to_csv(self.summary_file, index=False)
-    
     def load_scanned_ports_history(self):
         """
         Load the history of which ports have been scanned for each MAC address.
@@ -223,43 +212,26 @@ class NmapVulnScanner:
             }
         }
 
-    def update_summary_file(self, ip, hostname, mac, port, vulnerabilities):
+    def update_database_vulnerabilities(self, ip, hostname, mac, port, vulnerabilities):
         """
-        Updates the summary file with the scan results.
-        NOW ALSO WRITES TO SQLITE DATABASE.
+        Updates the SQLite database with vulnerability scan results.
+        Database is the SINGLE SOURCE OF TRUTH - no CSV files.
         """
         try:
-            # Read existing data
-            df = pd.read_csv(self.summary_file)
-            
-            # Create new data entry
-            new_data = pd.DataFrame([{"IP": ip, "Hostname": hostname, "MAC Address": mac, "Port": port, "Vulnerabilities": vulnerabilities}])
-            
-            # Append new data
-            df = pd.concat([df, new_data], ignore_index=True)
-            
-            # Remove duplicates based on IP and MAC Address, keeping the last occurrence
-            df.drop_duplicates(subset=["IP", "MAC Address"], keep='last', inplace=True)
-            
-            # Save the updated data back to the summary file
-            df.to_csv(self.summary_file, index=False)
-            
-            # WRITE TO SQLITE DATABASE
-            try:
-                # Update host record with vulnerability information
-                if mac and mac.lower() != 'unknown':
-                    self.db.upsert_host(
-                        mac=mac.lower().strip(),
-                        ip=ip,
-                        hostname=hostname,
-                        vulnerabilities=vulnerabilities
-                    )
-                    logger.debug(f"✅ Updated database with vulnerability data for {mac}")
-            except Exception as db_error:
-                logger.error(f"Failed to write vulnerability data to database: {db_error}")
+            # Write to SQLite database
+            if mac and mac.lower() not in ['unknown', '00:00:00:00:00:00', '']:
+                self.db.upsert_host(
+                    mac=mac.lower().strip(),
+                    ip=ip,
+                    hostname=hostname,
+                    vulnerabilities=vulnerabilities
+                )
+                logger.debug(f"✅ Updated database with vulnerability data for {mac}")
+            else:
+                logger.warning(f"Invalid MAC address for {ip}, skipping database update")
             
         except Exception as e:
-            logger.error(f"Error updating summary file: {e}")
+            logger.error(f"Error updating database with vulnerabilities: {e}")
 
 
     def scan_vulnerabilities(self, ip, hostname, mac, ports):
@@ -358,14 +330,13 @@ class NmapVulnScanner:
                 self.update_scanned_ports_for_mac(mac, ports_to_scan)
                 logger.info(f"✅ Updated scan history for MAC {mac}: Added {len(ports_to_scan)} ports")
             
-            # Legacy CSV updates - DEPRECATED (kept for backward compatibility only)
-            # TODO: Remove these once all systems read from Network Intelligence
+            # Update SQLite database with vulnerability information
             if ports_to_scan:
                 scanned_ports_str = ",".join(ports_to_scan)
             else:
                 scanned_ports_str = "top-50"
-            self.update_summary_file(ip, hostname, mac, scanned_ports_str, vulnerability_summary)
-            self.update_netkb_vulnerabilities(mac, ip, port_vulnerabilities, port_services)
+            self.update_database_vulnerabilities(ip, hostname, mac, scanned_ports_str, vulnerability_summary)
+            self.update_database_detailed_vulnerabilities(mac, ip, port_vulnerabilities, port_services)
             
             # Add vulnerability scan to scan history in database
             try:
@@ -602,20 +573,10 @@ class NmapVulnScanner:
         except Exception as e:
             logger.error(f"Error feeding vulnerabilities to network intelligence: {e}")
 
-    def update_netkb_vulnerabilities(self, mac, ip, port_vulnerabilities, port_services):
-        """Persist vulnerability information back into the NetKB for UI consumption"""
+    def update_database_detailed_vulnerabilities(self, mac, ip, port_vulnerabilities, port_services):
+        """Persist detailed vulnerability information to SQLite database (SINGLE SOURCE OF TRUTH)"""
         try:
-            netkb_path = self.shared_data.netkbfile
-            if not os.path.exists(netkb_path):
-                return
-
-            df = pd.read_csv(netkb_path)
-            if df.empty or 'MAC Address' not in df.columns:
-                return
-
-            if 'Nmap Vulnerabilities' not in df.columns:
-                df['Nmap Vulnerabilities'] = ''
-
+            # Build vulnerability summary
             vulnerability_entries: List[str] = []
             for port_str, vulnerabilities in port_vulnerabilities.items():
                 service = port_services.get(port_str, "unknown")
@@ -624,38 +585,33 @@ class NmapVulnScanner:
                     vulnerability_entries.append(f"{port_str}/{service}: {normalized_text}")
 
             if not vulnerability_entries:
+                logger.debug(f"No vulnerability entries to update for {ip}")
                 return
 
             summary_text = "; ".join(sorted(set(vulnerability_entries)))
-
-            mask = df['MAC Address'] == mac
-            if not mask.any() and 'IPs' in df.columns:
-                mask = df['IPs'].astype(str) == str(ip)
-
-            if not mask.any():
-                return
-
-            df.loc[mask, 'Nmap Vulnerabilities'] = summary_text
-
-            if 'Ports' in df.columns:
-                def merge_ports(existing_value):
-                    existing_ports = set()
-                    if isinstance(existing_value, str) and existing_value.strip():
-                        existing_ports.update(part for part in existing_value.split(';') if part)
-                    merged = existing_ports.union(port_vulnerabilities.keys())
-                    if not merged:
-                        return existing_value
-                    return ';'.join(sorted({str(port) for port in merged}, key=int))
-
-                # Create a copy to avoid SettingWithCopyWarning, then convert dtype properly
-                ports_subset = df.loc[mask, 'Ports'].copy()
-                updated_ports = ports_subset.apply(merge_ports)
-                df.loc[mask, 'Ports'] = updated_ports.astype(str)
-
-            df.to_csv(netkb_path, index=False)
+            
+            # Update SQLite database (ONLY source of truth)
+            if mac and mac.lower() not in ['unknown', '00:00:00:00:00:00', '']:
+                try:
+                    # Merge ports
+                    all_ports = sorted(set(port_vulnerabilities.keys()), key=lambda x: int(x) if x.isdigit() else 0)
+                    ports_str = ','.join(all_ports)
+                    
+                    # Update host with vulnerability and port information
+                    self.db.upsert_host(
+                        mac=mac.lower().strip(),
+                        ip=ip,
+                        ports=ports_str,
+                        vulnerabilities=summary_text
+                    )
+                    logger.info(f"✅ Updated database with {len(vulnerability_entries)} vulnerabilities for {mac} ({ip})")
+                except Exception as db_error:
+                    logger.error(f"Failed to update database with vulnerabilities: {db_error}")
+            else:
+                logger.warning(f"Invalid MAC address for {ip}, cannot update database")
 
         except Exception as e:
-            logger.error(f"Error updating NetKB with vulnerabilities for {ip}: {e}")
+            logger.error(f"Error updating database with detailed vulnerabilities for {ip}: {e}")
 
     def save_results(self, mac_address, ip, scan_result):
         """
@@ -682,38 +638,50 @@ class NmapVulnScanner:
 
     def save_summary(self):
         """
-        Saves a summary of all scanned vulnerabilities to a final summary file.
+        Log summary of vulnerability scans - all data is in SQLite database.
         """
         try:
-            final_summary_file = os.path.join(self.shared_data.vulnerabilities_dir, "final_vulnerability_summary.csv")
-            df = pd.read_csv(self.summary_file)
-            # Convert NaN to empty string and ensure all values are strings
-            df["Vulnerabilities"] = df["Vulnerabilities"].fillna("").astype(str)
-            summary_data = df.groupby(["IP", "Hostname", "MAC Address"])["Vulnerabilities"].apply(lambda x: "; ".join(set("; ".join(x).split("; ")))).reset_index()
-            summary_data.to_csv(final_summary_file, index=False)
-            logger.info(f"Summary saved to {final_summary_file}")
+            # Get statistics from database
+            all_hosts = self.db.get_all_hosts()
+            hosts_with_vulns = [h for h in all_hosts if h.get('vulnerabilities')]
+            
+            logger.info(f"="*60)
+            logger.info(f"VULNERABILITY SCAN SUMMARY")
+            logger.info(f"="*60)
+            logger.info(f"Total hosts scanned: {len(self.scan_results)}")
+            logger.info(f"Hosts with vulnerabilities: {len(hosts_with_vulns)}")
+            logger.info(f"All data stored in SQLite database: {self.db.db_path}")
+            logger.info(f"="*60)
         except Exception as e:
-            logger.error(f"Error saving summary: {e}")
+            logger.error(f"Error generating summary: {e}")
 
     def force_scan_all_hosts(self, real_time_callback=None):
         """
-        Force scan all alive hosts in the NetKB regardless of previous scan status.
+        Force scan all alive hosts in the database regardless of previous scan status.
         This bypasses the retry delays and previous scan status checks.
         
         Args:
             real_time_callback: Optional callback function for real-time updates
         """
         try:
-            # Read current network data
-            current_data = self.shared_data.read_data()
-            if not current_data:
-                logger.warning("No network data available for vulnerability scanning")
+            # Read alive hosts from SQLite database
+            db_hosts = self.db.get_all_hosts()
+            if not db_hosts:
+                logger.warning("No hosts found in database for vulnerability scanning")
                 if real_time_callback:
-                    real_time_callback("error", {"message": "No network data available"})
+                    real_time_callback("error", {"message": "No hosts found in database"})
+                return 0
+            
+            # Filter for alive hosts (status == 'alive')
+            alive_hosts = [host for host in db_hosts if host.get('status') == 'alive']
+            
+            if not alive_hosts:
+                logger.warning("No alive hosts found in database")
+                if real_time_callback:
+                    real_time_callback("error", {"message": "No alive hosts found"})
                 return 0
             
             scanned_count = 0
-            alive_hosts = [row for row in current_data if row.get("Alive") == '1']
             
             logger.info(f"Force scanning {len(alive_hosts)} alive hosts for vulnerabilities...")
             nmap_logger.log_scan_operation(f"Force vulnerability scan", f"Scanning {len(alive_hosts)} hosts")
@@ -726,9 +694,10 @@ class NmapVulnScanner:
                     "current_ip": None
                 })
             
-            for i, row in enumerate(alive_hosts):
-                ip = row.get("IPs", "")
-                if not ip:
+            for i, host in enumerate(alive_hosts):
+                ip = host.get("ip", "")
+                mac = host.get("mac", "")
+                if not ip or not mac:
                     continue
                     
                 try:
@@ -738,34 +707,53 @@ class NmapVulnScanner:
                             "total_hosts": len(alive_hosts),
                             "scanned": i,
                             "current_ip": ip,
-                            "current_host": row.get("Hostnames", ""),
-                            "current_mac": row.get("MAC Address", ""),
+                            "current_host": host.get("hostname", ""),
+                            "current_mac": mac,
                             "progress_percent": int((i / len(alive_hosts)) * 100)
                         })
+                    
+                    # Convert database format to legacy row format for compatibility
+                    row = {
+                        "IPs": ip,
+                        "Hostnames": host.get("hostname", ""),
+                        "MAC Address": mac,
+                        "Ports": host.get("ports", ""),
+                        "Alive": "1"
+                    }
                     
                     logger.info(f"Scanning {ip} ({i+1}/{len(alive_hosts)}) for vulnerabilities...")
                     result = self.execute(ip, row, "NmapVulnScanner")
                     
                     if result == 'success':
                         scanned_count += 1
-                        # Update the status to force a fresh timestamp
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        row["NmapVulnScanner"] = f'success_{timestamp}'
+                        # Update scan status in database
+                        try:
+                            self.db.update_host_action_status(
+                                mac=mac.lower().strip(),
+                                action_name='NmapVulnScanner',
+                                status='success'
+                            )
+                        except Exception as db_error:
+                            logger.error(f"Failed to update scan status in database: {db_error}")
                         
                         # Send real-time update with scan results
                         if real_time_callback:
                             self._send_host_update(real_time_callback, ip, row, "success")
                             
                     else:
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        row["NmapVulnScanner"] = f'failed_{timestamp}'
+                        # Update failed status in database
+                        try:
+                            self.db.update_host_action_status(
+                                mac=mac.lower().strip(),
+                                action_name='NmapVulnScanner',
+                                status='failed'
+                            )
+                        except Exception as db_error:
+                            logger.error(f"Failed to update failed status in database: {db_error}")
                         
                         # Send real-time update for failed scan
                         if real_time_callback:
                             self._send_host_update(real_time_callback, ip, row, "failed")
-                    
-                    # Save data after each scan to ensure progress is persisted
-                    self.shared_data.write_data(current_data)
                         
                 except Exception as e:
                     logger.error(f"Error force scanning {ip}: {e}")
@@ -876,10 +864,18 @@ if __name__ == "__main__":
     shared_data = SharedData()
     try:
         nmap_vuln_scanner = NmapVulnScanner(shared_data)
-        logger.info("Starting vulnerability scans...")
+        logger.info("Starting vulnerability scans from database...")
 
-        # Load the netkbfile and get the IPs to scan
-        ips_to_scan = shared_data.read_data()  # Use your existing method to read the data
+        # Load alive hosts from SQLite database
+        db = get_db(currentdir=shared_data.currentdir)
+        db_hosts = db.get_all_hosts()
+        alive_hosts = [host for host in db_hosts if host.get('status') == 'alive']
+        
+        if not alive_hosts:
+            logger.warning("No alive hosts found in database")
+            exit(0)
+        
+        logger.info(f"Found {len(alive_hosts)} alive hosts in database")
 
         # Execute the scan on each IP with concurrency
         with Progress(
@@ -888,19 +884,29 @@ if __name__ == "__main__":
             "[progress.percentage]{task.percentage:>3.1f}%",
             console=Console()
         ) as progress:
-            task = progress.add_task("Scanning vulnerabilities...", total=len(ips_to_scan))
+            task = progress.add_task("Scanning vulnerabilities...", total=len(alive_hosts))
             futures = []
             with ThreadPoolExecutor(max_workers=2) as executor:  # Adjust the number of workers for RPi Zero
-                for row in ips_to_scan:
-                    if row["Alive"] == '1':  # Check if the host is alive
-                        ip = row["IPs"]
+                for host in alive_hosts:
+                    # Convert database format to legacy row format
+                    row = {
+                        "IPs": host.get("ip", ""),
+                        "Hostnames": host.get("hostname", ""),
+                        "MAC Address": host.get("mac", ""),
+                        "Ports": host.get("ports", ""),
+                        "Alive": "1"
+                    }
+                    ip = row["IPs"]
+                    if ip:
                         futures.append(executor.submit(nmap_vuln_scanner.execute, ip, row, b_status))
 
                 for future in as_completed(futures):
                     progress.update(task, advance=1)
 
+        # Log summary (data is in SQLite database)
         nmap_vuln_scanner.save_summary()
         logger.info(f"Total scans performed: {len(nmap_vuln_scanner.scan_results)}")
+        logger.info(f"All vulnerability data stored in SQLite database")
         exit(len(nmap_vuln_scanner.scan_results))
     except Exception as e:
         logger.error(f"Error: {e}")
