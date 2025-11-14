@@ -6,9 +6,9 @@ import json
 from typing import List, Dict
 
 def check_requirements():
-“”“Check if required tools are installed”””
-tools = [‘nmap’, ‘arp-scan’]
-missing = []
+    """Check if required tools are installed"""
+    tools = ['nmap', 'arp-scan']
+    missing = []
 
 ```
 for tool in tools:
