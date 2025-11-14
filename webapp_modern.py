@@ -4252,9 +4252,6 @@ def kill_switch():
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
 
 @app.route('/api/system/restart-service', methods=['POST'])
 def restart_service():
