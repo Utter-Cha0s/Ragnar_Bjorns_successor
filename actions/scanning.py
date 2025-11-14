@@ -456,10 +456,8 @@ class NetworkScanner:
                     os.remove(csv_scan_file)
                 if os.path.exists(csv_result_file):
                     os.remove(csv_result_file)
-                if not os.path.exists(netkbfile):
-                    with open(netkbfile, 'w', newline='') as file:
-                        writer = csv.writer(file)
-                        writer.writerow(['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports', 'Failed_Pings'])
+                # netkb.csv is no longer used - all data is in SQLite database
+                # Don't create empty CSV file
             except Exception as e:
                 self.logger.error(f"Error in check_if_csv_scan_file_exists: {e}")
 
@@ -1607,82 +1605,9 @@ class NetworkScanner:
                 self.logger.error(f"Failed to update SQLite database for {ip}: {db_error}")
                 self.logger.debug(f"Database error traceback: {traceback.format_exc()}")
             
-            
-            # ===== PART 1: Update NetKB (MAC-indexed, semicolon-separated) =====
-            if not os.path.exists(netkbfile):
-                self.logger.warning(f"NetKB file not found: {netkbfile}")
-            else:
-                # Read the entire file into memory
-                netkb_entries = {}
-                with open(netkbfile, 'r') as file:
-                    reader = csv.DictReader(file)
-                    headers = reader.fieldnames
-                    
-                    for row in reader:
-                        mac = row['MAC Address']
-                        netkb_entries[mac] = row
-                
-                # Find the MAC address for this IP
-                target_mac = None
-                for mac, data in netkb_entries.items():
-                    if ip in data.get('IPs', '').split(';'):
-                        target_mac = mac
-                        break
-                
-                if not target_mac:
-                    self.logger.warning(f"IP {ip} not found in NetKB - skipping NetKB merge")
-                else:
-                    # Get existing ports
-                    existing_ports_str = netkb_entries[target_mac].get('Ports', '')
-                    existing_ports = set()
-                    
-                    if existing_ports_str:
-                        # Parse existing ports (semicolon separated in NetKB)
-                        existing_ports = {p.strip() for p in existing_ports_str.split(';') if p.strip()}
-                    
-                    # Merge with new ports from deep scan
-                    new_ports = {str(p) for p in open_ports}
-                    merged_ports = existing_ports.union(new_ports)
-                    
-                    # Update the entry
-                    netkb_entries[target_mac]['Ports'] = ';'.join(sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 0))
-                    
-                    # Update hostname if we got one and it's not already set
-                    existing_hostname = netkb_entries[target_mac].get('Hostnames', '')
-                    if hostname and not existing_hostname:
-                        netkb_entries[target_mac]['Hostnames'] = hostname
-                    
-                    # Mark as deep scanned
-                    netkb_entries[target_mac]['Deep_Scanned'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    netkb_entries[target_mac]['Deep_Scan_Ports'] = str(len(open_ports))
-                    
-                    # Write back to file using atomic operation
-                    if headers and netkb_entries:  # Ensure headers and data exist
-                        import tempfile
-                        import shutil
-                        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(netkbfile), suffix='.tmp')
-                        
-                        try:
-                            with os.fdopen(temp_fd, 'w', newline='') as file:
-                                writer = csv.DictWriter(file, fieldnames=headers)
-                                writer.writeheader()
-                                for mac in sorted(netkb_entries.keys()):
-                                    writer.writerow(netkb_entries[mac])
-                            
-                            # Verify and replace
-                            if os.path.getsize(temp_path) > 50:
-                                shutil.move(temp_path, netkbfile)
-                            else:
-                                self.logger.error("Temp file too small after deep scan merge - aborting write")
-                                os.unlink(temp_path)
-                        except Exception as write_error:
-                            self.logger.error(f"Error writing netkb after deep scan: {write_error}")
-                            if os.path.exists(temp_path):
-                                os.unlink(temp_path)
-                    else:
-                        self.logger.warning(f"No headers or entries found for NetKB file - skipping write")
-                    
-                    self.logger.info(f"📝 Merged deep scan results into NetKB: {ip} (MAC: {target_mac}) now has {len(merged_ports)} total ports ({len(new_ports)} from deep scan)")
+            # CSV netkb.csv is no longer used - all data is in SQLite database
+            # Deep scan results are persisted via db.upsert_host() above
+            self.logger.debug(f"Deep scan database update complete for {ip}")
             
             # ===== PART 2: Update WiFi-specific network file (IP-indexed, comma-separated) =====
             # This is the file the web UI actually displays!

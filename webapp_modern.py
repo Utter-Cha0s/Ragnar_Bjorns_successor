@@ -262,77 +262,52 @@ def update_vulnerability_output(ip, hostname, mac, is_alive):
 
 
 def update_netkb_entry(ip, hostname, mac, is_alive):
+    """
+    Update host entry in SQLite database.
+    CSV operations removed - database is the single source of truth.
+    """
     try:
         # Update vulnerability output files
         update_vulnerability_output(ip, hostname, mac, is_alive)
         
-        netkb_path = shared_data.netkbfile
-        os.makedirs(os.path.dirname(netkb_path), exist_ok=True)
-
-        rows = []
-        headers: list[str] = []
-        updated_row = None
-
-        if os.path.exists(netkb_path) and os.path.getsize(netkb_path) > 0:
-            with open(netkb_path, 'r', encoding='utf-8', errors='ignore') as f:
-                reader = csv.DictReader(f)
-                headers = list(reader.fieldnames) if reader.fieldnames else []
-                for row in reader:
-                    rows.append(row)
-        else:
-            headers = ['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports']
-
-        for column in ['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports']:
-            if column not in headers:
-                headers.append(column)
-
+        # Update SQLite database instead of CSV
+        from db_manager import get_db
+        db = get_db(currentdir=shared_data.currentdir)
+        
         alive_value = '1' if is_alive else '0'
         mac_to_store = _normalize_mac(mac) if mac else ''
-
-        for row in rows:
-            existing_ips = [entry.strip() for entry in row.get('IPs', '').split(';') if entry.strip()]
-            if ip in existing_ips:
-                if mac_to_store:
-                    row['MAC Address'] = mac_to_store
-                # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
-
-                if hostname:
-                    existing_hostnames = [h.strip() for h in row.get('Hostnames', '').split(';') if h.strip()]
-                    existing_hostnames.append(hostname)
-                    row['Hostnames'] = ';'.join(sorted(set(existing_hostnames)))
-
-                row['Alive'] = alive_value
-                # CRITICAL: NEVER clear the Ports field here!
-                # Ports are managed by scanning.py - we only update Alive/MAC/Hostname
-                # Preserve existing ports to prevent data loss
-                updated_row = row
-                break
-
-        if updated_row is None:
-            new_row = {header: '' for header in headers}
-            new_row['IPs'] = ip
-            new_row['Hostnames'] = hostname or ''
-            if mac_to_store:
-                new_row['MAC Address'] = mac_to_store
-            else:
-                # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
-                new_row['MAC Address'] = ''
-            new_row['Alive'] = alive_value
-            # CRITICAL: Don't set Ports to '' - preserve existing ports if they exist
-            # The Ports field should only be updated by scanning.py during actual port scans
-            # Leave it empty for new entries, but scanning.py will populate it
-            new_row['Ports'] = new_row.get('Ports', '')  # Preserve if exists, empty if new
-            rows.append(new_row)
-            updated_row = new_row
-
-        with open(netkb_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=headers)
-            writer.writeheader()
-            writer.writerows(rows)
-
-        return updated_row
+        
+        if not mac_to_store:
+            # If no MAC provided, try to find existing entry by IP
+            hosts = db.get_all_hosts()
+            for host in hosts:
+                if host.get('ip_address') == ip:
+                    mac_to_store = host['mac_address']
+                    logger.debug(f"Found existing MAC {mac_to_store} for IP {ip}")
+                    break
+        
+        if mac_to_store:
+            # Update or insert host in database
+            db.upsert_host(
+                mac_address=mac_to_store,
+                ip_address=ip,
+                hostname=hostname or '',
+                status='alive' if alive_value == '1' else 'offline'
+            )
+            logger.debug(f"Updated database entry for {ip} (MAC: {mac_to_store})")
+            
+            return {
+                'MAC Address': mac_to_store,
+                'IPs': ip,
+                'Hostnames': hostname or '',
+                'Alive': alive_value
+            }
+        else:
+            logger.warning(f"No MAC address available for {ip}, skipping database update")
+            return None
+            
     except Exception as e:
-        logger.error(f"Error updating netkb entry for {ip}: {e}")
+        logger.error(f"Error updating database entry for {ip}: {e}")
         return None
 
 def broadcast_status_update():
