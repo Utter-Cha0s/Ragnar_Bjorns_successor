@@ -4104,11 +4104,10 @@ def kill_switch():
     EDUCATIONAL KILL SWITCH - Complete data erasure endpoint
     
     This endpoint provides a secure way to completely wipe all data after educational
-    demonstrations. It will:
-    1. Wipe all database files
-    2. Delete the entire repository
-    3. Remove logs and temporary files
-    4. Optionally shutdown the system
+    demonstrations. Deletion order:
+    1. Delete ragnar.db database file
+    2. Delete entire data/ folder
+    3. Delete entire Ragnar/ repository
     
     Security: Requires confirmation token to prevent accidental triggering
     """
@@ -4131,145 +4130,117 @@ def kill_switch():
         logger.critical("=" * 80)
         
         results = {
-            'database_wiped': False,
+            'database_deleted': False,
+            'data_folder_deleted': False,
             'repository_deleted': False,
-            'logs_cleared': False,
-            'temp_files_cleared': False,
+            'shutdown_scheduled': False,
             'errors': []
         }
         
-        # Step 1: Wipe all database files
+        # Get the Ragnar directory path
+        ragnar_dir = shared_data.currentdir
+        home_dir = os.path.expanduser('~')
+        ragnar_home_path = os.path.join(home_dir, 'Ragnar')
+        
+        # Use home path if it exists, otherwise use current directory
+        if os.path.exists(ragnar_home_path):
+            ragnar_dir = ragnar_home_path
+        
+        logger.critical(f"Target Ragnar directory: {ragnar_dir}")
+        
+        # STEP 1: Delete ragnar.db database file
         try:
-            logger.critical("Step 1/4: Wiping database files...")
-            db_files = [
-                os.path.join(shared_data.currentdir, 'data', 'ragnar.db'),
-                os.path.join(shared_data.currentdir, 'data', 'netkb.csv'),
-                os.path.join(shared_data.currentdir, 'data', 'network_data.json'),
-                os.path.join(shared_data.currentdir, 'data', 'network_full.json'),
-                os.path.join(shared_data.currentdir, 'stable_data.json'),
-                os.path.join(shared_data.currentdir, 'fixed_stable.json'),
-            ]
+            db_path = os.path.join(ragnar_dir, 'data', 'ragnar.db')
+            logger.critical(f"Step 1/3: Deleting database file: {db_path}")
             
-            # Wipe data directory
-            data_dir = os.path.join(shared_data.currentdir, 'data')
+            if os.path.isfile(db_path):
+                os.remove(db_path)
+                logger.critical(f"✓ Deleted: {db_path}")
+                results['database_deleted'] = True
+            else:
+                logger.warning(f"Database file not found: {db_path}")
+                results['database_deleted'] = True  # Consider it success if file doesn't exist
+            
+        except Exception as e:
+            error_msg = f"Error deleting database file: {str(e)}"
+            logger.error(error_msg)
+            results['errors'].append(error_msg)
+        
+        # STEP 2: Delete entire data/ folder
+        try:
+            data_dir = os.path.join(ragnar_dir, 'data')
+            logger.critical(f"Step 2/3: Deleting data folder: {data_dir}")
+            
             if os.path.exists(data_dir):
-                shutil.rmtree(data_dir, ignore_errors=True)
-                logger.critical(f"Deleted data directory: {data_dir}")
-            
-            # Recreate empty data directory
-            os.makedirs(data_dir, exist_ok=True)
-            
-            results['database_wiped'] = True
-            logger.critical("✓ Database files wiped successfully")
+                shutil.rmtree(data_dir, ignore_errors=False)
+                logger.critical(f"✓ Deleted: {data_dir}")
+                results['data_folder_deleted'] = True
+            else:
+                logger.warning(f"Data folder not found: {data_dir}")
+                results['data_folder_deleted'] = True  # Consider it success if folder doesn't exist
             
         except Exception as e:
-            error_msg = f"Error wiping database: {str(e)}"
+            error_msg = f"Error deleting data folder: {str(e)}"
             logger.error(error_msg)
             results['errors'].append(error_msg)
         
-        # Step 2: Clear all logs
-        try:
-            logger.critical("Step 2/4: Clearing log files...")
-            log_locations = [
-                '/var/log/ragnar.log',
-                '/var/log/ragnar_wifi.log',
-                '/var/log/ap.log',
-                '/var/log/ragnar_failsafe.log',
-                os.path.join(shared_data.currentdir, 'var', 'log'),
-            ]
-            
-            for log_path in log_locations:
-                if os.path.isfile(log_path):
-                    os.remove(log_path)
-                    logger.critical(f"Deleted log file: {log_path}")
-                elif os.path.isdir(log_path):
-                    shutil.rmtree(log_path, ignore_errors=True)
-                    logger.critical(f"Deleted log directory: {log_path}")
-            
-            results['logs_cleared'] = True
-            logger.critical("✓ Log files cleared successfully")
-            
-        except Exception as e:
-            error_msg = f"Error clearing logs: {str(e)}"
-            logger.error(error_msg)
-            results['errors'].append(error_msg)
+        # STEP 3: Delete entire Ragnar/ repository
+        # Use a background thread to allow response to be sent first
+        def delete_repository():
+            try:
+                time.sleep(3)  # Wait 3 seconds for response to be sent
+                logger.critical(f"Step 3/3: Deleting entire repository: {ragnar_dir}")
+                
+                if os.path.exists(ragnar_dir):
+                    # Change to parent directory to avoid issues
+                    parent_dir = os.path.dirname(ragnar_dir)
+                    os.chdir(parent_dir)
+                    
+                    # Delete the entire Ragnar directory
+                    shutil.rmtree(ragnar_dir, ignore_errors=False)
+                    logger.critical(f"✓ Deleted: {ragnar_dir}")
+                else:
+                    logger.warning(f"Repository not found: {ragnar_dir}")
+                    
+            except Exception as e:
+                logger.error(f"Error deleting repository: {str(e)}")
+                logger.error(traceback.format_exc())
         
-        # Step 3: Clear temporary and cache files
-        try:
-            logger.critical("Step 3/4: Clearing temporary files...")
-            temp_locations = [
-                '/tmp/ragnar',
-                '/tmp/ragnar_wifi_state.json',
-                '/tmp/ragnar_wifi_manager.pid',
-            ]
-            
-            for temp_path in temp_locations:
-                if os.path.isfile(temp_path):
-                    os.remove(temp_path)
-                    logger.critical(f"Deleted temp file: {temp_path}")
-                elif os.path.isdir(temp_path):
-                    shutil.rmtree(temp_path, ignore_errors=True)
-                    logger.critical(f"Deleted temp directory: {temp_path}")
-            
-            results['temp_files_cleared'] = True
-            logger.critical("✓ Temporary files cleared successfully")
-            
-        except Exception as e:
-            error_msg = f"Error clearing temp files: {str(e)}"
-            logger.error(error_msg)
-            results['errors'].append(error_msg)
+        # Start deletion thread
+        deletion_thread = threading.Thread(target=delete_repository, daemon=True)
+        deletion_thread.start()
+        results['repository_deleted'] = True  # Marked as scheduled
+        logger.critical(f"✓ Repository deletion scheduled in 3 seconds: {ragnar_dir}")
         
-        # Step 4: Delete the entire repository
-        try:
-            logger.critical("Step 4/4: Deleting repository...")
-            repo_path = shared_data.currentdir
-            
-            # Create a self-delete script that will run after this process exits
-            delete_script = os.path.join('/tmp', 'ragnar_self_delete.sh')
-            with open(delete_script, 'w') as f:
-                f.write('#!/bin/bash\n')
-                f.write('# Ragnar Self-Delete Script\n')
-                f.write('sleep 5\n')  # Wait for Flask to send response
-                f.write(f'rm -rf "{repo_path}"\n')
-                f.write('rm -f "$0"\n')  # Delete this script itself
-            
-            os.chmod(delete_script, 0o755)
-            
-            # Launch the delete script in background
-            subprocess.Popen(['bash', delete_script], 
-                           stdout=subprocess.DEVNULL, 
-                           stderr=subprocess.DEVNULL,
-                           start_new_session=True)
-            
-            results['repository_deleted'] = True
-            logger.critical(f"✓ Repository deletion scheduled: {repo_path}")
-            
-        except Exception as e:
-            error_msg = f"Error deleting repository: {str(e)}"
-            logger.error(error_msg)
-            results['errors'].append(error_msg)
-        
-        # Prepare shutdown if requested
+        # Optional shutdown
         if shutdown_after:
-            logger.critical("Scheduling system shutdown in 10 seconds...")
-            subprocess.Popen(['sudo', 'shutdown', '-h', '+1', 'Ragnar kill switch activated'],
-                           stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL,
-                           start_new_session=True)
-            results['shutdown_scheduled'] = True
+            try:
+                logger.critical("Scheduling system shutdown in 60 seconds...")
+                subprocess.Popen(['sudo', 'shutdown', '-h', '+1', 'Ragnar kill switch activated'],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL,
+                               start_new_session=True)
+                results['shutdown_scheduled'] = True
+            except Exception as e:
+                error_msg = f"Error scheduling shutdown: {str(e)}"
+                logger.error(error_msg)
+                results['errors'].append(error_msg)
         
         logger.critical("=" * 80)
         logger.critical("KILL SWITCH EXECUTION COMPLETE")
-        logger.critical("All data has been wiped. Repository will be deleted in 5 seconds.")
+        logger.critical(f"1. Database deleted: {results['database_deleted']}")
+        logger.critical(f"2. Data folder deleted: {results['data_folder_deleted']}")
+        logger.critical(f"3. Repository deletion scheduled: {results['repository_deleted']}")
         if shutdown_after:
-            logger.critical("System will shutdown in 10 seconds.")
+            logger.critical(f"4. System shutdown scheduled: {results['shutdown_scheduled']}")
         logger.critical("=" * 80)
         
-        # Return success response before everything is deleted
+        # Return success response before repository is deleted
         return jsonify({
             'success': True,
-            'message': 'Kill switch executed. All data wiped. Repository deleting in 5 seconds.',
+            'message': 'Kill switch executed successfully. Repository will be deleted in 3 seconds.',
             'details': results,
+            'ragnar_path': ragnar_dir,
             'timestamp': datetime.now().isoformat()
         })
         
@@ -4278,6 +4249,9 @@ def kill_switch():
         logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
