@@ -7,6 +7,9 @@ const RECONNECT_DELAY_MAX = 15000;
 let currentTab = 'dashboard';
 let autoRefreshIntervals = {};
 
+// Track which tabs have been preloaded to avoid duplicate loading
+let preloadedTabs = new Set();
+
 // Configuration metadata for tooltips
 const configMetadata = {
     manual_mode: {
@@ -591,13 +594,84 @@ async function loadInitialData() {
             });
         }, 100);
         
+        // Priority 4: Preload all other tabs in background after dashboard is ready
+        setTimeout(() => {
+            preloadAllTabs();
+        }, 500);
+        
     } catch (error) {
         console.error('Error loading initial data:', error);
         addConsoleMessage('Error loading critical dashboard data', 'error');
     }
 }
 
+// Preload all tabs in background for instant switching
+async function preloadAllTabs() {
+    console.log('Starting background preload of all tabs...');
+    
+    try {
+        // Preload in batches to avoid overwhelming the backend
+        
+        // Batch 1: Network tab (most frequently accessed after dashboard)
+        await loadNetworkData().catch(err => console.warn('Network preload failed:', err));
+        preloadedTabs.add('network');
+        
+        // Small delay between batches
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Batch 2: Discovered tab (credentials, loot, attacks, vulnerabilities)
+        await Promise.all([
+            loadCredentialsData().catch(err => console.warn('Credentials preload failed:', err)),
+            loadLootData().catch(err => console.warn('Loot preload failed:', err)),
+            loadAttackLogs().catch(err => console.warn('Attack logs preload failed:', err)),
+            loadVulnerabilityIntel().catch(err => console.warn('Vulnerability intel preload failed:', err))
+        ]);
+        preloadedTabs.add('discovered');
+        
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Batch 3: Threat Intel tab
+        await loadThreatIntelData().catch(err => console.warn('Threat intel preload failed:', err));
+        preloadedTabs.add('threat-intel');
+        
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Batch 4: Connect tab
+        await loadConnectData().catch(err => console.warn('Connect preload failed:', err));
+        preloadedTabs.add('connect');
+        
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Batch 5: E-Paper tab
+        await loadEpaperDisplay().catch(err => console.warn('E-Paper preload failed:', err));
+        preloadedTabs.add('epaper');
+        
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Batch 6: Files and Config (lower priority)
+        await Promise.all([
+            loadFilesData().catch(err => console.warn('Files preload failed:', err)),
+            loadImagesData().catch(err => console.warn('Images preload failed:', err)),
+            loadConfigData().catch(err => console.warn('Config preload failed:', err))
+        ]);
+        preloadedTabs.add('files');
+        preloadedTabs.add('config');
+        
+        // System and NetKB tabs load on-demand (they use different patterns)
+        
+        console.log('Background tab preload completed');
+        addConsoleMessage('All tabs preloaded and ready', 'success');
+        
+    } catch (error) {
+        console.error('Error during tab preloading:', error);
+    }
+}
+
 async function loadTabData(tabName) {
+    // If tab was already preloaded, skip reloading unless it's a dynamic tab
+    // System and netkb always load (they use polling/intervals)
+    const alreadyPreloaded = preloadedTabs.has(tabName);
+    
     switch(tabName) {
         case 'dashboard':
             // Load dashboard stats immediately, defer console logs
@@ -605,39 +679,54 @@ async function loadTabData(tabName) {
             setTimeout(() => loadConsoleLogs(), 50);
             break;
         case 'network':
+            // Always refresh network data when switching to this tab
             await loadNetworkData();
             break;
         case 'connect':
-            await loadConnectData();
+            if (!alreadyPreloaded) {
+                await loadConnectData();
+            }
             break;
         case 'discovered':
-            await Promise.all([
-                loadCredentialsData(),
-                loadLootData(),
-                loadAttackLogs(),
-                loadVulnerabilityIntel()
-            ]);
+            if (!alreadyPreloaded) {
+                await Promise.all([
+                    loadCredentialsData(),
+                    loadLootData(),
+                    loadAttackLogs(),
+                    loadVulnerabilityIntel()
+                ]);
+            }
             break;
         case 'threat-intel':
-            await loadThreatIntelData();
+            if (!alreadyPreloaded) {
+                await loadThreatIntelData();
+            }
             break;
         case 'files':
-            await Promise.all([
-                loadFilesData(),
-                loadImagesData()
-            ]);
+            if (!alreadyPreloaded) {
+                await Promise.all([
+                    loadFilesData(),
+                    loadImagesData()
+                ]);
+            }
             break;
         case 'system':
+            // Always load system (uses intervals)
             loadSystemData();
             break;
         case 'netkb':
+            // Always load netkb
             loadNetkbData();
             break;
         case 'epaper':
-            await loadEpaperDisplay();
+            if (!alreadyPreloaded) {
+                await loadEpaperDisplay();
+            }
             break;
         case 'config':
-            await loadConfigData();
+            if (!alreadyPreloaded) {
+                await loadConfigData();
+            }
             break;
     }
 }
