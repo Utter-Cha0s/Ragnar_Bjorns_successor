@@ -521,7 +521,7 @@ function setupAutoRefresh() {
             socket.emit('request_credentials');
             socket.emit('request_loot');
             loadAttackLogs(); // Also refresh attack logs
-            loadVulnerabilityIntel(); // Also refresh vulnerability intel
+            // Don't auto-refresh vulnerability intel to prevent card reset
         }
     }, 20000); // Every 20 seconds
     

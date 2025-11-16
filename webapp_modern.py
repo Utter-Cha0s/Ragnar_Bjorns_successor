@@ -2232,6 +2232,20 @@ def get_vulnerability_intel():
                             script_lines = re.findall(r'^\|(.+)$', port_section, re.MULTILINE)
                             
                             if script_lines:
+                                # Filter out lines with PACKETSTORM, vulners, CVE, exploit references
+                                filtered_lines = []
+                                for line in script_lines:
+                                    line_lower = line.lower()
+                                    # Skip lines containing vulnerability/exploit references
+                                    if any(keyword in line_lower for keyword in ['packetstorm', 'vulners.com', 'cve-', 'exploit', 'https://']):
+                                        continue
+                                    # Skip lines that look like vulnerability IDs or scores
+                                    if re.search(r'\d+\.\d+\s+https?://', line):
+                                        continue
+                                    filtered_lines.append(line)
+                                
+                                script_lines = filtered_lines
+                                
                                 # Group script output by script name
                                 current_script = None
                                 script_content = []
@@ -2252,7 +2266,13 @@ def get_vulnerability_intel():
                                         # Start new script
                                         script_name_match = re.match(r'^\s*(\S+?):\s*(.*)', line)
                                         if script_name_match:
-                                            current_script = script_name_match.group(1)
+                                            script_name = script_name_match.group(1)
+                                            # Skip vulnerability-related scripts
+                                            if script_name.lower() in ['vulners', 'vulns']:
+                                                current_script = None
+                                                script_content = []
+                                                continue
+                                            current_script = script_name
                                             first_content = script_name_match.group(2)
                                             script_content = [first_content] if first_content else []
                                     else:
