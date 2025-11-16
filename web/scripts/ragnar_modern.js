@@ -670,6 +670,7 @@ async function preloadAllTabs() {
 async function loadTabData(tabName) {
     // If tab was already preloaded, skip reloading unless it's a dynamic tab
     // System and netkb always load (they use polling/intervals)
+    // Network and threat-intel always refresh for up-to-date data
     const alreadyPreloaded = preloadedTabs.has(tabName);
     
     switch(tabName) {
@@ -698,9 +699,8 @@ async function loadTabData(tabName) {
             }
             break;
         case 'threat-intel':
-            if (!alreadyPreloaded) {
-                await loadThreatIntelData();
-            }
+            // Always refresh threat intel data when switching to this tab
+            await loadThreatIntelData();
             break;
         case 'files':
             if (!alreadyPreloaded) {
@@ -6313,11 +6313,6 @@ window.closeVulnerabilityModal = closeVulnerabilityModal;
 
 // Load threat intelligence data when tab is shown
 async function loadThreatIntelData() {
-    // Only load threat intel data if we're on the threat-intel tab
-    if (currentTab !== 'threat-intel') {
-        return;
-    }
-    
     try {
         // Load grouped vulnerabilities
         const response = await fetch('/api/vulnerabilities/grouped');
@@ -6335,12 +6330,15 @@ async function loadThreatIntelData() {
 
     } catch (error) {
         console.error('Error loading vulnerability data:', error);
-        document.getElementById('grouped-vulnerabilities-container').innerHTML = `
-            <div class="glass rounded-lg p-6 text-center">
-                <p class="text-red-400">Error loading vulnerabilities</p>
-                <p class="text-slate-400 text-sm mt-2">${error.message}</p>
-            </div>
-        `;
+        const container = document.getElementById('grouped-vulnerabilities-container');
+        if (container) {
+            container.innerHTML = `
+                <div class="glass rounded-lg p-6 text-center">
+                    <p class="text-red-400">Error loading vulnerabilities</p>
+                    <p class="text-slate-400 text-sm mt-2">${error.message}</p>
+                </div>
+            `;
+        }
     }
 }
 
