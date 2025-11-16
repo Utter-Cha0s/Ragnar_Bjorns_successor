@@ -1203,7 +1203,7 @@ class WiFiManager:
                     self.logger.warning(f"Failed to connect to {ssid}")
                     
             except Exception as e:
-                self.logger.error(f"Error connecting to {network.get('ssid', 'unknown')}: {e} Look a Ragnar.. he will show the IP-Adress")
+                self.logger.error(f"Error connecting to {network.get('ssid', 'unknown')}: {e}")
         
         return False
     
@@ -1234,16 +1234,16 @@ class WiFiManager:
                 # If password is provided and profile exists, try to update the password
                 if password:
                     self.logger.info(f"Updating password for existing profile {ssid}")
-                    update_cmd = ['nmcli', 'con', 'modify', ssid, 'wifi-sec.psk', password]
+                    update_cmd = ['sudo', 'nmcli', 'con', 'modify', ssid, 'wifi-sec.psk', password]
                     subprocess.run(update_cmd, capture_output=True, text=True)
                 
                 # Try to activate the existing connection
                 self.logger.info(f"Activating existing connection profile for {ssid}")
-                cmd = ['nmcli', 'con', 'up', ssid]
+                cmd = ['sudo', 'nmcli', 'con', 'up', ssid]
             else:
                 # No existing profile - create a new one
                 self.logger.info(f"No existing profile found for {ssid}, creating new connection")
-                cmd = ['nmcli', 'dev', 'wifi', 'connect', ssid]
+                cmd = ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid]
                 if password:
                     cmd.extend(['password', password])
             
