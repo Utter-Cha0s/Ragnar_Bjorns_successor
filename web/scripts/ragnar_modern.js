@@ -567,36 +567,42 @@ function initializeMobileMenu() {
 
 async function loadInitialData() {
     try {
-        // Load all initial data in parallel for faster page load
-        const [status] = await Promise.all([
-            fetchAPI('/api/status'),
-            loadDashboardData(),
-            loadConsoleLogs(),
-            refreshWifiStatus()
+        // Priority 1: Load critical dashboard stats first for immediate visibility
+        await Promise.all([
+            fetchAPI('/api/status').then(status => {
+                if (status) {
+                    updateDashboardStatus(status);
+                }
+            }),
+            loadDashboardData()
         ]);
         
-        // Update status if available
-        if (status) {
-            updateDashboardStatus(status);
-        }
+        // Priority 2: Load Wi-Fi status (medium priority, shown in nav)
+        refreshWifiStatus().catch(err => console.warn('WiFi status load failed:', err));
         
-        // Add welcome message to console
-        addConsoleMessage('Ragnar Modern Web Interface Initialized', 'success');
-        addConsoleMessage('Dashboard loaded successfully', 'info');
+        // Priority 3: Load console logs last (lowest priority, background info)
+        setTimeout(() => {
+            loadConsoleLogs().then(() => {
+                addConsoleMessage('Ragnar Modern Web Interface Initialized', 'success');
+                addConsoleMessage('Dashboard loaded successfully', 'info');
+            }).catch(err => {
+                console.warn('Console logs load failed:', err);
+                addConsoleMessage('Error loading console logs', 'warning');
+            });
+        }, 100);
         
     } catch (error) {
         console.error('Error loading initial data:', error);
-        addConsoleMessage('Error loading initial data', 'error');
+        addConsoleMessage('Error loading critical dashboard data', 'error');
     }
 }
 
 async function loadTabData(tabName) {
     switch(tabName) {
         case 'dashboard':
-            await Promise.all([
-                loadDashboardData(),
-                loadConsoleLogs()
-            ]);
+            // Load dashboard stats immediately, defer console logs
+            await loadDashboardData();
+            setTimeout(() => loadConsoleLogs(), 50);
             break;
         case 'network':
             await loadNetworkData();
