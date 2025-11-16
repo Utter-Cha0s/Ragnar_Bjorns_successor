@@ -2242,6 +2242,13 @@ def get_vulnerability_intel():
                                     # Skip lines that look like vulnerability IDs or scores
                                     if re.search(r'\d+\.\d+\s+https?://', line):
                                         continue
+                                    # Skip nmap footer messages
+                                    if 'service detection performed' in line_lower:
+                                        continue
+                                    if 'please report any incorrect results' in line_lower:
+                                        continue
+                                    if 'nmap.org/submit' in line_lower:
+                                        continue
                                     filtered_lines.append(line)
                                 
                                 script_lines = filtered_lines
@@ -2313,8 +2320,12 @@ def get_vulnerability_intel():
                     logger.error(f"Error parsing scan file {filename}: {e}")
                     continue
         
-        # Sort scans by scan date (most recent first)
-        scans.sort(key=lambda x: x['scan_date'], reverse=True)
+        # Sort scans by interesting content (most services and scripts first), then by scan date
+        scans.sort(key=lambda x: (
+            -x['total_services'],  # Most services first
+            -sum(len(svc.get('scripts', [])) for svc in x['services']),  # Most scripts first
+            x['scan_date']  # Then by date descending
+        ), reverse=False)  # reverse=False because we're using negative values
         
         return jsonify({
             'scans': scans,
