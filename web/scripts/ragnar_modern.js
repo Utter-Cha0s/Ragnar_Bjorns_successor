@@ -521,6 +521,7 @@ function setupAutoRefresh() {
             socket.emit('request_credentials');
             socket.emit('request_loot');
             loadAttackLogs(); // Also refresh attack logs
+            loadVulnerabilityIntel(); // Also refresh vulnerability intel
         }
     }, 20000); // Every 20 seconds
     
@@ -609,7 +610,8 @@ async function loadTabData(tabName) {
             await Promise.all([
                 loadCredentialsData(),
                 loadLootData(),
-                loadAttackLogs()
+                loadAttackLogs(),
+                loadVulnerabilityIntel()
             ]);
             break;
         case 'threat-intel':
@@ -2179,6 +2181,206 @@ function toggleAttackHost(ip) {
         chevron.classList.remove('rotate-180');
     }
 }
+
+// ============================================================================
+// VULNERABILITY INTELLIGENCE FUNCTIONS
+// ============================================================================
+
+async function loadVulnerabilityIntel() {
+    try {
+        const container = document.getElementById('vulnerability-intel-container');
+        
+        // Show loading state
+        container.innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                <svg class="w-8 h-8 inline animate-spin mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                <p>Loading vulnerability intelligence...</p>
+            </div>
+        `;
+        
+        const data = await fetchAPI('/api/vulnerability-intel');
+        
+        if (!data) {
+            container.innerHTML = `
+                <div class="text-center text-red-400 py-8">
+                    <p>Error loading vulnerability intelligence</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Update statistics
+        document.getElementById('intel-stat-hosts').textContent = data.statistics.total_hosts || 0;
+        document.getElementById('intel-stat-critical').textContent = data.statistics.critical || 0;
+        document.getElementById('intel-stat-high').textContent = data.statistics.high || 0;
+        document.getElementById('intel-stat-medium').textContent = data.statistics.medium || 0;
+        document.getElementById('intel-stat-exploits').textContent = data.statistics.exploits || 0;
+        
+        displayVulnerabilityIntel(data.scans);
+    } catch (error) {
+        console.error('Error loading vulnerability intelligence:', error);
+        const container = document.getElementById('vulnerability-intel-container');
+        container.innerHTML = `
+            <div class="text-center text-red-400 py-8">
+                <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <p>Error loading vulnerability intelligence</p>
+                <p class="text-sm text-gray-500 mt-2">${error.message}</p>
+            </div>
+        `;
+    }
+}
+
+function displayVulnerabilityIntel(scans) {
+    const container = document.getElementById('vulnerability-intel-container');
+    
+    if (!scans || scans.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                </svg>
+                <p>No vulnerability scans found</p>
+                <p class="text-sm text-gray-500 mt-2">Run vulnerability scans on discovered hosts to see results here</p>
+            </div>
+        `;
+        return;
+    }
+    
+    let html = '<div class="space-y-4">';
+    
+    scans.forEach(scan => {
+        const hasVulns = scan.total_vulnerabilities > 0;
+        const criticalCount = scan.summary.critical || 0;
+        const highCount = scan.summary.high || 0;
+        const mediumCount = scan.summary.medium || 0;
+        const lowCount = scan.summary.low || 0;
+        const exploitCount = scan.summary.exploits || 0;
+        
+        html += `
+            <div class="bg-slate-800 bg-opacity-50 rounded-lg border border-slate-700 overflow-hidden">
+                <div class="px-4 py-3 bg-slate-900 bg-opacity-50 flex items-center justify-between cursor-pointer hover:bg-opacity-70 transition-colors" onclick="toggleVulnHost('${scan.ip}')">
+                    <div class="flex items-center space-x-3">
+                        <svg class="w-5 h-5 ${hasVulns ? 'text-red-400' : 'text-green-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                        </svg>
+                        <div>
+                            <div class="font-semibold text-lg">${escapeHtml(scan.hostname)}</div>
+                            <div class="text-sm text-gray-400">${escapeHtml(scan.ip)}</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        ${criticalCount > 0 ? `<span class="text-sm text-red-400">🔴 ${criticalCount}</span>` : ''}
+                        ${highCount > 0 ? `<span class="text-sm text-orange-400">🟠 ${highCount}</span>` : ''}
+                        ${mediumCount > 0 ? `<span class="text-sm text-yellow-400">🟡 ${mediumCount}</span>` : ''}
+                        ${exploitCount > 0 ? `<span class="text-sm text-purple-400">💥 ${exploitCount}</span>` : ''}
+                        <span class="text-xs text-gray-500">${scan.scan_date}</span>
+                        <svg id="vuln-chevron-${scan.ip.replace(/\./g, '-')}" class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </div>
+                </div>
+                
+                <div id="vuln-host-${scan.ip.replace(/\./g, '-')}" class="hidden px-4 py-3 border-t border-slate-700">
+                    ${scan.total_vulnerabilities === 0 ? `
+                        <p class="text-center text-green-400 py-4">✅ No vulnerabilities found</p>
+                    ` : `
+                        <div class="mb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
+                            <div class="bg-red-900 bg-opacity-30 rounded p-2 text-center">
+                                <div class="text-xs text-gray-400">Critical</div>
+                                <div class="text-xl font-bold text-red-400">${criticalCount}</div>
+                            </div>
+                            <div class="bg-orange-900 bg-opacity-30 rounded p-2 text-center">
+                                <div class="text-xs text-gray-400">High</div>
+                                <div class="text-xl font-bold text-orange-400">${highCount}</div>
+                            </div>
+                            <div class="bg-yellow-900 bg-opacity-30 rounded p-2 text-center">
+                                <div class="text-xs text-gray-400">Medium</div>
+                                <div class="text-xl font-bold text-yellow-400">${mediumCount}</div>
+                            </div>
+                            <div class="bg-blue-900 bg-opacity-30 rounded p-2 text-center">
+                                <div class="text-xs text-gray-400">Low</div>
+                                <div class="text-xl font-bold text-blue-400">${lowCount}</div>
+                            </div>
+                            <div class="bg-purple-900 bg-opacity-30 rounded p-2 text-center">
+                                <div class="text-xs text-gray-400">Exploits</div>
+                                <div class="text-xl font-bold text-purple-400">${exploitCount}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="space-y-2 max-h-96 overflow-y-auto scrollbar-thin">
+                            ${scan.vulnerabilities.map(vuln => {
+                                const severityColor = vuln.severity === 'critical' ? 'red' : 
+                                                     vuln.severity === 'high' ? 'orange' : 
+                                                     vuln.severity === 'medium' ? 'yellow' : 'blue';
+                                return `
+                                    <div class="bg-slate-700 bg-opacity-50 rounded p-3 hover:bg-opacity-70 transition-colors">
+                                        <div class="flex items-start justify-between">
+                                            <div class="flex-1">
+                                                <div class="flex items-center space-x-2 mb-1">
+                                                    <span class="font-mono text-sm text-${severityColor}-400">${escapeHtml(vuln.id)}</span>
+                                                    ${vuln.is_exploit ? '<span class="text-xs bg-purple-600 text-white px-2 py-0.5 rounded">EXPLOIT</span>' : ''}
+                                                </div>
+                                                <div class="text-xs text-gray-400">
+                                                    Port: ${escapeHtml(vuln.port)} (${escapeHtml(vuln.service)})
+                                                </div>
+                                            </div>
+                                            <div class="flex items-center space-x-2">
+                                                <span class="px-2 py-1 rounded text-xs font-semibold bg-${severityColor}-600 text-white">
+                                                    ${vuln.score}
+                                                </span>
+                                                <a href="${escapeHtml(vuln.url)}" target="_blank" class="text-blue-400 hover:text-blue-300 text-xs">
+                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                                                    </svg>
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                            ${scan.total_vulnerabilities > 100 ? `
+                                <p class="text-center text-gray-400 text-sm py-2">
+                                    Showing first 100 of ${scan.total_vulnerabilities} vulnerabilities
+                                </p>
+                            ` : ''}
+                        </div>
+                    `}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function toggleVulnHost(ip) {
+    const containerId = `vuln-host-${ip.replace(/\./g, '-')}`;
+    const chevronId = `vuln-chevron-${ip.replace(/\./g, '-')}`;
+    const container = document.getElementById(containerId);
+    const chevron = document.getElementById(chevronId);
+    
+    if (container.classList.contains('hidden')) {
+        container.classList.remove('hidden');
+        chevron.classList.add('rotate-180');
+    } else {
+        container.classList.add('hidden');
+        chevron.classList.remove('rotate-180');
+    }
+}
+
+async function refreshVulnerabilityIntel() {
+    showNotification('Refreshing vulnerability intelligence...', 'info');
+    await loadVulnerabilityIntel();
+}
+
+// ============================================================================
+// CREDENTIALS AND LOOT FUNCTIONS  
+// ============================================================================
 
 function escapeHtml(text) {
     const div = document.createElement('div');

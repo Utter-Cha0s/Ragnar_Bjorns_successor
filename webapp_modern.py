@@ -2154,6 +2154,150 @@ def get_loot():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/vulnerability-intel')
+def get_vulnerability_intel():
+    """Get vulnerability intelligence from scan files"""
+    try:
+        vuln_dir = os.path.join('data', 'output', 'vulnerabilities')
+        
+        if not os.path.exists(vuln_dir):
+            return jsonify({
+                'scans': [],
+                'statistics': {
+                    'total_hosts': 0,
+                    'critical': 0,
+                    'high': 0,
+                    'medium': 0,
+                    'low': 0,
+                    'exploits': 0
+                }
+            })
+        
+        scans = []
+        stats = {
+            'total_hosts': 0,
+            'critical': 0,
+            'high': 0,
+            'medium': 0,
+            'low': 0,
+            'exploits': 0
+        }
+        
+        # Process all vulnerability scan files
+        for filename in os.listdir(vuln_dir):
+            if filename.endswith('_vuln_scan.txt'):
+                file_path = os.path.join(vuln_dir, filename)
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    
+                    # Extract host information from filename and content
+                    # Filename format: 0000c0a801c0_192.168.1.192_vuln_scan.txt
+                    parts = filename.split('_')
+                    ip = parts[1] if len(parts) > 1 else 'Unknown'
+                    
+                    # Extract hostname from scan report
+                    hostname = 'Unknown'
+                    hostname_match = re.search(r'Nmap scan report for ([^\s]+)\s+\(([^\)]+)\)', content)
+                    if hostname_match:
+                        hostname = hostname_match.group(1)
+                        ip = hostname_match.group(2)
+                    else:
+                        hostname_match = re.search(r'Nmap scan report for ([^\s]+)', content)
+                        if hostname_match:
+                            potential_host = hostname_match.group(1)
+                            if not re.match(r'^\d+\.\d+\.\d+\.\d+$', potential_host):
+                                hostname = potential_host
+                    
+                    # Parse vulnerabilities
+                    vulnerabilities = []
+                    exploit_count = 0
+                    
+                    # Extract port sections
+                    port_sections = re.findall(r'(\d+/tcp)\s+open\s+(\S+).*?\n\| vulners:(.*?)(?=\n\d+/tcp|\nService Info:|\nNmap done:|$)', content, re.DOTALL)
+                    
+                    for port, service, vuln_block in port_sections:
+                        # Extract individual vulnerabilities
+                        vuln_lines = re.findall(r'\|\s+(?:cpe:/[^\s]+:|[\w/\.]+:)?\s*([\w\-:]+)\s+([\d\.]+)\s+(https://[^\s]+)(?:\s+\*EXPLOIT\*)?', vuln_block)
+                        
+                        for vuln_id, score, url in vuln_lines:
+                            try:
+                                score_float = float(score)
+                            except:
+                                score_float = 0.0
+                            
+                            # Check if it's an exploit
+                            is_exploit = '*EXPLOIT*' in vuln_block and vuln_id in vuln_block.split('*EXPLOIT*')[0].split('\n')[-1]
+                            if is_exploit:
+                                exploit_count += 1
+                                stats['exploits'] += 1
+                            
+                            # Categorize severity
+                            severity = 'low'
+                            if score_float >= 9.0:
+                                severity = 'critical'
+                                stats['critical'] += 1
+                            elif score_float >= 7.0:
+                                severity = 'high'
+                                stats['high'] += 1
+                            elif score_float >= 4.0:
+                                severity = 'medium'
+                                stats['medium'] += 1
+                            else:
+                                stats['low'] += 1
+                            
+                            vulnerabilities.append({
+                                'id': vuln_id,
+                                'score': score_float,
+                                'severity': severity,
+                                'url': url,
+                                'port': port,
+                                'service': service,
+                                'is_exploit': is_exploit
+                            })
+                    
+                    # Get file modification time
+                    mod_time = os.path.getmtime(file_path)
+                    scan_date = datetime.fromtimestamp(mod_time).strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    # Group vulnerabilities by severity
+                    vuln_summary = {
+                        'critical': len([v for v in vulnerabilities if v['severity'] == 'critical']),
+                        'high': len([v for v in vulnerabilities if v['severity'] == 'high']),
+                        'medium': len([v for v in vulnerabilities if v['severity'] == 'medium']),
+                        'low': len([v for v in vulnerabilities if v['severity'] == 'low']),
+                        'exploits': exploit_count
+                    }
+                    
+                    scans.append({
+                        'ip': ip,
+                        'hostname': hostname,
+                        'scan_date': scan_date,
+                        'filename': filename,
+                        'vulnerabilities': vulnerabilities[:100],  # Limit to first 100 for performance
+                        'total_vulnerabilities': len(vulnerabilities),
+                        'summary': vuln_summary
+                    })
+                    
+                    stats['total_hosts'] += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing vulnerability file {filename}: {e}")
+                    continue
+        
+        # Sort scans by scan date (most recent first)
+        scans.sort(key=lambda x: x['scan_date'], reverse=True)
+        
+        return jsonify({
+            'scans': scans,
+            'statistics': stats
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting vulnerability intelligence: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/logs')
 def get_logs():
     """Get recent logs - prioritizing orchestrator.py output"""
