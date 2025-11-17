@@ -3880,7 +3880,11 @@ def scan_single_host():
 
 @app.route('/api/scan/deep', methods=['POST'])
 def deep_scan_host():
-    """Perform a deep scan on a single host using TCP connect scan (-sT) on all ports"""
+    """Perform a deep scan on a single host using TCP connect scan (-sT).
+
+    Defaults to the curated top 3000 ports unless the caller explicitly requests a
+    full-range sweep via mode/full flags.
+    """
     try:
         # ===== REQUEST INTROSPECTION =====
         logger.info("🎯 DEEP SCAN API ENDPOINT CALLED")

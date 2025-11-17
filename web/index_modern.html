@@ -581,6 +581,29 @@
                         </button>
                     </div>
                 </div>
+
+                <!-- Custom Deep Scan Control -->
+                <div class="mt-4 border-t border-slate-800 pt-4">
+                    <div class="flex flex-col lg:flex-row lg:items-center lg:space-x-4 gap-3">
+                        <div>
+                            <p class="text-sm font-semibold text-gray-200">Manual Target Scan</p>
+                            <p class="text-xs text-gray-400">Run nmap -sT against the top 3000 ports for any IP address.</p>
+                        </div>
+                        <div class="flex flex-1 flex-col sm:flex-row sm:items-center gap-2">
+                            <input id="custom-deep-scan-ip"
+                                   type="text"
+                                   inputmode="decimal"
+                                   autocomplete="off"
+                                   placeholder="192.168.1.192"
+                                   class="w-full bg-slate-900/70 border border-slate-700 focus:border-Ragnar-500 rounded px-3 py-2 text-sm" />
+                            <button id="custom-deep-scan-btn"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                                Scan Top 3000
+                            </button>
+                        </div>
+                    </div>
+                    <p id="custom-deep-scan-status" class="text-xs text-gray-400 mt-2">Enter an IP address to run a targeted scan.</p>
+                </div>
             </div>
 
             <!-- Network Hosts Table -->
