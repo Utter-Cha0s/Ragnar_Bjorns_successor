@@ -566,25 +566,13 @@ setup_ragnar() {
         fi
     done
 
-        # Install Waveshare e-Paper Python library
-    log "INFO" "Installing Waveshare e-Paper library for $EPD_VERSION..."
-    cd /home/$ragnar_USER
-    if [ ! -d "e-Paper" ]; then
-        git clone --depth=1 --filter=blob:none --sparse https://github.com/waveshareteam/e-Paper.git
-        cd e-Paper
-        git sparse-checkout set RaspberryPi_JetsonNano
-        cd RaspberryPi_JetsonNano/python
-        log "INFO" "Installing e-Paper Python package..."
-        pip3 install . --break-system-packages
-        check_success "Installed Waveshare e-Paper library"
-    else
-        log "INFO" "Waveshare e-Paper repository already exists, skipping clone"
-        cd e-Paper/RaspberryPi_JetsonNano/python
-        pip3 install . --break-system-packages
-        check_success "Reinstalled Waveshare e-Paper library"
-    fi
+    # Verify Waveshare e-Paper Python library (already installed in main())
+    log "INFO" "Verifying Waveshare e-Paper library installation for $EPD_VERSION..."
+    cd /home/$ragnar_USER/e-Paper/RaspberryPi_JetsonNano/python
+    pip3 install . --break-system-packages
+    
     python3 -c "from waveshare_epd import ${EPD_VERSION}; print('EPD module OK')" \
-        && log "SUCCESS" "$EPD_VERSION driver installed successfully" \
+        && log "SUCCESS" "$EPD_VERSION driver verified successfully" \
         || log "ERROR" "EPD driver $EPD_VERSION failed to import"
 
     check_success "Installed Python requirements"
@@ -1004,27 +992,65 @@ main() {
     echo "2. Custom installation"
     read -p "Choose an option (1/2): " install_option
 
-    # E-Paper Display Selection
-    echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
-    echo "1. epd2in13"
-    echo "2. epd2in13_V2"
-    echo "3. epd2in13_V3"
-    echo "4. epd2in13_V4"
-    echo "5. epd2in7"
+    # Install Waveshare e-Paper library first (needed for auto-detection)
+    echo -e "\n${BLUE}Installing Waveshare e-Paper library...${NC}"
+    log "INFO" "Installing Waveshare e-Paper library for auto-detection"
     
-    while true; do
-        read -p "Enter your choice (1-4): " epd_choice
-        case $epd_choice in
-            1) EPD_VERSION="epd2in13"; break;;
-            2) EPD_VERSION="epd2in13_V2"; break;;
-            3) EPD_VERSION="epd2in13_V3"; break;;
-            4) EPD_VERSION="epd2in13_V4"; break;;
-            5) EPD_VERSION="epd2in7"; break;;
-            *) echo -e "${RED}Invalid choice. Please select 1-5.${NC}";;
-        esac
-    done
+    cd /home/$ragnar_USER 2>/dev/null || mkdir -p /home/$ragnar_USER
+    if [ ! -d "e-Paper" ]; then
+        git clone --depth=1 --filter=blob:none --sparse https://github.com/waveshareteam/e-Paper.git
+        cd e-Paper
+        git sparse-checkout set RaspberryPi_JetsonNano
+        cd RaspberryPi_JetsonNano/python
+        pip3 install . --break-system-packages >/dev/null 2>&1
+        log "SUCCESS" "Installed Waveshare e-Paper library"
+    else
+        log "INFO" "Waveshare e-Paper repository already exists"
+        cd e-Paper/RaspberryPi_JetsonNano/python
+        pip3 install . --break-system-packages >/dev/null 2>&1
+    fi
 
-    log "INFO" "Selected E-Paper Display version: $EPD_VERSION"
+    # Auto-detect E-Paper Display
+    echo -e "\n${BLUE}Detecting E-Paper Display...${NC}"
+    log "INFO" "Attempting to auto-detect E-Paper display"
+    
+    EPD_VERSION=""
+    EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
+    
+    for version in "${EPD_VERSIONS[@]}"; do
+        if python3 -c "from waveshare_epd import ${version}; epd = ${version}.EPD(); epd.init(); epd.sleep()" 2>/dev/null; then
+            EPD_VERSION="$version"
+            echo -e "${GREEN}✓ Detected E-Paper display: $EPD_VERSION${NC}"
+            log "SUCCESS" "Auto-detected E-Paper display: $EPD_VERSION"
+            break
+        fi
+    done
+    
+    # If auto-detection failed, show manual selection
+    if [ -z "$EPD_VERSION" ]; then
+        echo -e "${YELLOW}⚠ Could not auto-detect E-Paper display${NC}"
+        log "WARNING" "E-Paper auto-detection failed, requesting manual selection"
+        
+        echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
+        echo "1. epd2in13"
+        echo "2. epd2in13_V2"
+        echo "3. epd2in13_V3"
+        echo "4. epd2in13_V4"
+        echo "5. epd2in7"
+        
+        while true; do
+            read -p "Enter your choice (1-5): " epd_choice
+            case $epd_choice in
+                1) EPD_VERSION="epd2in13"; break;;
+                2) EPD_VERSION="epd2in13_V2"; break;;
+                3) EPD_VERSION="epd2in13_V3"; break;;
+                4) EPD_VERSION="epd2in13_V4"; break;;
+                5) EPD_VERSION="epd2in7"; break;;
+                *) echo -e "${RED}Invalid choice. Please select 1-5.${NC}";;
+            esac
+        done
+        log "INFO" "Manually selected E-Paper Display version: $EPD_VERSION"
+    fi
 
     case $install_option in
         1)
