@@ -135,9 +135,9 @@ check_system_compatibility() {
         source /etc/os-release
         
         # Verify if it's Raspbian
-        if [ "$NAME" != "Raspbian GNU/Linux" ]; then
-            log "WARNING" "Different OS detected. Recommended: Raspbian GNU/Linux, Found: ${NAME}"
-            echo -e "${YELLOW}Your system is not running Raspbian GNU/Linux.${NC}"
+        if [ "$NAME" != "Debian GNU/Linux" ]; then
+            log "WARNING" "Different OS detected. Recommended: Debian GNU/Linux, Found: ${NAME}"
+            echo -e "${YELLOW}Your system is not running Debian GNU/Linux.${NC}"
             should_ask_confirmation=true
         fi
         
