@@ -1,5 +1,3 @@
-// Ragnar_modern.js - Enhanced Modern JavaScript for Ragnar web interface
-
 let socket;
 let reconnectAttempts = 0;
 const RECONNECT_WARNING_THRESHOLD = 5;
@@ -7,10 +5,8 @@ const RECONNECT_DELAY_MAX = 15000;
 let currentTab = 'dashboard';
 let autoRefreshIntervals = {};
 
-// Track which tabs have been preloaded to avoid duplicate loading
 let preloadedTabs = new Set();
 
-// Configuration metadata for tooltips
 const configMetadata = {
     manual_mode: {
         label: "Manual Mode",
@@ -282,7 +278,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     initializeSocket();
     initializeTabs();
@@ -292,10 +287,6 @@ document.addEventListener('DOMContentLoaded', function() {
     setupEpaperAutoRefresh();
     setupEventListeners();
 });
-
-// ============================================================================
-// WEBSOCKET CONNECTION
-// ============================================================================
 
 function initializeSocket() {
     socket = io({
@@ -309,8 +300,7 @@ function initializeSocket() {
         updateConnectionStatus(true);
         reconnectAttempts = 0;
         addConsoleMessage('Connected to Ragnar server', 'success');
-        
-        // Request initial data
+
         socket.emit('request_status');
         socket.emit('request_logs');
     });
@@ -319,7 +309,7 @@ function initializeSocket() {
         console.log('Disconnected from Ragnar server');
         updateConnectionStatus(false);
         addConsoleMessage('Disconnected from server', 'error');
-        // Ensure the client continues to retry if Socket.IO gives up internally
+
         setTimeout(() => {
             if (socket && socket.disconnected) {
                 console.log('Attempting manual socket reconnection');
@@ -338,8 +328,6 @@ function initializeSocket() {
 
     socket.on('network_update', function(data) {
         if (currentTab === 'network') {
-            // Only refresh the stable data when we get background updates
-            // This prevents the twitching by not processing conflicting data sources
             loadStableNetworkData();
         }
     });
@@ -363,7 +351,6 @@ function initializeSocket() {
         }
     });
 
-    // Real-time scanning WebSocket handlers
     socket.on('scan_started', function(data) {
         handleScanStarted(data);
     });
@@ -416,12 +403,7 @@ function updateConnectionStatus(connected) {
     }
 }
 
-// ============================================================================
-// EVENT LISTENERS
-// ============================================================================
-
 function setupEventListeners() {
-    // Tab navigation
     document.querySelectorAll('[data-tab]').forEach(button => {
         button.addEventListener('click', function() {
             const tabName = this.getAttribute('data-tab');
@@ -429,70 +411,52 @@ function setupEventListeners() {
         });
     });
 
-    // Refresh buttons
     document.addEventListener('click', function(e) {
         if (e.target.classList.contains('refresh-btn')) {
             refreshCurrentTab();
         }
     });
 
-    // Clear console button
     const clearBtn = document.getElementById('clear-console');
     if (clearBtn) {
         clearBtn.addEventListener('click', clearConsole);
     }
-
-    // Remove network scan button listeners to prevent conflicts
-    // Network tab now just displays stable data from background scanning
 }
 
-// ============================================================================
-// TAB MANAGEMENT
-// ============================================================================
-
 function initializeTabs() {
-    // Set dashboard as active by default
     showTab('dashboard');
 }
 
 function showTab(tabName) {
-    // Store current tab
     currentTab = tabName;
-    
-    // Clear system monitoring interval when leaving system tab
+
     if (systemMonitoringInterval && tabName !== 'system') {
         clearInterval(systemMonitoringInterval);
         systemMonitoringInterval = null;
     }
     
-    // Hide all tabs
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.add('hidden');
     });
     
-    // Remove active class from all nav buttons
     document.querySelectorAll('.nav-btn, [data-tab]').forEach(btn => {
         btn.classList.remove('bg-Ragnar-600');
         btn.classList.add('text-gray-300', 'hover:text-white', 'hover:bg-gray-700');
     });
-    
-    // Show selected tab
+
     const selectedTab = document.getElementById(`${tabName}-tab`);
     if (selectedTab) {
         selectedTab.classList.remove('hidden');
     }
-    
-    // Add active class to selected nav button
+
     const selectedBtn = document.querySelector(`[data-tab="${tabName}"]`);
     if (selectedBtn) {
         selectedBtn.classList.add('bg-Ragnar-600');
         selectedBtn.classList.remove('text-gray-300', 'hover:text-white', 'hover:bg-gray-700');
     }
-    
-    // Load tab-specific data
+
     loadTabData(tabName);
-    
-    // Close mobile menu
+
     const mobileMenu = document.getElementById('mobile-menu');
     if (mobileMenu) {
         mobileMenu.classList.add('hidden');
@@ -505,7 +469,7 @@ function refreshCurrentTab() {
 }
 
 function setupAutoRefresh() {
-    // Set up auto-refresh for different tabs
+
     autoRefreshIntervals.network = setInterval(() => {
         if (currentTab === 'network' && socket && socket.connected) {
             socket.emit('request_network');
@@ -524,30 +488,26 @@ function setupAutoRefresh() {
             socket.emit('request_credentials');
             socket.emit('request_loot');
             loadAttackLogs(); // Also refresh attack logs
-            // Don't auto-refresh vulnerability intel to prevent card reset
+
         }
     }, 20000); // Every 20 seconds
-    
-    // Set up console log refreshing (fallback when WebSocket is not working)
+
     autoRefreshIntervals.console = setInterval(() => {
         if (currentTab === 'dashboard') {
             loadConsoleLogs();
         }
     }, 5000); // Every 5 seconds when on dashboard
-    
-    // Set up dashboard stats auto-refresh
+
     autoRefreshIntervals.dashboard = setInterval(() => {
         if (currentTab === 'dashboard') {
             loadDashboardData();
         }
     }, 15000); // Every 15 seconds when on dashboard
-    
-    // Set up periodic update checking
+
     autoRefreshIntervals.updates = setInterval(() => {
         checkForUpdatesQuiet();
     }, 300000); // Every 5 minutes
-    
-    // Initial update check after page load
+
     setTimeout(() => {
         checkForUpdatesQuiet();
     }, 5000); // Check 5 seconds after page load
@@ -564,13 +524,9 @@ function initializeMobileMenu() {
     }
 }
 
-// ============================================================================
-// DATA LOADING
-// ============================================================================
-
 async function loadInitialData() {
     try {
-        // Priority 1: Load critical dashboard stats first for immediate visibility
+
         await Promise.all([
             fetchAPI('/api/status').then(status => {
                 if (status) {
@@ -579,11 +535,9 @@ async function loadInitialData() {
             }),
             loadDashboardData()
         ]);
-        
-        // Priority 2: Load Wi-Fi status (medium priority, shown in nav)
+
         refreshWifiStatus().catch(err => console.warn('WiFi status load failed:', err));
-        
-        // Priority 3: Load console logs last (lowest priority, background info)
+
         setTimeout(() => {
             loadConsoleLogs().then(() => {
                 addConsoleMessage('Ragnar Modern Web Interface Initialized', 'success');
@@ -593,8 +547,7 @@ async function loadInitialData() {
                 addConsoleMessage('Error loading console logs', 'warning');
             });
         }, 100);
-        
-        // Priority 4: Preload all other tabs in background after dashboard is ready
+
         setTimeout(() => {
             preloadAllTabs();
         }, 500);
@@ -605,21 +558,16 @@ async function loadInitialData() {
     }
 }
 
-// Preload all tabs in background for instant switching
 async function preloadAllTabs() {
     console.log('Starting background preload of all tabs...');
     
     try {
-        // Preload in batches to avoid overwhelming the backend
-        
-        // Batch 1: Network tab (most frequently accessed after dashboard)
+
         await loadNetworkData().catch(err => console.warn('Network preload failed:', err));
         preloadedTabs.add('network');
-        
-        // Small delay between batches
+
         await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Batch 2: Discovered tab (credentials, loot, attacks, vulnerabilities)
+
         await Promise.all([
             loadCredentialsData().catch(err => console.warn('Credentials preload failed:', err)),
             loadLootData().catch(err => console.warn('Loot preload failed:', err)),
@@ -629,26 +577,22 @@ async function preloadAllTabs() {
         preloadedTabs.add('discovered');
         
         await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Batch 3: Threat Intel tab
+
         await loadThreatIntelData().catch(err => console.warn('Threat intel preload failed:', err));
         preloadedTabs.add('threat-intel');
         
         await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Batch 4: Connect tab
+
         await loadConnectData().catch(err => console.warn('Connect preload failed:', err));
         preloadedTabs.add('connect');
         
         await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Batch 5: E-Paper tab
+
         await loadEpaperDisplay().catch(err => console.warn('E-Paper preload failed:', err));
         preloadedTabs.add('epaper');
         
         await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Batch 6: Files and Config (lower priority)
+
         await Promise.all([
             loadFilesData().catch(err => console.warn('Files preload failed:', err)),
             loadImagesData().catch(err => console.warn('Images preload failed:', err)),
@@ -656,9 +600,7 @@ async function preloadAllTabs() {
         ]);
         preloadedTabs.add('files');
         preloadedTabs.add('config');
-        
-        // System and NetKB tabs load on-demand (they use different patterns)
-        
+
         console.log('Background tab preload completed');
         addConsoleMessage('All tabs preloaded and ready', 'success');
         
@@ -668,19 +610,17 @@ async function preloadAllTabs() {
 }
 
 async function loadTabData(tabName) {
-    // If tab was already preloaded, skip reloading unless it's a dynamic tab
-    // System and netkb always load (they use polling/intervals)
-    // Network and threat-intel always refresh for up-to-date data
+
     const alreadyPreloaded = preloadedTabs.has(tabName);
     
     switch(tabName) {
         case 'dashboard':
-            // Load dashboard stats immediately, defer console logs
+
             await loadDashboardData();
             setTimeout(() => loadConsoleLogs(), 50);
             break;
         case 'network':
-            // Always refresh network data when switching to this tab
+
             await loadNetworkData();
             break;
         case 'connect':
@@ -699,7 +639,7 @@ async function loadTabData(tabName) {
             }
             break;
         case 'threat-intel':
-            // Always refresh threat intel data when switching to this tab
+
             await loadThreatIntelData();
             break;
         case 'files':
@@ -711,11 +651,11 @@ async function loadTabData(tabName) {
             }
             break;
         case 'system':
-            // Always load system (uses intervals)
+
             loadSystemData();
             break;
         case 'netkb':
-            // Always load netkb
+
             loadNetkbData();
             break;
         case 'epaper':
@@ -875,17 +815,13 @@ function updateDashboardStats(stats) {
 
 async function loadNetworkData() {
     try {
-        // Use the new stable network data endpoint
+
         await loadStableNetworkData();
     } catch (error) {
         console.error('Error loading network data:', error);
         addConsoleMessage('Failed to load network data', 'error');
     }
 }
-
-// ============================================================================
-// STABLE NETWORK DATA FUNCTIONS
-// ============================================================================
 
 async function loadStableNetworkData() {
     try {
@@ -908,8 +844,7 @@ function displayStableNetworkTable(data) {
     const hostCountSpan = document.getElementById('host-count');
     
     if (!tableBody) return;
-    
-    // Save all existing deep scan button states before clearing table
+
     const existingRows = tableBody.querySelectorAll('tr[data-ip]');
     existingRows.forEach(row => {
         const ip = row.getAttribute('data-ip');
@@ -931,12 +866,11 @@ function displayStableNetworkTable(data) {
         if (hostCountSpan) hostCountSpan.textContent = '0 hosts';
         return;
     }
-    
-    // Use DocumentFragment for better performance
+
     const fragment = document.createDocumentFragment();
     
     data.hosts.forEach((host, index) => {
-        // DEBUG: Log first few host objects to see structure
+
         if (index < 5) {
             console.log(`🔍 Host ${index}:`, host);
             console.log(`   IP field:`, host.ip, typeof host.ip);
@@ -945,28 +879,23 @@ function displayStableNetworkTable(data) {
         
         const row = document.createElement('tr');
         row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
-        
-        // Status indicator
+
         const statusIcon = host.status === 'up' ? 
             '<span class="flex items-center"><div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>Online</span>' :
             '<span class="flex items-center"><div class="w-2 h-2 bg-gray-500 rounded-full mr-2"></div>Unknown</span>';
-        
-        // Format MAC address
+
         let macDisplay = host.mac === 'Unknown' ? 
             '<span class="text-gray-500">Unknown</span>' : 
             `<span class="font-mono text-xs">${host.mac}</span>`;
-        
-        // Format ports
+
         let portsDisplay = host.ports === 'Unknown' || host.ports === 'Scanning...' ? 
             '<span class="text-gray-500">Unknown</span>' : 
             `<span class="text-xs">${host.ports}</span>`;
-        
-        // Format vulnerabilities
+
         let vulnDisplay = host.vulnerabilities === '0' ? 
             '<span class="text-gray-500">None</span>' : 
             `<span class="text-orange-400">${host.vulnerabilities}</span>`;
-        
-        // Format last scan
+
         let lastScanDisplay = host.last_scan === 'Never' || host.last_scan === 'Unknown' ? 
             '<span class="text-gray-500">Never</span>' : 
             `<span class="text-xs">${formatTimeAgo(host.last_scan)}</span>`;
@@ -989,30 +918,23 @@ function displayStableNetworkTable(data) {
                 </button>
             </td>
         `;
-        
-        // Set data-ip attribute for state management
+
         row.setAttribute('data-ip', host.ip);
         
         fragment.appendChild(row);
-        
-        // Restore deep scan button state after adding to fragment
-        // (will be applied after fragment is appended to DOM)
+
     });
-    
-    // Append all rows at once for better performance
+
     tableBody.appendChild(fragment);
-    
-    // Now restore button states after DOM is updated
+
     data.hosts.forEach(host => {
         restoreDeepScanButtonState(host.ip);
     });
-    
-    // Update host count
+
     if (hostCountSpan) {
         hostCountSpan.textContent = `${data.hosts.length} hosts`;
     }
-    
-    // Cleanup old button states for removed hosts
+
     cleanupOldDeepScanStates();
 }
 
@@ -1021,8 +943,7 @@ function formatTimeAgo(timeString) {
         if (!timeString || timeString === 'Never' || timeString === 'Unknown') {
             return 'Never';
         }
-        
-        // If it's already a relative time string, return as is
+
         if (timeString.includes('ago') || timeString.includes('Recently')) {
             return timeString;
         }
@@ -1049,7 +970,6 @@ function formatTimeAgo(timeString) {
     }
 }
 
-// Real-time scanning variables
 let currentScanState = {
     isScanning: false,
     totalHosts: 0,
@@ -1058,7 +978,6 @@ let currentScanState = {
     startTime: null
 };
 
-// Deep scan button state management
 let deepScanButtonStates = new Map(); // Map<IP, {status, text, classes, disabled}>
 
 function saveDeepScanButtonState(ip) {
@@ -1103,7 +1022,7 @@ function clearDeepScanButtonState(ip) {
 }
 
 function cleanupOldDeepScanStates() {
-    // Remove states for IPs that no longer have buttons in the DOM
+
     let cleanedCount = 0;
     for (const [ip] of deepScanButtonStates) {
         const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
@@ -1117,7 +1036,6 @@ function cleanupOldDeepScanStates() {
     }
 }
 
-// Real-time scanning control functions
 async function startRealtimeScan() {
     const startBtn = document.getElementById('start-network-scan');
     const stopBtn = document.getElementById('stop-network-scan');
@@ -1138,8 +1056,7 @@ async function startRealtimeScan() {
             currentScanState.startTime = new Date();
             stopBtn.disabled = false;
             startBtn.innerHTML = '⏳ Scanning...';
-            
-            // Show progress section
+
             document.getElementById('scan-progress').classList.remove('hidden');
             
             addConsoleMessage('Real-time network scan started', 'info');
@@ -1159,8 +1076,7 @@ async function stopRealtimeScan() {
     try {
         stopBtn.disabled = true;
         stopBtn.innerHTML = '⏳ Stopping...';
-        
-        // Emit stop scan event via WebSocket
+
         socket.emit('stop_scan');
         
         addConsoleMessage('Stopping network scan...', 'info');
@@ -1185,7 +1101,6 @@ function resetScanButtons() {
     document.getElementById('scan-progress').classList.add('hidden');
 }
 
-// WebSocket event handlers for real-time scanning
 function handleScanStarted(data) {
     currentScanState.totalHosts = data.total_hosts || 0;
     currentScanState.scannedHosts = 0;
@@ -1234,13 +1149,11 @@ function handleScanHostUpdate(data) {
         return;
     }
 
-    // Update the network table with new host data
     if (eventType === 'host_updated' || data.ip || data.IPs) {
         if (currentTab === 'network') {
             updateHostInTable(data);
         }
 
-        // Update threat intelligence and NetKB if vulnerabilities found
         if (data.vulnerabilities && data.vulnerabilities.length > 0) {
             if (currentTab === 'threat-intel') {
                 loadThreatIntelData();
@@ -1256,8 +1169,7 @@ function handleScanHostUpdate(data) {
 function handleScanCompleted(data) {
     addConsoleMessage(`Network scan completed. Found ${data.hosts_discovered || 0} hosts, ${data.vulnerabilities_found || 0} vulnerabilities`, 'success');
     resetScanButtons();
-    
-    // Refresh all relevant tabs
+
     if (currentTab === 'network') {
         loadNetworkData();
     }
@@ -1268,11 +1180,6 @@ function handleScanError(data) {
     resetScanButtons();
 }
 
-// ============================================================================
-// DEEP SCAN FUNCTIONS
-// ============================================================================
-
-// TEST FUNCTION - Direct deep scan test
 function testDeepScan() {
     console.log('🧪 Testing deep scan with hardcoded IP...');
     triggerDeepScan('192.168.1.211');
@@ -1280,7 +1187,7 @@ function testDeepScan() {
 
 async function triggerDeepScan(ip) {
     try {
-        // EXPLICIT DEBUG: Log what we received
+
         console.log('🔍 triggerDeepScan CALLED');
         console.log('   Received IP parameter:', ip);
         console.log('   IP type:', typeof ip);
@@ -1291,8 +1198,7 @@ async function triggerDeepScan(ip) {
             addConsoleMessage('Error: No IP address provided for deep scan', 'error');
             return;
         }
-        
-        // Update button immediately to show scan is starting
+
         const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
         const button = document.getElementById(buttonId);
         if (button) {
@@ -1301,7 +1207,7 @@ async function triggerDeepScan(ip) {
             button.disabled = true;
             button.textContent = 'Initiating...';
             button.dataset.scanStatus = 'initiating';
-            // Save the updated state
+
             saveDeepScanButtonState(ip);
         }
         
@@ -1327,7 +1233,7 @@ async function triggerDeepScan(ip) {
             addConsoleMessage(`Deep scan initiated for ${ip} - scanning all 65535 ports`, 'success');
         } else {
             addConsoleMessage(`Failed to start deep scan: ${data.message}`, 'error');
-            // Reset button on failure
+
             if (button) {
                 button.classList.remove('bg-blue-600', 'cursor-wait');
                 button.classList.add('bg-purple-600', 'hover:bg-purple-700');
@@ -1340,8 +1246,7 @@ async function triggerDeepScan(ip) {
     } catch (error) {
         console.error('Error triggering deep scan:', error);
         addConsoleMessage(`Error starting deep scan: ${error.message}`, 'error');
-        
-        // Reset button on error
+
         const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
         const button = document.getElementById(buttonId);
         if (button) {
@@ -1357,8 +1262,7 @@ async function triggerDeepScan(ip) {
 
 function handleDeepScanUpdate(data) {
     const { type, ip, message } = data;
-    
-    // Get the button for this IP
+
     const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
     const button = document.getElementById(buttonId);
     
@@ -1371,19 +1275,19 @@ function handleDeepScanUpdate(data) {
                 button.disabled = true;
                 button.textContent = 'Scan started';
                 button.dataset.scanStatus = 'scanning';
-                // Save the updated state
+
                 saveDeepScanButtonState(ip);
             }
             break;
         
         case 'deep_scan_progress':
-            // Update button with short progress messages
+
             if (button) {
                 const event = data.event;
                 if (event === 'scanning') {
                     button.textContent = 'Scanning...';
                 } else if (event === 'hostname') {
-                    // Extract short hostname (max 20 chars already in message)
+
                     button.textContent = message;
                 } else if (event === 'port_found') {
                     const port = data.port;
@@ -1391,7 +1295,7 @@ function handleDeepScanUpdate(data) {
                     button.textContent = `Port ${port} found`;
                 }
                 button.dataset.scanStatus = 'scanning';
-                // Save the updated state
+
                 saveDeepScanButtonState(ip);
             }
             break;
@@ -1400,25 +1304,22 @@ function handleDeepScanUpdate(data) {
             const portCount = data.open_ports ? data.open_ports.length : 0;
             const duration = data.scan_duration ? data.scan_duration.toFixed(2) : 'unknown';
             addConsoleMessage(`✅ Deep scan of ${ip} complete: ${portCount} ports found in ${duration}s`, 'success');
-            
-            // Show detailed port information
+
             if (data.open_ports && data.open_ports.length > 0) {
                 const portList = data.open_ports.slice(0, 10).join(', ');
                 const moreText = data.open_ports.length > 10 ? ` (+${data.open_ports.length - 10} more)` : '';
                 addConsoleMessage(`   Open ports: ${portList}${moreText}`, 'info');
             }
-            
-            // Update button to show completion
+
             if (button) {
                 button.classList.remove('bg-blue-600', 'cursor-wait');
                 button.classList.add('bg-green-600');
                 button.textContent = `✅ ${portCount} ports`;
                 button.disabled = true;
                 button.dataset.scanStatus = 'completed';
-                // Save the updated state
+
                 saveDeepScanButtonState(ip);
-                
-                // Reset button after 3 seconds
+
                 setTimeout(() => {
                     if (document.getElementById(buttonId)) {
                         button.classList.remove('bg-green-600');
@@ -1426,13 +1327,12 @@ function handleDeepScanUpdate(data) {
                         button.textContent = 'Deep Scan';
                         button.disabled = false;
                         button.dataset.scanStatus = 'idle';
-                        // Clear the saved state since it's back to default
+
                         clearDeepScanButtonState(ip);
                     }
                 }, 3000);
             }
-            
-            // Refresh network table to show updated port information
+
             if (currentTab === 'network') {
                 loadNetworkData();
             }
@@ -1440,18 +1340,16 @@ function handleDeepScanUpdate(data) {
             
         case 'deep_scan_error':
             addConsoleMessage(`❌ Deep scan error for ${ip}: ${message}`, 'error');
-            
-            // Update button to show error
+
             if (button) {
                 button.classList.remove('bg-blue-600', 'cursor-wait');
                 button.classList.add('bg-red-600');
                 button.textContent = '❌ Error';
                 button.disabled = true;
                 button.dataset.scanStatus = 'error';
-                // Save the updated state
+
                 saveDeepScanButtonState(ip);
-                
-                // Reset button after 3 seconds
+
                 setTimeout(() => {
                     if (document.getElementById(buttonId)) {
                         button.classList.remove('bg-red-600');
@@ -1459,7 +1357,7 @@ function handleDeepScanUpdate(data) {
                         button.textContent = 'Deep Scan';
                         button.disabled = false;
                         button.dataset.scanStatus = 'idle';
-                        // Clear the saved state since it's back to default
+
                         clearDeepScanButtonState(ip);
                     }
                 }, 3000);
@@ -1471,11 +1369,6 @@ function handleDeepScanUpdate(data) {
     }
 }
 
-// ============================================================================
-// ENHANCED NETWORK SCANNING WITH ARP/NMAP
-// ============================================================================
-
-// Network scanning variables for enhanced scanning
 let enhancedNetworkScanInterval = null;
 let isEnhancedRealTimeScanning = false;
 
@@ -1490,14 +1383,11 @@ async function startEnhancedRealTimeScan() {
         startBtn.disabled = true;
         stopBtn.disabled = false;
         isEnhancedRealTimeScanning = true;
-        
-        // Show progress section
+
         document.getElementById('scan-progress').classList.remove('hidden');
-        
-        // Start immediate scan
+
         await performCombinedNetworkScan();
-        
-        // Set up interval for continuous scanning
+
         enhancedNetworkScanInterval = setInterval(async () => {
             if (isEnhancedRealTimeScanning) {
                 await performCombinedNetworkScan();
@@ -1577,29 +1467,24 @@ function updateNetworkTableWithScanData(data) {
         if (hostCountSpan) hostCountSpan.textContent = '0 hosts';
         return;
     }
-    
-    // Convert hosts object to array for easier processing
+
     const hostArray = Object.values(data.hosts);
-    
-    // Use DocumentFragment for better performance
+
     const fragment = document.createDocumentFragment();
     
     hostArray.forEach(host => {
         const row = document.createElement('tr');
         row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
-        
-        // Determine status indicator
+
         const statusIcon = host.status === 'up' ? 
             '<span class="flex items-center"><div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>Online</span>' :
             '<span class="flex items-center"><div class="w-2 h-2 bg-red-500 rounded-full mr-2"></div>Offline</span>';
-        
-        // Format MAC address with vendor info
+
         let macDisplay = host.mac || 'Unknown';
         if (host.vendor) {
             macDisplay += `<br><span class="text-xs text-gray-400">${host.vendor}</span>`;
         }
-        
-        // Get source indicator
+
         const sourceIcon = {
             'arp': '<span class="text-xs px-2 py-1 bg-blue-600 rounded">ARP</span>',
             'nmap': '<span class="text-xs px-2 py-1 bg-purple-600 rounded">NMAP</span>',
@@ -1631,8 +1516,7 @@ function updateNetworkTableWithScanData(data) {
         
         tableBody.appendChild(row);
     });
-    
-    // Update host count
+
     if (hostCountSpan) {
         hostCountSpan.textContent = `${hostArray.length} hosts`;
     }
@@ -1649,7 +1533,7 @@ async function scanSingleHostEnhanced(ip) {
         
         if (data.success) {
             addConsoleMessage(`Host ${ip} scan completed`, 'success');
-            // Refresh the network table to show updated data
+
             await performCombinedNetworkScan();
         } else {
             addConsoleMessage(`Host ${ip} scan failed: ${data.error}`, 'error');
@@ -1972,8 +1856,7 @@ function updateHostInTable(hostData) {
 
     const selector = `tr[data-ip="${escapeSelector(normalized.ip)}"]`;
     let row = tableBody.querySelector(selector);
-    
-    // Save deep scan button state before updating row
+
     if (row) {
         saveDeepScanButtonState(normalized.ip);
     }
@@ -1986,8 +1869,7 @@ function updateHostInTable(hostData) {
     }
 
     row.innerHTML = renderHostRow(normalized);
-    
-    // Restore deep scan button state after updating row
+
     restoreDeepScanButtonState(normalized.ip);
     
     updateHostCountDisplay();
@@ -2032,7 +1914,6 @@ async function loadLootData() {
     }
 }
 
-// Attack Logs Functions
 let currentAttackFilter = 'all';
 let attackLogsCache = null;
 let attackLogsETag = null;
@@ -2105,8 +1986,7 @@ async function loadAttackLogs(options = {}) {
 
 function filterAttackLogs(status) {
     currentAttackFilter = status;
-    
-    // Update filter button styles
+
     document.querySelectorAll('.attack-filter-btn').forEach(btn => {
         if (btn.getAttribute('data-filter') === status) {
             btn.classList.add('ring-2', 'ring-white');
@@ -2114,8 +1994,7 @@ function filterAttackLogs(status) {
             btn.classList.remove('ring-2', 'ring-white');
         }
     });
-    
-    // Re-display with filter
+
     if (attackLogsCache) {
         displayAttackLogs(attackLogsCache);
     }
@@ -2137,17 +2016,14 @@ function displayAttackLogs(data) {
         `;
         return;
     }
-    
-    // Update statistics
+
     document.getElementById('attack-stat-total').textContent = data.total_count || 0;
     document.getElementById('attack-stat-success').textContent = data.success_count || 0;
     document.getElementById('attack-stat-failed').textContent = data.failed_count || 0;
-    
-    // Calculate timeout count
+
     const timeoutCount = data.attack_logs.filter(log => log.status === 'timeout').length;
     document.getElementById('attack-stat-timeout').textContent = timeoutCount;
-    
-    // Filter logs based on current filter
+
     let logs = data.attack_logs;
     if (currentAttackFilter !== 'all') {
         logs = logs.filter(log => log.status === currentAttackFilter);
@@ -2164,8 +2040,7 @@ function displayAttackLogs(data) {
         `;
         return;
     }
-    
-    // Group logs by IP address
+
     const logsByIP = {};
     logs.forEach(log => {
         const ip = log.target_ip || 'Unknown';
@@ -2174,11 +2049,9 @@ function displayAttackLogs(data) {
         }
         logsByIP[ip].push(log);
     });
-    
-    // Sort IPs
+
     const sortedIPs = Object.keys(logsByIP).sort();
-    
-    // Build HTML
+
     let html = '<div class="space-y-4">';
     
     sortedIPs.forEach(ip => {
@@ -2208,8 +2081,7 @@ function displayAttackLogs(data) {
                 </div>
                 <div id="attack-host-${ip.replace(/\./g, '-')}" class="hidden px-4 py-3 space-y-2">
         `;
-        
-        // Sort logs by timestamp (most recent first)
+
         hostLogs.sort((a, b) => {
             return new Date(b.timestamp) - new Date(a.timestamp);
         });
@@ -2289,15 +2161,10 @@ function toggleAttackHost(ip) {
     }
 }
 
-// ============================================================================
-// VULNERABILITY INTELLIGENCE FUNCTIONS
-// ============================================================================
-
 async function loadVulnerabilityIntel() {
     try {
         const container = document.getElementById('vulnerability-intel-container');
-        
-        // Show loading state
+
         container.innerHTML = `
             <div class="text-center text-gray-400 py-8">
                 <svg class="w-8 h-8 inline animate-spin mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2317,8 +2184,7 @@ async function loadVulnerabilityIntel() {
             `;
             return;
         }
-        
-        // Update statistics
+
         document.getElementById('intel-stat-scanned').textContent = data.statistics.total_scanned || 0;
         document.getElementById('intel-stat-interesting').textContent = data.statistics.interesting_hosts || 0;
         document.getElementById('intel-stat-services').textContent = data.statistics.services_with_intel || 0;
@@ -2449,10 +2315,6 @@ async function refreshVulnerabilityIntel() {
     await loadVulnerabilityIntel();
 }
 
-// ============================================================================
-// CREDENTIALS AND LOOT FUNCTIONS  
-// ============================================================================
-
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -2463,17 +2325,13 @@ async function loadConfigData() {
     try {
         const config = await fetchAPI('/api/config');
         displayConfigForm(config);
-        
-        // Load hardware profiles
+
         await loadHardwareProfiles();
-        
-        // Display current profile if set
+
         displayCurrentProfile(config);
-        
-        // Update vulnerability count in data management card
+
         updateVulnerabilityCount();
-        
-        // Also check for updates when loading config tab
+
         checkForUpdates();
     } catch (error) {
         console.error('Error loading config:', error);
@@ -2482,10 +2340,9 @@ async function loadConfigData() {
 
 async function loadConnectData() {
     try {
-        // Load Wi-Fi interfaces first so dropdowns are populated before status updates
+
         await loadWifiInterfaces();
 
-        // Refresh Wi-Fi and Bluetooth status in parallel to shorten the loading time
         console.log('Loading connect tab, refreshing connectivity status...');
         await Promise.all([
             refreshWifiStatus(),
@@ -2505,10 +2362,6 @@ async function loadFilesData() {
     }
 }
 
-// ============================================================================
-// HARDWARE PROFILE MANAGEMENT FUNCTIONS
-// ============================================================================
-
 async function loadHardwareProfiles() {
     try {
         const profiles = await fetchAPI('/api/config/hardware-profiles');
@@ -2516,22 +2369,18 @@ async function loadHardwareProfiles() {
         const applyBtn = document.getElementById('apply-profile-btn');
         
         if (!select) return;
-        
-        // Clear existing options
+
         select.innerHTML = '<option value="">Select a hardware profile...</option>';
-        
-        // Store profiles data for later use
+
         window.hardwareProfiles = profiles;
-        
-        // Populate dropdown options
+
         for (const [profileId, profile] of Object.entries(profiles)) {
             const option = document.createElement('option');
             option.value = profileId;
             option.textContent = `${profile.name} (${profile.ram}MB RAM)`;
             select.appendChild(option);
         }
-        
-        // Add change event listener to show profile details
+
         select.addEventListener('change', function() {
             const selectedProfileId = this.value;
             const applyBtn = document.getElementById('apply-profile-btn');
@@ -2595,8 +2444,7 @@ async function detectAndApplyHardware() {
         infoDiv.innerHTML = '<span class="text-Ragnar-400">🔍 Detecting hardware...</span>';
         
         const hardware = await fetchAPI('/api/config/detect-hardware');
-        
-        // Display detection results
+
         infoDiv.innerHTML = `
             <div class="space-y-2">
                 <div class="flex justify-between">
@@ -2619,8 +2467,7 @@ async function detectAndApplyHardware() {
         `;
         
         addConsoleMessage(`Detected: ${hardware.model} with ${hardware.ram_gb}GB RAM`, 'success');
-        
-        // Auto-apply the recommended profile
+
         if (hardware.recommended_profile) {
             addConsoleMessage(`Applying recommended profile: ${hardware.recommended_profile}`, 'info');
             await applyHardwareProfile(hardware.recommended_profile);
@@ -2649,15 +2496,13 @@ async function applyHardwareProfile(profileId) {
         if (result.success) {
             addConsoleMessage(`✅ Profile applied: ${result.profile.name}`, 'success');
             addConsoleMessage('⚠️ Service restart required for changes to take effect', 'warning');
-            
-            // Update current profile display
+
             displayCurrentProfile({
                 hardware_profile: profileId,
                 hardware_profile_name: result.profile.name,
                 hardware_profile_applied: result.profile.hardware_profile_applied || new Date().toISOString()
             });
-            
-            // Show restart prompt
+
             if (confirm('Hardware profile applied successfully!\n\nRestart the Ragnar service now to apply changes?')) {
                 await restartService();
             }
@@ -2691,10 +2536,6 @@ function displayCurrentProfile(config) {
     }
 }
 
-// ============================================================================
-// SYSTEM MANAGEMENT FUNCTIONS
-// ============================================================================
-
 async function checkForUpdates() {
     try {
         updateElement('update-status', 'Checking...');
@@ -2702,8 +2543,7 @@ async function checkForUpdates() {
         addConsoleMessage('Checking for system updates...', 'info');
         
         const data = await fetchAPI('/api/system/check-updates');
-        
-        // Debug logging
+
         console.log('Update check response:', data);
         addConsoleMessage(`Debug: Repo path: ${data.repo_path}`, 'info');
         addConsoleMessage(`Debug: Current commit: ${data.current_commit}`, 'info');
@@ -2714,8 +2554,7 @@ async function checkForUpdates() {
             updateElement('update-status', 'Update Available');
             document.getElementById('update-status').className = 'text-sm px-2 py-1 rounded bg-orange-700 text-orange-300';
             updateElement('update-info', `${data.commits_behind} commits behind. Latest: ${data.latest_commit || 'Unknown'}`);
-            
-            // Enable update button
+
             const updateBtn = document.getElementById('update-btn');
             updateBtn.disabled = false;
             updateBtn.className = 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
@@ -2725,8 +2564,7 @@ async function checkForUpdates() {
             updateElement('update-status', 'Up to Date');
             document.getElementById('update-status').className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-300';
             updateElement('update-info', 'System is up to date');
-            
-            // Disable update button
+
             const updateBtn = document.getElementById('update-btn');
             updateBtn.disabled = true;
             updateBtn.className = 'w-full bg-gray-600 text-white py-2 px-4 rounded cursor-not-allowed';
@@ -2738,13 +2576,11 @@ async function checkForUpdates() {
         console.error('Error checking for updates:', error);
         updateElement('update-status', 'Error');
         document.getElementById('update-status').className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
-        
-        // Check if it's a git safe directory error
+
         if (error.message && error.message.includes('safe.directory')) {
             updateElement('update-info', 'Git safe directory issue detected');
             addConsoleMessage('Git safe directory error detected. Click the Fix Git button.', 'error');
-            
-            // Show fix git button
+
             const updateBtn = document.getElementById('update-btn');
             updateBtn.textContent = 'Fix Git Config';
             updateBtn.disabled = false;
@@ -2769,12 +2605,10 @@ async function fixGitConfig() {
         
         if (result.success) {
             addConsoleMessage('Git configuration fixed successfully', 'success');
-            
-            // Reset button and retry update check
+
             updateBtn.textContent = 'Update System';
             updateBtn.onclick = performUpdate;
-            
-            // Retry update check
+
             setTimeout(() => {
                 checkForUpdates();
             }, 1000);
@@ -2812,8 +2646,7 @@ async function performUpdate() {
             addConsoleMessage('Update completed successfully', 'success');
             addConsoleMessage('System will restart automatically...', 'info');
             updateElement('update-info', 'Update completed. System restarting...');
-            
-            // Wait for service restart and verify it's back up
+
             setTimeout(async () => {
                 await verifyServiceRestart();
             }, 10000); // Start checking after 10 seconds
@@ -2845,7 +2678,7 @@ async function verifyServiceRestart() {
         attempts++;
         
         try {
-            // Try to fetch the stats endpoint as a health check
+
             const response = await fetch('/api/stats', {
                 method: 'GET',
                 headers: { 'Content-Type': 'application/json' },
@@ -2853,17 +2686,15 @@ async function verifyServiceRestart() {
             });
             
             if (response.ok) {
-                // Service is back up
+
                 addConsoleMessage('✅ Service verified online after update', 'success');
                 updateElement('update-info', 'Update completed successfully. Service is online.');
-                
-                // Reset the update button
+
                 const updateBtn = document.getElementById('update-btn');
                 updateElement('update-btn-text', 'Update System');
                 updateBtn.disabled = false;
                 updateBtn.className = 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
-                
-                // Check for updates to refresh status
+
                 setTimeout(() => {
                     checkForUpdates();
                 }, 5000);
@@ -2876,11 +2707,10 @@ async function verifyServiceRestart() {
             console.log(`Service check attempt ${attempts}/${maxAttempts} failed:`, error.message);
             
             if (attempts >= maxAttempts) {
-                // Max attempts reached, service might not have restarted properly
+
                 addConsoleMessage('⚠️ Service restart verification timeout. Manual check may be needed.', 'warning');
                 updateElement('update-info', 'Update completed, but service verification timed out.');
-                
-                // Reset the update button
+
                 const updateBtn = document.getElementById('update-btn');
                 updateElement('update-btn-text', 'Update System');
                 updateBtn.disabled = false;
@@ -2888,14 +2718,12 @@ async function verifyServiceRestart() {
                 
                 return; // Exit the checking loop
             }
-            
-            // Continue checking
+
             addConsoleMessage(`Service check ${attempts}/${maxAttempts} - waiting for restart...`, 'info');
             setTimeout(checkService, 10000); // Check again in 10 seconds
         }
     };
-    
-    // Start the checking process after 10s
+
     checkService();
 }
 
@@ -2904,12 +2732,11 @@ async function checkForUpdatesQuiet() {
         const data = await fetchAPI('/api/system/check-updates');
         
         if (data.updates_available && data.commits_behind > 0) {
-            // Show update notification in console if not on config tab
+
             if (currentTab !== 'config') {
                 addConsoleMessage(`🔄 System update available: ${data.commits_behind} commits behind`, 'warning');
             }
-            
-            // Add visual indicator to config tab
+
             const configTabBtn = document.querySelector('[data-tab="config"]');
             if (configTabBtn && !configTabBtn.querySelector('.update-indicator')) {
                 const indicator = document.createElement('span');
@@ -2918,7 +2745,7 @@ async function checkForUpdatesQuiet() {
                 configTabBtn.appendChild(indicator);
             }
         } else {
-            // Remove update indicator if up to date
+
             const configTabBtn = document.querySelector('[data-tab="config"]');
             const indicator = configTabBtn?.querySelector('.update-indicator');
             if (indicator) {
@@ -2927,7 +2754,7 @@ async function checkForUpdatesQuiet() {
         }
         
     } catch (error) {
-        // Silently fail for background checks
+
         console.debug('Background update check failed:', error);
     }
 }
@@ -2947,8 +2774,7 @@ async function restartService() {
         if (data.success) {
             addConsoleMessage('Service restart initiated', 'success');
             addConsoleMessage('Service will be back online shortly...', 'info');
-            
-            // Update status after delay
+
             setTimeout(() => {
                 updateElement('service-status', 'Running');
                 document.getElementById('service-status').className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-300';
@@ -2981,8 +2807,7 @@ async function rebootSystem() {
         if (data.success) {
             addConsoleMessage('System reboot initiated', 'success');
             addConsoleMessage('Device will be offline for several minutes...', 'warning');
-            
-            // Update connection status
+
             updateConnectionStatus(false);
         } else {
             addConsoleMessage(`Reboot failed: ${data.error || 'Unknown error'}`, 'error');
@@ -2993,10 +2818,6 @@ async function rebootSystem() {
         addConsoleMessage('Failed to initiate system reboot', 'error');
     }
 }
-
-// ============================================================================
-// DATA MANAGEMENT FUNCTIONS
-// ============================================================================
 
 async function resetVulnerabilities() {
     if (!confirm('⚠️ Reset All Vulnerabilities?\n\nThis will permanently delete:\n• All discovered vulnerabilities\n• Vulnerability scan results\n• Network intelligence vulnerability data\n\nThis action cannot be undone. Continue?')) {
@@ -3010,12 +2831,10 @@ async function resetVulnerabilities() {
         
         if (data.success) {
             addConsoleMessage(`Vulnerabilities reset: ${data.deleted_count || 0} entries removed`, 'success');
-            
-            // Update vulnerability count display
+
             updateElement('vuln-count', '0');
             updateElement('vulnerability-count', '0');
-            
-            // Refresh current tab if we're on network or discovered tabs
+
             if (currentTab === 'network' || currentTab === 'discovered' || currentTab === 'threat-intel') {
                 setTimeout(() => {
                     refreshCurrentTab();
@@ -3043,8 +2862,7 @@ async function resetThreatIntelligence() {
         
         if (data.success) {
             addConsoleMessage('Threat intelligence data reset successfully', 'success');
-            
-            // Refresh threat intel tab if active
+
             if (currentTab === 'threat-intel') {
                 setTimeout(() => {
                     refreshCurrentTab();
@@ -3060,7 +2878,6 @@ async function resetThreatIntelligence() {
     }
 }
 
-// Update vulnerability count in config tab
 async function updateVulnerabilityCount() {
     try {
         const stats = await fetchAPI('/api/stats');
@@ -3071,10 +2888,6 @@ async function updateVulnerabilityCount() {
         updateElement('vuln-count', '?');
     }
 }
-
-// ============================================================================
-// WI-FI MANAGEMENT FUNCTIONS
-// ============================================================================
 
 async function startAPMode() {
     if (!confirm('Start AP Mode?\n\nThis will:\n• Disconnect from current Wi-Fi\n• Start "Ragnar" access point\n• Enable 3-minute smart cycling\n• Allow Wi-Fi configuration via AP\n\nContinue?')) {
@@ -3093,8 +2906,7 @@ async function startAPMode() {
                 `AP Mode Active: "${data.ap_config.ssid}" | ${data.ap_config.timeout}s timeout | Smart cycling enabled`,
                 'ap-mode'
             );
-            
-            // Auto-refresh Wi-Fi status
+
             setTimeout(refreshWifiStatus, 2000);
         } else {
             addConsoleMessage(`Failed to start AP Mode: ${data.message}`, 'error');
@@ -3167,14 +2979,9 @@ async function refreshWifiStatus() {
 }
 
 function updateWifiStatus(message, type = '') {
-    // This function can be enhanced to show status messages in a notification area
-    // For now, we'll use console messages and update the UI elements
+
     addConsoleMessage(message, type === 'error' ? 'error' : type === 'ap-mode' ? 'warning' : 'info');
 }
-
-// ============================================================================
-// WI-FI MANAGEMENT FUNCTIONS
-// ============================================================================
 
 let currentWifiNetworks = [];
 let selectedWifiNetwork = null;
@@ -3217,7 +3024,7 @@ async function scanWifiNetworks() {
     if (!networksList) return;
     
     try {
-        // Disable button and show scanning message
+
         if (scanBtn) {
             scanBtn.disabled = true;
             scanBtn.innerHTML = `
@@ -3236,19 +3043,15 @@ async function scanWifiNetworks() {
                 <p>Scanning for Wi-Fi networks...</p>
             </div>
         `;
-        
-        // Trigger scan
+
         await postAPI('/api/wifi/scan', {});
-        
-        // Wait a bit for scan to complete
+
         await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        // Get networks
+
         const data = await fetchAPI('/api/wifi/networks');
         
         console.log('Wi-Fi networks data:', data);
-        
-        // Display networks
+
         displayWifiNetworks(data);
         
     } catch (error) {
@@ -3260,7 +3063,7 @@ async function scanWifiNetworks() {
             </div>
         `;
     } finally {
-        // Re-enable button
+
         if (scanBtn) {
             scanBtn.disabled = false;
             scanBtn.innerHTML = `
@@ -3279,15 +3082,13 @@ function displayWifiNetworks(data) {
     
     let networks = [];
     let knownNetworks = [];
-    
-    // Extract networks from response
+
     if (data.available) {
         networks = data.available;
     } else if (data.networks) {
         networks = data.networks;
     }
-    
-    // Extract known networks
+
     if (data.known) {
         knownNetworks = data.known.map(n => n.ssid || n);
     }
@@ -3304,24 +3105,19 @@ function displayWifiNetworks(data) {
         `;
         return;
     }
-    
-    // Sort networks by signal strength
+
     networks.sort((a, b) => (b.signal || 0) - (a.signal || 0));
-    
-    // Store for later use
+
     currentWifiNetworks = networks;
-    
-    // Build network list HTML
+
     networksList.innerHTML = networks.map(network => {
         const ssid = network.ssid || network.SSID || 'Unknown Network';
         const signal = network.signal || 0;
         const isSecure = network.security !== 'open' && network.security !== 'Open';
-        // Check both backend-provided 'known' flag AND local knownNetworks list
-        // This ensures we catch both Ragnar's known networks AND NetworkManager system profiles
+
         const isKnown = network.known || network.has_system_profile || knownNetworks.includes(ssid);
         const isCurrent = network.in_use || false;
-        
-        // Determine signal icon
+
         let signalIcon = '';
         if (signal >= 70) {
             signalIcon = `<svg class="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
@@ -3336,15 +3132,13 @@ function displayWifiNetworks(data) {
                 <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5z"></path>
             </svg>`;
         }
-        
-        // Security icon
+
         const securityIcon = isSecure ? `
             <svg class="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
                 <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"></path>
             </svg>
         ` : '';
-        
-        // Badge for known/current network
+
         let badge = '';
         if (isCurrent) {
             badge = '<span class="text-xs px-2 py-1 rounded bg-green-600 text-white ml-2">Connected</span>';
@@ -3388,19 +3182,15 @@ function openWifiConnectModal(ssid, isKnown) {
     const statusDiv = document.getElementById('wifi-connect-status');
     
     if (!modal || !ssidInput) return;
-    
-    // Store selected network
+
     selectedWifiNetwork = { ssid, isKnown };
-    
-    // Set SSID
+
     ssidInput.value = ssid;
-    
-    // Clear password
+
     if (passwordInput) {
         passwordInput.value = '';
     }
-    
-    // Hide/show password section based on whether network is known
+
     if (passwordSection) {
         if (isKnown) {
             passwordSection.style.display = 'none';
@@ -3408,13 +3198,11 @@ function openWifiConnectModal(ssid, isKnown) {
             passwordSection.style.display = 'block';
         }
     }
-    
-    // Hide status
+
     if (statusDiv) {
         statusDiv.classList.add('hidden');
     }
-    
-    // Show modal
+
     modal.classList.remove('hidden');
     modal.classList.add('flex');
 }
@@ -3464,8 +3252,7 @@ async function connectToWifiNetwork() {
     const isKnown = selectedWifiNetwork.isKnown;
     const password = isKnown ? null : (passwordInput ? passwordInput.value : '');
     const saveNetwork = saveCheckbox ? saveCheckbox.checked : true;
-    
-    // Validate password for new networks
+
     if (!isKnown && !password) {
         if (statusDiv) {
             statusDiv.classList.remove('hidden');
@@ -3475,7 +3262,7 @@ async function connectToWifiNetwork() {
     }
     
     try {
-        // Disable submit button
+
         if (submitBtn) {
             submitBtn.disabled = true;
             submitBtn.innerHTML = `
@@ -3485,8 +3272,7 @@ async function connectToWifiNetwork() {
                 Connecting...
             `;
         }
-        
-        // Show connecting status
+
         if (statusDiv) {
             statusDiv.classList.remove('hidden');
             statusDiv.innerHTML = `
@@ -3498,8 +3284,7 @@ async function connectToWifiNetwork() {
                 </div>
             `;
         }
-        
-        // Connect to network
+
         const data = await postAPI('/api/wifi/connect', {
             ssid: ssid,
             password: password,
@@ -3507,7 +3292,7 @@ async function connectToWifiNetwork() {
         });
         
         if (data.success) {
-            // Success
+
             if (statusDiv) {
                 statusDiv.innerHTML = `
                     <div class="bg-green-600 rounded p-3 text-sm">
@@ -3520,15 +3305,14 @@ async function connectToWifiNetwork() {
             }
             
             addConsoleMessage(`Connected to Wi-Fi: ${ssid}`, 'success');
-            
-            // Close modal after 2 seconds
+
             setTimeout(() => {
                 closeWifiConnectModal();
                 refreshWifiStatus();
             }, 2000);
             
         } else {
-            // Failed
+
             if (statusDiv) {
                 statusDiv.innerHTML = `
                     <div class="bg-red-600 rounded p-3 text-sm">
@@ -3541,15 +3325,14 @@ async function connectToWifiNetwork() {
             }
             
             addConsoleMessage(`Failed to connect to Wi-Fi: ${ssid}`, 'error');
-            
-            // If this was a known network, show password field for retry
+
             if (isKnown && passwordSection) {
                 passwordSection.style.display = 'block';
                 if (passwordInput) {
                     passwordInput.value = '';
                     passwordInput.placeholder = 'Stored password failed - enter correct password';
                 }
-                // Update the network state so next attempt uses the password
+
                 if (selectedWifiNetwork) {
                     selectedWifiNetwork.isKnown = false;
                 }
@@ -3569,22 +3352,21 @@ async function connectToWifiNetwork() {
         }
         
         addConsoleMessage(`Error connecting to Wi-Fi: ${error.message}`, 'error');
-        
-        // Show password field on connection error for known networks
+
         if (isKnown && passwordSection) {
             passwordSection.style.display = 'block';
             if (passwordInput) {
                 passwordInput.value = '';
                 passwordInput.placeholder = 'Connection error - please enter password';
             }
-            // Update the network state
+
             if (selectedWifiNetwork) {
                 selectedWifiNetwork.isKnown = false;
             }
         }
         
     } finally {
-        // Re-enable submit button
+
         if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.innerHTML = 'Connect';
@@ -3600,17 +3382,12 @@ async function loadConsoleLogs() {
         }
     } catch (error) {
         console.error('Error loading console logs:', error);
-        // Add fallback console messages if log loading fails
+
         addConsoleMessage('Unable to load historical logs from server', 'warning');
         addConsoleMessage('Console will show new messages as they occur', 'info');
     }
 }
 
-// ============================================================================
-// BLUETOOTH MANAGEMENT FUNCTIONS
-// ============================================================================
-
-// Global variables for Bluetooth
 let currentBluetoothDevices = [];
 let isBluetoothScanning = false;
 let bluetoothScanInterval = null;
@@ -3785,8 +3562,7 @@ async function startBluetoothScan() {
         
         if (response.success) {
             addConsoleMessage('Started Bluetooth device scan', 'info');
-            
-            // Start periodic refresh to get discovered devices
+
             bluetoothScanInterval = setInterval(async () => {
                 try {
                     const devices = await fetchAPI('/api/bluetooth/devices');
@@ -3824,8 +3600,7 @@ function stopBluetoothScan() {
         scanStatus.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-300';
         scanStatus.textContent = 'Ready';
     }
-    
-    // Stop the scan on the server
+
     fetchAPI('/api/bluetooth/scan/stop', {
         method: 'POST'
     }).catch(error => {
@@ -4008,8 +3783,7 @@ async function pairBluetoothDevice() {
                     </div>
                 `;
             }
-            
-            // Refresh the device list
+
             setTimeout(() => {
                 if (isBluetoothScanning) {
                     fetchAPI('/api/bluetooth/devices').then(data => {
@@ -4140,21 +3914,16 @@ function clearBluetoothDevices() {
     addConsoleMessage('Cleared Bluetooth device list', 'info');
 }
 
-// ============================================================================
-// MANUAL MODE FUNCTIONS
-// ============================================================================
-
 async function loadManualModeData() {
     try {
-        // Store current selections before reloading
+
         const currentIp = document.getElementById('manual-ip-dropdown')?.value || '';
         const currentPort = document.getElementById('manual-port-dropdown')?.value || '';
         const currentAction = document.getElementById('manual-action-dropdown')?.value || '';
         const currentVulnIp = document.getElementById('vuln-ip-dropdown')?.value || 'all';
         
         const data = await fetchAPI('/api/manual/targets');
-        
-        // Populate IP dropdown
+
         const ipDropdown = document.getElementById('manual-ip-dropdown');
         if (ipDropdown) {
             ipDropdown.innerHTML = '<option value="">Select IP</option>';
@@ -4170,8 +3939,7 @@ async function loadManualModeData() {
                 });
             }
         }
-        
-        // Populate vulnerability scan IP dropdown
+
         const vulnIpDropdown = document.getElementById('vuln-ip-dropdown');
         if (vulnIpDropdown) {
             vulnIpDropdown.innerHTML = '';
@@ -4196,8 +3964,7 @@ async function loadManualModeData() {
                 });
             }
         }
-        
-        // Populate action dropdown with available attack types
+
         const actionDropdown = document.getElementById('manual-action-dropdown');
         if (actionDropdown) {
             actionDropdown.innerHTML = '<option value="">Select Action</option>';
@@ -4212,14 +3979,12 @@ async function loadManualModeData() {
                 actionDropdown.appendChild(option);
             });
         }
-        
-        // Store targets data for updateManualPorts function
+
         window.manualTargetsData = data.targets || [];
-        
-        // Restore port selection if IP was selected
+
         if (currentIp) {
             updateManualPorts();
-            // Restore port selection after ports are populated
+
             setTimeout(() => {
                 const portDropdown = document.getElementById('manual-port-dropdown');
                 if (portDropdown && currentPort) {
@@ -4244,7 +4009,7 @@ function updateManualPorts() {
     portDropdown.innerHTML = '<option value="">Select Port</option>';
     
     if (selectedIp && window.manualTargetsData) {
-        // Find the target with the selected IP
+
         const target = window.manualTargetsData.find(t => t.ip === selectedIp);
         if (target && target.ports) {
             target.ports.forEach(port => {
@@ -4298,8 +4063,7 @@ async function startOrchestrator() {
             addConsoleMessage('Automatic mode started successfully', 'success');
             updateElement('ragnar-mode', 'Auto');
             document.getElementById('ragnar-mode').className = 'text-green-400 font-semibold';
-            
-            // Hide manual controls
+
             const manualControls = document.getElementById('manual-controls');
             if (manualControls) {
                 manualControls.classList.add('hidden');
@@ -4324,12 +4088,11 @@ async function stopOrchestrator() {
             addConsoleMessage('Automatic mode stopped - Manual mode activated', 'warning');
             updateElement('ragnar-mode', 'Manual');
             document.getElementById('ragnar-mode').className = 'text-orange-400 font-semibold';
-            
-            // Show manual controls
+
             const manualControls = document.getElementById('manual-controls');
             if (manualControls) {
                 manualControls.classList.remove('hidden');
-                // Load manual mode data
+
                 loadManualModeData();
             }
         } else {
@@ -4383,10 +4146,6 @@ async function triggerVulnScan() {
     }
 }
 
-// ============================================================================
-// API HELPERS
-// ============================================================================
-
 async function fetchAPI(endpoint, options = {}) {
     try {
         const response = await fetch(endpoint, options);
@@ -4419,10 +4178,6 @@ async function postAPI(endpoint, data) {
     }
 }
 
-// ============================================================================
-// DASHBOARD UPDATES
-// ============================================================================
-
 async function refreshDashboard() {
     try {
         const data = await fetchAPI('/api/status');
@@ -4433,33 +4188,29 @@ async function refreshDashboard() {
 }
 
 function updateDashboardStatus(data) {
-    // If the WebSocket data has zero counts, fetch from our dashboard API instead
+
     if ((data.target_count || 0) === 0 && (data.port_count || 0) === 0 &&
         (data.vulnerability_count || 0) === 0 && (data.credential_count || 0) === 0) {
 
-        // Fetch proper dashboard stats
         fetchAPI('/api/dashboard/stats')
             .then(stats => {
                 updateDashboardStats(stats);
             })
             .catch(() => {
-                // Fallback to WebSocket data if API fails
+
                 updateDashboardStats(data);
             });
     } else {
-        // Use WebSocket data if it has non-zero values
+
         updateDashboardStats(data);
     }
 
-    // Update status - use the actual e-paper display text
     updateElement('Ragnar-status', data.ragnar_status || 'IDLE');
     updateElement('Ragnar-says', (data.ragnar_says || 'Hacking away...'));
-    
-    // Update mode and handle manual controls
+
     const isManualMode = data.manual_mode;
     updateElement('Ragnar-mode', isManualMode ? 'Manual' : 'Auto');
-    
-    // Update mode styling
+
     const modeElement = document.getElementById('Ragnar-mode');
     if (modeElement) {
         if (isManualMode) {
@@ -4468,14 +4219,13 @@ function updateDashboardStatus(data) {
             modeElement.className = 'text-green-400 font-semibold';
         }
     }
-    
-    // Show/hide manual controls based on mode
+
     const manualControls = document.getElementById('manual-controls');
     if (manualControls) {
         if (isManualMode) {
             const wasHidden = manualControls.classList.contains('hidden');
             manualControls.classList.remove('hidden');
-            // Only load manual mode data when first showing controls, not on every status update
+
             if (wasHidden) {
                 loadManualModeData();
             }
@@ -4483,8 +4233,7 @@ function updateDashboardStatus(data) {
             manualControls.classList.add('hidden');
         }
     }
-    
-    // Update connectivity status with WiFi SSID
+
     updateConnectivityIndicator('wifi-status', data.wifi_connected, data.current_ssid, data.ap_mode_active);
     updateConnectivityIndicator('bluetooth-status', data.bluetooth_active);
     updateConnectivityIndicator('usb-status', data.usb_active);
@@ -4507,8 +4256,7 @@ function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
             element.className = 'w-3 h-3 bg-gray-600 rounded-full';
         }
     }
-    
-    // Update WiFi SSID display if this is the WiFi indicator
+
     if (id === 'wifi-status') {
         const ssidDisplay = document.getElementById('wifi-ssid-display');
         if (ssidDisplay) {
@@ -4525,10 +4273,6 @@ function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
         }
     }
 }
-
-// ============================================================================
-// CONSOLE
-// ============================================================================
 
 let consoleBuffer = [];
 const MAX_CONSOLE_LINES = 200;
@@ -4551,8 +4295,7 @@ function addConsoleMessage(message, type = 'info') {
     };
     
     consoleBuffer.push(logEntry);
-    
-    // Keep only the last MAX_CONSOLE_LINES
+
     if (consoleBuffer.length > MAX_CONSOLE_LINES) {
         consoleBuffer = consoleBuffer.slice(-MAX_CONSOLE_LINES);
     }
@@ -4562,15 +4305,14 @@ function addConsoleMessage(message, type = 'info') {
 
 function updateConsole(logs) {
     if (!logs || !Array.isArray(logs)) {
-        // If no logs available, add informational messages
+
         if (consoleBuffer.length === 0) {
             addConsoleMessage('No historical logs available', 'warning');
             addConsoleMessage('New activity will appear here as it occurs', 'info');
         }
         return;
     }
-    
-    // If logs are empty array, provide user feedback
+
     if (logs.length === 0) {
         if (consoleBuffer.length === 0) {
             addConsoleMessage('No recent activity logged', 'info');
@@ -4578,12 +4320,11 @@ function updateConsole(logs) {
         }
         return;
     }
-    
-    // Clear existing buffer and add new logs
+
     consoleBuffer = [];
     
     logs.forEach(log => {
-        // Skip empty lines
+
         if (!log.trim()) return;
         
         let type = 'info';
@@ -4619,8 +4360,7 @@ function updateConsoleDisplay() {
     console.innerHTML = consoleBuffer.map(entry => 
         `<div class="${entry.colorClass}">[${entry.timestamp}] ${escapeHtml(entry.message)}</div>`
     ).join('');
-    
-    // Auto-scroll to bottom
+
     console.scrollTop = console.scrollHeight;
 }
 
@@ -4638,10 +4378,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// ============================================================================
-// TABLE DISPLAYS
-// ============================================================================
-
 function displayNetworkTable(data) {
     const container = document.getElementById('network-table');
     const tableBody = document.getElementById('network-hosts-table');
@@ -4649,7 +4385,6 @@ function displayNetworkTable(data) {
         return;
     }
 
-    // Save all existing deep scan button states before clearing table
     const existingRows = tableBody.querySelectorAll('tr[data-ip]');
     existingRows.forEach(row => {
         const ip = row.getAttribute('data-ip');
@@ -4685,14 +4420,12 @@ function displayNetworkTable(data) {
         row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
         row.innerHTML = renderHostRow(normalized);
         tableBody.appendChild(row);
-        
-        // Restore deep scan button state after adding to DOM
+
         restoreDeepScanButtonState(normalized.ip);
     });
 
     updateHostCountDisplay();
-    
-    // Cleanup old button states for removed hosts
+
     cleanupOldDeepScanStates();
 }
 
@@ -4786,8 +4519,7 @@ function displayConfigForm(config) {
     const container = document.getElementById('config-form');
     
     let html = '<div class="space-y-6"><form id="config-update-form">';
-    
-    // Group config by sections
+
     const sections = {
         'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
@@ -4802,11 +4534,10 @@ function displayConfigForm(config) {
         `;
         
         keys.forEach(key => {
-            // Check if config has the key, or provide defaults for known boolean settings
+
             const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'];
             let value = config[key];
-            
-            // If key is missing and it's a known boolean, default to true (except manual_mode)
+
             if (!config.hasOwnProperty(key) && knownBooleans.includes(key)) {
                 value = (key === 'manual_mode') ? false : true;
             }
@@ -4817,7 +4548,7 @@ function displayConfigForm(config) {
                 const description = escapeHtml(getConfigDescription(key));
                 
                 if (type === 'checkbox') {
-                    // Determine if this checkbox should be disabled based on dependencies
+
                     const disabledAttr = (key === 'scan_vuln_no_ports' && !config.scan_vuln_running) ? 'disabled' : '';
                     const disabledClass = disabledAttr ? 'opacity-50 cursor-not-allowed' : '';
                     
@@ -4857,15 +4588,13 @@ function displayConfigForm(config) {
     </form></div>`;
     
     container.innerHTML = html;
-    
-    // Add form submit handler
+
     document.getElementById('config-update-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         await saveConfig(e.target);
     });
 }
 
-// Handle vulnerability scanning checkbox toggle to enable/disable dependent options
 function handleVulnScanToggle(checkbox) {
     const scanVulnNoPortsCheckbox = document.querySelector('input[name="scan_vuln_no_ports"]');
     const scanVulnNoPortsLabel = scanVulnNoPortsCheckbox ? scanVulnNoPortsCheckbox.closest('label') : null;
@@ -4886,14 +4615,12 @@ function handleVulnScanToggle(checkbox) {
 async function saveConfig(form) {
     const formData = new FormData(form);
     const config = {};
-    
-    // First, get all checkboxes and set them to false by default
+
     const checkboxes = form.querySelectorAll('input[type="checkbox"]');
     checkboxes.forEach(checkbox => {
         config[checkbox.name] = false;
     });
-    
-    // Then get all form values, including checked checkboxes
+
     for (const [key, value] of formData.entries()) {
         const input = form.elements[key];
         if (input.type === 'checkbox') {
@@ -4904,8 +4631,7 @@ async function saveConfig(form) {
             config[key] = value;
         }
     }
-    
-    // Handle unchecked checkboxes explicitly
+
     checkboxes.forEach(checkbox => {
         config[checkbox.name] = checkbox.checked;
     });
@@ -4915,8 +4641,7 @@ async function saveConfig(form) {
     try {
         const result = await postAPI('/api/config', config);
         addConsoleMessage('Configuration saved successfully', 'success');
-        
-        // If manual_mode was changed, refresh the dashboard to update UI
+
         if (config.hasOwnProperty('manual_mode')) {
             setTimeout(() => {
                 refreshDashboard();
@@ -4929,22 +4654,18 @@ async function saveConfig(form) {
     }
 }
 
-// E-Paper Display Functions
 async function loadEpaperDisplay() {
     try {
         const data = await fetchAPI('/api/epaper-display');
-        
-        // Update status text
+
         updateElement('epaper-status-1', data.status_text || 'Unknown');
         updateElement('epaper-status-2', data.status_text2 || 'Unknown');
-        
-        // Update timestamp
+
         if (data.timestamp) {
             const date = new Date(data.timestamp * 1000);
             updateElement('epaper-timestamp', date.toLocaleString());
         }
-        
-        // Update display image
+
         const imgElement = document.getElementById('epaper-display-image');
         const loadingElement = document.getElementById('epaper-loading');
         const connectionElement = document.getElementById('epaper-connection');
@@ -4953,13 +4674,11 @@ async function loadEpaperDisplay() {
             imgElement.src = data.image;
             imgElement.style.display = 'block';
             loadingElement.style.display = 'none';
-            
-            // Update resolution info
+
             if (data.width && data.height) {
                 updateElement('epaper-resolution', `${data.width} x ${data.height}`);
             }
-            
-            // Update connection status
+
             connectionElement.textContent = 'Live';
             connectionElement.className = 'text-green-400 font-medium';
         } else {
@@ -4973,8 +4692,7 @@ async function loadEpaperDisplay() {
                     <p>${data.message || 'No display image available'}</p>
                 </div>
             `;
-            
-            // Update connection status
+
             connectionElement.textContent = 'Offline';
             connectionElement.className = 'text-red-400 font-medium';
         }
@@ -4982,8 +4700,7 @@ async function loadEpaperDisplay() {
     } catch (error) {
         console.error('Error loading e-paper display:', error);
         addConsoleMessage('Failed to load e-paper display', 'error');
-        
-        // Update connection status
+
         const connectionElement = document.getElementById('epaper-connection');
         connectionElement.textContent = 'Error';
         connectionElement.className = 'text-red-400 font-medium';
@@ -4995,25 +4712,24 @@ function refreshEpaperDisplay() {
     loadEpaperDisplay();
 }
 
-// E-Paper display size toggle functionality
 let epaperSizeMode = 'large'; // default to large size
 function toggleEpaperSize() {
     const imgElement = document.getElementById('epaper-display-image');
     
     if (epaperSizeMode === 'large') {
-        // Switch to extra large
+
         imgElement.style.maxHeight = '1200px';
         imgElement.style.minHeight = '600px';
         epaperSizeMode = 'xlarge';
         addConsoleMessage('E-paper display size: Extra Large', 'info');
     } else if (epaperSizeMode === 'xlarge') {
-        // Switch to medium
+
         imgElement.style.maxHeight = '600px';
         imgElement.style.minHeight = '300px';
         epaperSizeMode = 'medium';
         addConsoleMessage('E-paper display size: Medium', 'info');
     } else {
-        // Switch back to large
+
         imgElement.style.maxHeight = '800px';
         imgElement.style.minHeight = '400px';
         epaperSizeMode = 'large';
@@ -5021,7 +4737,6 @@ function toggleEpaperSize() {
     }
 }
 
-// Add e-paper display to auto-refresh
 function setupEpaperAutoRefresh() {
     setInterval(() => {
         if (currentTab === 'epaper') {
@@ -5029,10 +4744,6 @@ function setupEpaperAutoRefresh() {
         }
     }, 5000); // Refresh every 5 seconds when on e-paper tab
 }
-
-// ============================================================================
-// FILE MANAGEMENT FUNCTIONS
-// ============================================================================
 
 let currentDirectory = '/';
 let fileOperationInProgress = false;
@@ -5064,8 +4775,7 @@ function displayFiles(files, path) {
     }
     
     let html = '<div class="space-y-2">';
-    
-    // Add back button if not in root
+
     if (path !== '/') {
         const parentPath = path.split('/').slice(0, -1).join('/') || '/';
         html += `
@@ -5077,8 +4787,7 @@ function displayFiles(files, path) {
             </div>
         `;
     }
-    
-    // Sort files - directories first, then by name
+
     files.sort((a, b) => {
         if (a.is_directory && !b.is_directory) return -1;
         if (!a.is_directory && b.is_directory) return 1;
@@ -5167,8 +4876,7 @@ function downloadFile(filePath) {
     if (fileOperationInProgress) return;
     
     const downloadUrl = `/api/files/download?path=${encodeURIComponent(filePath)}`;
-    
-    // Create a temporary link to trigger download
+
     const link = document.createElement('a');
     link.href = downloadUrl;
     link.download = '';
@@ -5216,7 +4924,7 @@ function deleteFile(filePath) {
 }
 
 function uploadFile() {
-    // Create file input
+
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
@@ -5226,13 +4934,11 @@ function uploadFile() {
         if (files.length === 0) return;
         
         const formData = new FormData();
-        
-        // Add all selected files
+
         for (let file of files) {
             formData.append('file', file);
         }
-        
-        // Set upload path (default to uploads)
+
         formData.append('path', '/uploads');
         
         fileOperationInProgress = true;
@@ -5340,12 +5046,10 @@ function showFileConfirmModal(title, content, onConfirm) {
     
     modalTitle.textContent = title;
     modalContent.innerHTML = content;
-    
-    // Remove existing listeners
+
     const newConfirmBtn = confirmBtn.cloneNode(true);
     confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
-    
-    // Add new listener
+
     newConfirmBtn.addEventListener('click', onConfirm);
     
     modal.classList.remove('hidden');
@@ -5369,7 +5073,7 @@ function formatBytes(bytes) {
 }
 
 function showNotification(message, type) {
-    // Create notification element
+
     const notification = document.createElement('div');
     notification.className = `fixed top-4 right-4 z-50 p-4 rounded-lg max-w-sm transform translate-x-full transition-transform duration-300 ${
         type === 'success' ? 'bg-green-600' : 
@@ -5379,13 +5083,11 @@ function showNotification(message, type) {
     notification.textContent = message;
     
     document.body.appendChild(notification);
-    
-    // Animate in
+
     setTimeout(() => {
         notification.style.transform = 'translateX(0)';
     }, 100);
-    
-    // Remove after 3 seconds
+
     setTimeout(() => {
         notification.style.transform = 'translateX(100%)';
         setTimeout(() => {
@@ -5393,10 +5095,6 @@ function showNotification(message, type) {
         }, 300);
     }, 3000);
 }
-
-// ============================================================================
-// IMAGE GALLERY FUNCTIONS
-// ============================================================================
 
 let currentImageFilter = 'all';
 let allImages = [];
@@ -5454,8 +5152,7 @@ function displayImages(images) {
 
 function filterImages(category) {
     currentImageFilter = category;
-    
-    // Update filter button states
+
     document.querySelectorAll('.image-filter-btn').forEach(btn => {
         if (btn.dataset.filter === category) {
             btn.classList.remove('bg-gray-600');
@@ -5465,8 +5162,7 @@ function filterImages(category) {
             btn.classList.add('bg-gray-600');
         }
     });
-    
-    // Filter and display images
+
     const filteredImages = category === 'all' ? 
         allImages : 
         allImages.filter(img => img.category === category);
@@ -5475,7 +5171,7 @@ function filterImages(category) {
 }
 
 function showImageDetail(imagePath) {
-    // Get image info
+
     fetch(`/api/images/info?path=${encodeURIComponent(imagePath)}`)
         .then(response => response.json())
         .then(info => {
@@ -5514,11 +5210,9 @@ function showImageDetail(imagePath) {
                     ` : ''}
                 </div>
             `;
-            
-            // Set up download button
+
             downloadBtn.onclick = () => downloadImage(imagePath);
-            
-            // Set up delete button
+
             deleteBtn.onclick = () => deleteImage(imagePath);
             
             modal.classList.remove('hidden');
@@ -5617,18 +5311,13 @@ function showImageLoading(message) {
     showNotification(message, 'info');
 }
 
-// ============================================================================
-// SYSTEM MONITORING FUNCTIONS
-// ============================================================================
-
 let systemMonitoringInterval;
 let currentProcessSort = 'cpu';
 
 function loadSystemData() {
     fetchSystemStatus();
     fetchNetworkStats();
-    
-    // Auto-refresh every 5 seconds when on system tab
+
     if (systemMonitoringInterval) {
         clearInterval(systemMonitoringInterval);
     }
@@ -5676,7 +5365,7 @@ function fetchNetworkStats() {
 }
 
 function updateSystemOverview(data) {
-    // CPU
+
     const cpuUsage = document.getElementById('cpu-usage');
     const cpuDetails = document.getElementById('cpu-details');
     const cpuProgress = document.getElementById('cpu-progress');
@@ -5684,8 +5373,7 @@ function updateSystemOverview(data) {
     if (cpuUsage) cpuUsage.textContent = `${data.cpu.percent}%`;
     if (cpuDetails) cpuDetails.textContent = `${data.cpu.count} cores`;
     if (cpuProgress) cpuProgress.style.width = `${data.cpu.percent}%`;
-    
-    // Memory
+
     const memoryUsage = document.getElementById('memory-usage');
     const memoryDetails = document.getElementById('memory-details');
     const memoryProgress = document.getElementById('memory-progress');
@@ -5693,8 +5381,7 @@ function updateSystemOverview(data) {
     if (memoryUsage) memoryUsage.textContent = `${data.memory.percent}%`;
     if (memoryDetails) memoryDetails.textContent = `${data.memory.used_formatted} / ${data.memory.total_formatted}`;
     if (memoryProgress) memoryProgress.style.width = `${data.memory.percent}%`;
-    
-    // Disk
+
     const diskUsage = document.getElementById('disk-usage');
     const diskDetails = document.getElementById('disk-details');
     const diskProgress = document.getElementById('disk-progress');
@@ -5702,8 +5389,7 @@ function updateSystemOverview(data) {
     if (diskUsage) diskUsage.textContent = `${data.disk.percent}%`;
     if (diskDetails) diskDetails.textContent = `${data.disk.used_formatted} / ${data.disk.total_formatted}`;
     if (diskProgress) diskProgress.style.width = `${data.disk.percent}%`;
-    
-    // Uptime
+
     const uptimeDisplay = document.getElementById('uptime-display');
     if (uptimeDisplay) uptimeDisplay.textContent = data.uptime.formatted;
 }
@@ -5777,8 +5463,7 @@ function updateNetworkStats(data) {
     if (!networkStats) return;
     
     let html = '';
-    
-    // Connection summary
+
     html += `
         <div class="bg-slate-800 rounded p-3">
             <h4 class="font-medium mb-2">Connections</h4>
@@ -5786,8 +5471,7 @@ function updateNetworkStats(data) {
             <div class="text-xs text-gray-400">Total active</div>
         </div>
     `;
-    
-    // Interface statistics
+
     Object.entries(data.interfaces).slice(0, 4).forEach(([name, stats]) => {
         html += `
             <div class="bg-slate-800 rounded p-3">
@@ -5843,8 +5527,7 @@ function updateTemperatureDisplay(temperatures) {
 
 function sortProcesses(sortBy) {
     currentProcessSort = sortBy;
-    
-    // Update button states
+
     document.querySelectorAll('.process-sort-btn').forEach(btn => {
         if (btn.dataset.sort === sortBy) {
             btn.classList.remove('bg-gray-600');
@@ -5854,8 +5537,7 @@ function sortProcesses(sortBy) {
             btn.classList.add('bg-gray-600');
         }
     });
-    
-    // Fetch processes with new sort order
+
     fetch(`/api/system/processes?sort=${sortBy}`)
         .then(response => response.json())
         .then(processes => {
@@ -5879,10 +5561,6 @@ function showSystemSuccess(message) {
 function showSystemError(message) {
     showNotification(message, 'error');
 }
-
-// ============================================================================
-// NETKB (Network Knowledge Base) FUNCTIONS
-// ============================================================================
 
 let currentNetkbFilter = 'all';
 let netkbData = [];
@@ -6005,8 +5683,7 @@ function getTypeIcon(type) {
 
 function filterNetkbData(filterType) {
     currentNetkbFilter = filterType;
-    
-    // Update button states
+
     document.querySelectorAll('.netkb-filter-btn').forEach(btn => {
         if (btn.dataset.filter === filterType) {
             btn.classList.remove('bg-gray-600');
@@ -6016,8 +5693,7 @@ function filterNetkbData(filterType) {
             btn.classList.add('bg-gray-600');
         }
     });
-    
-    // Filter and display data
+
     let filteredData = netkbData;
     if (filterType !== 'all') {
         filteredData = netkbData.filter(entry => entry.type === filterType);
@@ -6114,8 +5790,7 @@ function showNetkbEntryDetail(entryId) {
             </ul>
         </div>
     `;
-    
-    // Show/hide exploit button based on entry type
+
     const exploitBtn = document.getElementById('netkb-exploit-btn');
     if (exploitBtn) {
         if (entry.type === 'vulnerability') {
@@ -6125,8 +5800,7 @@ function showNetkbEntryDetail(entryId) {
             exploitBtn.classList.add('hidden');
         }
     }
-    
-    // Update research button
+
     const researchBtn = document.getElementById('netkb-research-btn');
     if (researchBtn) {
         researchBtn.onclick = () => researchEntry(entry);
@@ -6158,7 +5832,7 @@ function exportNetkbData() {
 }
 
 function exportNetkbEntry() {
-    // Export the currently viewed entry
+
     showNetkbInfo('Individual entry export feature coming soon');
 }
 
@@ -6188,7 +5862,7 @@ function exploitVulnerability(entry) {
     const confirmMsg = `Are you sure you want to attempt exploitation of ${entry.cve || entry.description} on ${entry.host}?`;
     if (confirm(confirmMsg)) {
         showNetkbInfo('Exploitation feature not yet implemented - this would trigger automated exploit attempts');
-        // TODO: Implement actual exploitation logic
+
     }
 }
 
@@ -6204,11 +5878,6 @@ function showNetkbInfo(message) {
     showNotification(message, 'info');
 }
 
-// ============================================================================
-// GLOBAL FUNCTION EXPORTS (for HTML onclick handlers)
-// ============================================================================
-
-// Make functions available globally for HTML onclick handlers
 window.loadConsoleLogs = loadConsoleLogs;
 window.clearConsole = clearConsole;
 window.refreshEpaperDisplay = refreshEpaperDisplay;
@@ -6228,7 +5897,6 @@ window.triggerNetworkScan = triggerNetworkScan;
 window.triggerVulnScan = triggerVulnScan;
 window.refreshDashboard = refreshDashboard;
 
-// Wi-Fi Management Functions
 window.loadWifiInterfaces = loadWifiInterfaces;
 window.scanWifiNetworks = scanWifiNetworks;
 window.openWifiConnectModal = openWifiConnectModal;
@@ -6236,7 +5904,6 @@ window.closeWifiConnectModal = closeWifiConnectModal;
 window.togglePasswordVisibility = togglePasswordVisibility;
 window.connectToWifiNetwork = connectToWifiNetwork;
 
-// Bluetooth Management Functions
 window.refreshBluetoothStatus = refreshBluetoothStatus;
 window.toggleBluetoothPower = toggleBluetoothPower;
 window.toggleBluetoothDiscoverable = toggleBluetoothDiscoverable;
@@ -6247,7 +5914,6 @@ window.pairBluetoothDevice = pairBluetoothDevice;
 window.enumerateBluetoothServices = enumerateBluetoothServices;
 window.clearBluetoothDevices = clearBluetoothDevices;
 
-// File Management Functions
 window.loadFiles = loadFiles;
 window.downloadFile = downloadFile;
 window.deleteFile = deleteFile;
@@ -6256,7 +5922,6 @@ window.clearFiles = clearFiles;
 window.refreshFiles = refreshFiles;
 window.closeFileModal = closeFileModal;
 
-// Image Management Functions
 window.loadImagesData = loadImagesData;
 window.filterImages = filterImages;
 window.showImageDetail = showImageDetail;
@@ -6266,16 +5931,13 @@ window.deleteImage = deleteImage;
 window.captureScreenshot = captureScreenshot;
 window.refreshImages = refreshImages;
 
-// System Monitoring Functions
 window.loadSystemData = loadSystemData;
 window.sortProcesses = sortProcesses;
 window.refreshSystemStatus = refreshSystemStatus;
 
-// Dashboard Functions
 window.loadDashboardData = loadDashboardData;
 window.updateDashboardStats = updateDashboardStats;
 
-// NetKB Functions
 window.loadNetkbData = loadNetkbData;
 window.refreshNetkbData = refreshNetkbData;
 window.filterNetkbData = filterNetkbData;
@@ -6289,16 +5951,13 @@ window.researchEntry = researchEntry;
 window.researchVulnerability = researchVulnerability;
 window.exploitVulnerability = exploitVulnerability;
 
-// Deep Scan Functions
 window.triggerDeepScan = triggerDeepScan;
 window.testDeepScan = testDeepScan;
 
-// Debug Functions
 window.debugDeepScanStates = function() {
     console.log('Current deep scan button states:', Object.fromEntries(deepScanButtonStates));
 };
 
-// Threat Intelligence Functions
 window.loadThreatIntelData = loadThreatIntelData;
 window.refreshThreatIntel = refreshThreatIntel;
 window.enrichTarget = enrichTarget;
@@ -6307,20 +5966,15 @@ window.toggleHostDetails = toggleHostDetails;
 window.showVulnerabilityDetails = showVulnerabilityDetails;
 window.closeVulnerabilityModal = closeVulnerabilityModal;
 
-// ===========================================
-// THREAT INTELLIGENCE FUNCTIONS
-// ===========================================
-
-// Load threat intelligence data when tab is shown
 async function loadThreatIntelData() {
     try {
-        // Load grouped vulnerabilities
+
         const response = await fetch('/api/vulnerabilities/grouped');
         if (response.ok) {
             const data = await response.json();
             displayGroupedVulnerabilities(data);
         } else {
-            // Fallback to regular vulnerabilities endpoint
+
             const fallbackResponse = await fetch('/api/vulnerabilities');
             if (fallbackResponse.ok) {
                 const vulnData = await fallbackResponse.json();
@@ -6342,18 +5996,15 @@ async function loadThreatIntelData() {
     }
 }
 
-// Display grouped vulnerabilities by host
 function displayGroupedVulnerabilities(data) {
     const container = document.getElementById('grouped-vulnerabilities-container');
-    
-    // Update summary cards
+
     const threatIntelVulnerableHosts = document.getElementById('threat-intel-vulnerable-hosts-count');
     if (threatIntelVulnerableHosts) {
         threatIntelVulnerableHosts.textContent = data.total_hosts || 0;
     }
     document.getElementById('total-vulnerabilities-count').textContent = data.total_vulnerabilities || 0;
-    
-    // Calculate severity totals
+
     let criticalTotal = 0, highTotal = 0;
     if (data.grouped_vulnerabilities) {
         data.grouped_vulnerabilities.forEach(host => {
@@ -6376,14 +6027,12 @@ function displayGroupedVulnerabilities(data) {
         `;
         return;
     }
-    
-    // Build HTML for each host group
+
     let html = '';
     data.grouped_vulnerabilities.forEach((hostData, index) => {
         const severityCounts = hostData.severity_counts;
         const vulnCount = hostData.total_vulnerabilities;
-        
-        // Determine risk level color
+
         let riskColor = 'blue';
         let riskLabel = 'Low Risk';
         if (severityCounts.critical > 0) {
@@ -6498,7 +6147,6 @@ function displayGroupedVulnerabilities(data) {
     container.innerHTML = html;
 }
 
-// Toggle host details visibility
 function toggleHostDetails(hostId) {
     const detailsDiv = document.getElementById(`${hostId}-details`);
     const toggleBtn = document.getElementById(`${hostId}-toggle`);
@@ -6512,7 +6160,6 @@ function toggleHostDetails(hostId) {
     }
 }
 
-// Show vulnerability details modal
 function showVulnerabilityDetails(vuln) {
     const modal = document.getElementById('vulnerability-detail-modal');
     const content = document.getElementById('vuln-detail-content');
@@ -6523,18 +6170,16 @@ function showVulnerabilityDetails(vuln) {
         'medium': 'text-yellow-400',
         'low': 'text-blue-400'
     };
-    
-    // Extract CVE IDs from vulnerability text and create links
+
     function formatVulnerabilityWithLinks(vulnText) {
-        // Match CVE patterns (CVE-YYYY-NNNNN)
+
         const cvePattern = /(CVE-\d{4}-\d{4,7})/gi;
         const cves = vulnText.match(cvePattern);
         
         if (!cves || cves.length === 0) {
             return `<div class="text-white font-mono text-sm break-all">${vulnText}</div>`;
         }
-        
-        // Create links section
+
         let linksHtml = '<div class="mt-3 pt-3 border-t border-slate-700">';
         linksHtml += '<div class="text-sm text-slate-400 mb-2">CVE References:</div>';
         linksHtml += '<div class="flex flex-wrap gap-2">';
@@ -6611,16 +6256,14 @@ function showVulnerabilityDetails(vuln) {
     modal.classList.add('flex');
 }
 
-// Close vulnerability modal
 function closeVulnerabilityModal() {
     const modal = document.getElementById('vulnerability-detail-modal');
     modal.classList.add('hidden');
     modal.classList.remove('flex');
 }
 
-// Fallback display for regular vulnerabilities
 function displayFallbackVulnerabilities(data) {
-    // Group vulnerabilities by IP manually if grouped endpoint not available
+
     const grouped = {};
     if (data.vulnerabilities) {
         data.vulnerabilities.forEach(vuln => {
@@ -6641,8 +6284,7 @@ function displayFallbackVulnerabilities(data) {
             grouped[vuln.host].vulnerabilities.push(vuln);
         });
     }
-    
-    // Convert to array and format
+
     const groupedArray = Object.values(grouped).map(host => ({
         ...host,
         affected_ports: Array.from(host.affected_ports),
@@ -6656,7 +6298,6 @@ function displayFallbackVulnerabilities(data) {
     });
 }
 
-// Trigger manual vulnerability scan
 async function triggerManualVulnScan() {
     try {
         addConsoleMessage('Starting vulnerability scan on all discovered hosts...', 'info');
@@ -6673,8 +6314,7 @@ async function triggerManualVulnScan() {
         if (response.action === 'vulnerability_scan_triggered') {
             addConsoleMessage(`✅ ${response.message}`, 'success');
             addConsoleMessage(`📋 Scanning ${response.discovered_hosts} discovered hosts`, 'info');
-            
-            // Show detailed next steps
+
             if (response.next_steps) {
                 response.next_steps.forEach(step => {
                     addConsoleMessage(`   • ${step}`, 'info');
@@ -6682,16 +6322,14 @@ async function triggerManualVulnScan() {
             }
             
             showNotification(`Vulnerability scan started on ${response.discovered_hosts} hosts. Check back in a few minutes!`, 'success');
-            
-            // Refresh threat intel data in 30 seconds to check for results
+
             setTimeout(() => {
                 if (currentTab === 'threat-intel') {
                     loadThreatIntelData();
                     addConsoleMessage('🔄 Checking for new threat intelligence findings...', 'info');
                 }
             }, 30000);
-            
-            // And again in 2 minutes
+
             setTimeout(() => {
                 if (currentTab === 'threat-intel') {
                     loadThreatIntelData();
@@ -6709,7 +6347,6 @@ async function triggerManualVulnScan() {
     }
 }
 
-// Refresh threat intelligence data
 function refreshThreatIntel() {
     showNotification('Refreshing threat intelligence...', 'info');
     if (currentTab === 'threat-intel') {
@@ -6717,22 +6354,19 @@ function refreshThreatIntel() {
     }
 }
 
-// Update threat intelligence statistics
 function updateThreatIntelStats(data) {
-    // Update summary cards
+
     document.getElementById('threat-sources-count').textContent = data.active_sources || 0;
     document.getElementById('enriched-findings-count').textContent = data.enriched_findings_count || 0;
     document.getElementById('high-risk-count').textContent = data.high_risk_count || 0;
     document.getElementById('active-campaigns-count').textContent = data.active_campaigns || 0;
 
-    // Update risk distribution
     const riskDistribution = data.risk_distribution || {};
     document.getElementById('critical-risk-count').textContent = riskDistribution.critical || 0;
     document.getElementById('high-risk-detail-count').textContent = riskDistribution.high || 0;
     document.getElementById('medium-risk-count').textContent = riskDistribution.medium || 0;
     document.getElementById('low-risk-count').textContent = riskDistribution.low || 0;
 
-    // Update source status indicators
     const sources = data.source_status || {};
     updateSourceStatus('cisa-status', sources.cisa_kev || false);
     updateSourceStatus('nvd-status', sources.nvd_cve || false);
@@ -6742,7 +6376,6 @@ function updateThreatIntelStats(data) {
     updateTopThreatsList(data.top_threats || [], data.last_update || data.last_intelligence_update || null);
 }
 
-// Update source status indicator
 function updateSourceStatus(elementId, isActive) {
     const element = document.getElementById(elementId);
     if (element) {
@@ -6750,7 +6383,6 @@ function updateSourceStatus(elementId, isActive) {
     }
 }
 
-// Update enriched findings table
 function updateEnrichedFindingsTable(findings) {
     const tableBody = document.getElementById('enriched-findings-table');
 
@@ -6804,7 +6436,6 @@ function updateEnrichedFindingsTable(findings) {
     `).join('');
 }
 
-// Update top threats list
 function updateTopThreatsList(threats, lastUpdated) {
     const listElement = document.getElementById('top-threats-list');
     const updatedElement = document.getElementById('top-threats-updated');
@@ -6846,7 +6477,6 @@ function updateTopThreatsList(threats, lastUpdated) {
     `).join('');
 }
 
-// Get risk score CSS class
 function getRiskScoreClass(score) {
     if (score >= 90) return 'bg-red-600 text-white';
     if (score >= 70) return 'bg-orange-600 text-white';
@@ -6854,7 +6484,6 @@ function getRiskScoreClass(score) {
     return 'bg-green-600 text-white';
 }
 
-// Manual target enrichment
 async function enrichTarget() {
     const targetInput = document.getElementById('enrichment-target');
     const target = targetInput.value.trim();
@@ -6892,7 +6521,6 @@ async function enrichTarget() {
     }
 }
 
-// Download threat intelligence report
 async function downloadThreatReport(target) {
     try {
         showNotification(`Analyzing ${target} for threat intelligence...`, 'info');
@@ -6910,8 +6538,7 @@ async function downloadThreatReport(target) {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            
-            // Generate filename with current date
+
             const now = new Date();
             const dateStr = now.toISOString().slice(0, 19).replace(/:/g, '-');
             a.download = `Threat_Intelligence_Report_${target.replace(/[^a-zA-Z0-9.-]/g, '_')}_${dateStr}.txt`;
@@ -6936,7 +6563,6 @@ async function downloadThreatReport(target) {
     }
 }
 
-// Format timestamp for display
 function formatTimestamp(timestamp) {
     if (!timestamp) return 'N/A';
     
@@ -6948,7 +6574,6 @@ function formatTimestamp(timestamp) {
     }
 }
 
-// HTML escape utility
 function escapeHtml(text) {
     if (typeof text !== 'string') return text;
     const div = document.createElement('div');
