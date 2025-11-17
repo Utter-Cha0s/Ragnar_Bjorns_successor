@@ -529,29 +529,32 @@ function setupAutoRefresh() {
         }
     }, 20000); // Every 20 seconds
     
-    // Set up console log refreshing (fallback when WebSocket is not working)
+    // OPTIMIZATION: Reduce console log polling frequency (was 5s, now 10s)
+    // Console logs are not critical and 5s polling adds unnecessary load on Pi Zero
     autoRefreshIntervals.console = setInterval(() => {
         if (currentTab === 'dashboard') {
             loadConsoleLogs();
         }
-    }, 5000); // Every 5 seconds when on dashboard
+    }, 10000); // Every 10 seconds when on dashboard (reduced from 5s)
     
-    // Set up dashboard stats auto-refresh
+    // OPTIMIZATION: Reduce dashboard refresh frequency (was 15s, now 20s)
+    // Background sync runs every 15s, so 20s refresh is sufficient
     autoRefreshIntervals.dashboard = setInterval(() => {
         if (currentTab === 'dashboard') {
             loadDashboardData();
         }
-    }, 15000); // Every 15 seconds when on dashboard
+    }, 20000); // Every 20 seconds when on dashboard (reduced from 15s)
     
     // Set up periodic update checking
     autoRefreshIntervals.updates = setInterval(() => {
         checkForUpdatesQuiet();
     }, 300000); // Every 5 minutes
     
-    // Initial update check after page load
+    // OPTIMIZATION: Defer initial update check (was 5s, now 30s)
+    // Not critical for initial dashboard load
     setTimeout(() => {
         checkForUpdatesQuiet();
-    }, 5000); // Check 5 seconds after page load
+    }, 30000); // Check 30 seconds after page load (deferred from 5s)
 }
 
 function initializeMobileMenu() {

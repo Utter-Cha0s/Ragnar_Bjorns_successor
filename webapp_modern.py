@@ -576,17 +576,20 @@ def sync_all_counts():
                             'mac': mac
                         }
                 
-                logger.info(f"[SYNC] ✅ Read data from SQLite database:")
-                logger.info(f"  - Total unique IPs: {total_target_count}")
-                logger.info(f"  - Active (alive): {aggregated_targets}")
-                logger.info(f"  - Inactive (degraded): {inactive_target_count}")
-                logger.info(f"  - Total open ports: {aggregated_ports}")
+                logger.debug(f"[SYNC] ✅ Read data from SQLite database:")
+                logger.debug(f"  - Total unique IPs: {total_target_count}")
+                logger.debug(f"  - Active (alive): {aggregated_targets}")
+                logger.debug(f"  - Inactive (degraded): {inactive_target_count}")
+                logger.debug(f"  - Total open ports: {aggregated_ports}")
                 
-                # Log detailed port breakdown for debugging
-                if port_debug_info:
-                    logger.info(f"[PORT COUNT BREAKDOWN] Counting ports from {len(port_debug_info)} alive hosts with open ports:")
-                    for info in port_debug_info:
-                        logger.info(f"    {info}")
+                # OPTIMIZATION: Only log port breakdown when debug logging is enabled
+                # Reduces log I/O on Pi Zero during normal operation
+                if port_debug_info and logger.level <= logging.DEBUG:
+                    logger.debug(f"[PORT COUNT BREAKDOWN] Counting ports from {len(port_debug_info)} alive hosts with open ports:")
+                    for info in port_debug_info[:10]:  # Limit to first 10 to reduce log spam
+                        logger.debug(f"    {info}")
+                    if len(port_debug_info) > 10:
+                        logger.debug(f"    ... and {len(port_debug_info) - 10} more hosts with ports")
                 
             except Exception as e:
                 logger.error(f"[SQLITE SYNC] ❌ Error reading from SQLite database: {e}")
@@ -602,11 +605,16 @@ def sync_all_counts():
             shared_data.portnbr = aggregated_ports
             shared_data.networkkbnbr = total_target_count
             
-            logger.info(f"✅ Updated counts from SQLite database:")
-            logger.info(f"  - Targets: {old_targets} -> {aggregated_targets}")
-            logger.info(f"  - Ports: {old_ports} -> {aggregated_ports}")
-            logger.info(f"  - Total hosts: {total_target_count}")
-            logger.info(f"  - Inactive hosts: {inactive_target_count}")
+            # OPTIMIZATION: Only log count changes to reduce I/O overhead
+            # On Pi Zero, frequent logging can impact performance
+            if old_targets != aggregated_targets or old_ports != aggregated_ports:
+                logger.info(f"✅ Updated counts from SQLite database:")
+                logger.info(f"  - Targets: {old_targets} -> {aggregated_targets}")
+                logger.info(f"  - Ports: {old_ports} -> {aggregated_ports}")
+                logger.info(f"  - Total hosts: {total_target_count}")
+                logger.info(f"  - Inactive hosts: {inactive_target_count}")
+            else:
+                logger.debug(f"Counts unchanged: targets={aggregated_targets}, ports={aggregated_ports}")
 
             # Track new and lost hosts
             previous_snapshot = getattr(shared_data, 'network_hosts_snapshot', {}) or {}
