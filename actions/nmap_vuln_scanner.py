@@ -362,6 +362,7 @@ class NmapVulnScanner:
     def execute(self, ip, row, status_key):
         """
         Executes the vulnerability scan for a given IP and row data.
+        Returns: 'success' if scan was performed, 'skipped' if already scanned, 'failed' on error
         """
         self.shared_data.ragnarorch_status = "NmapVulnScanner"
         ports = row.get("Ports", "")
@@ -372,8 +373,9 @@ class NmapVulnScanner:
             self.save_results(row["MAC Address"], ip, scan_result)
             return 'success'
         else:
-            return 'success' # considering failed as success as we just need to scan vulnerabilities once
-            # return 'failed'
+            # Returning 'skipped' to indicate scan was not performed (already scanned)
+            # This helps orchestrator track accurate metrics
+            return 'skipped'
 
     def prepare_port_list(self, ports) -> List[str]:
         """Normalize port values from the NetKB row"""
@@ -739,8 +741,17 @@ class NmapVulnScanner:
                         # Send real-time update with scan results
                         if real_time_callback:
                             self._send_host_update(real_time_callback, ip, row, "success")
+                    
+                    elif result == 'skipped':
+                        # Host was skipped (already scanned)
+                        logger.debug(f"Host {ip} skipped - already scanned")
+                        # Don't update database status - keep existing status
+                        if real_time_callback:
+                            self._send_host_update(real_time_callback, ip, row, "skipped")
                             
                     else:
+                        # Scan failed
+                        scanned_count += 1  # Count failed attempts
                         # Update failed status in database
                         try:
                             self.db.update_host_action_status(
