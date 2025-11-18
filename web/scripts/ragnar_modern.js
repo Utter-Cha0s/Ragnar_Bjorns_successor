@@ -3853,9 +3853,7 @@ async function toggleBluetoothPower() {
         const isEnabled = originalText === 'Disable Bluetooth';
         const endpoint = isEnabled ? '/api/bluetooth/disable' : '/api/bluetooth/enable';
         
-        const response = await fetchAPI(endpoint, {
-            method: 'POST'
-        });
+        const response = await postAPI(endpoint, {});
         
         if (response.success) {
             addConsoleMessage(`Bluetooth ${isEnabled ? 'disabled' : 'enabled'} successfully`, 'success');
@@ -3889,9 +3887,7 @@ async function toggleBluetoothDiscoverable() {
         const isDiscoverable = originalText === 'Hide Device';
         const endpoint = isDiscoverable ? '/api/bluetooth/discoverable/off' : '/api/bluetooth/discoverable/on';
         
-        const response = await fetchAPI(endpoint, {
-            method: 'POST'
-        });
+        const response = await postAPI(endpoint, {});
         
         if (response.success) {
             addConsoleMessage(`Bluetooth ${isDiscoverable ? 'hidden' : 'made discoverable'}`, 'success');
@@ -3930,9 +3926,7 @@ async function startBluetoothScan() {
     scanStatus.textContent = 'Scanning...';
     
     try {
-        const response = await fetchAPI('/api/bluetooth/scan/start', {
-            method: 'POST'
-        });
+        const response = await postAPI('/api/bluetooth/scan/start', {});
         
         if (response.success) {
             addConsoleMessage('Started Bluetooth device scan', 'info');
@@ -3985,8 +3979,7 @@ function stopBluetoothScan() {
     }
     
     // Stop the scan on the server
-    fetchAPI('/api/bluetooth/scan/stop', {
-        method: 'POST'
+    postAPI('/api/bluetooth/scan/stop', {}).catch(error => {
     }).catch(error => {
         console.error('Error stopping Bluetooth scan:', error);
     });
@@ -4229,14 +4222,8 @@ async function enumerateBluetoothServices() {
     }
     
     try {
-        const response = await fetchAPI('/api/bluetooth/enumerate', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                address: address
-            })
+        const response = await postAPI('/api/bluetooth/enumerate', {
+            address: address
         });
         
         if (response.success && response.services) {
