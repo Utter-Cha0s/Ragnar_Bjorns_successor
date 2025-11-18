@@ -9091,11 +9091,53 @@ def export_netkb_data():
 # ============================================================================
 
 def handle_exit(signum, frame):
-    """Handle exit signals"""
+    """Handle exit signals with proper cleanup"""
     logger.info("Shutting down web server...")
     shared_data.webapp_should_exit = True
-    socketio.stop()
+    
+    # Stop all background tasks first
+    try:
+        socketio.stop()
+    except Exception as e:
+        logger.warning(f"Error stopping socketio: {e}")
+    
+    # Kill any running subprocesses
+    try:
+        if psutil_available:
+            current_process = psutil.Process()
+            children = current_process.children(recursive=True)
+            
+            if children:
+                logger.info(f"Terminating {len(children)} child processes...")
+                for child in children:
+                    try:
+                        child.terminate()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                
+                # Wait up to 3 seconds for graceful termination
+                gone, alive = psutil.wait_procs(children, timeout=3)
+                
+                # Force kill any remaining processes
+                for p in alive:
+                    try:
+                        logger.warning(f"Force killing process {p.pid} ({p.name()})")
+                        p.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+        else:
+            # Fallback: try to kill common subprocess patterns
+            logger.info("Attempting to clean up subprocesses (psutil not available)...")
+            try:
+                subprocess.run(['pkill', '-P', str(os.getpid())], timeout=2)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Error cleaning up subprocesses: {e}")
+    
+    logger.info("Shutdown complete")
     sys.exit(0)
+
 
 
 # ============================================================================
