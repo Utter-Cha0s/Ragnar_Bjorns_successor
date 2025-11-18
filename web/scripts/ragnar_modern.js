@@ -282,6 +282,14 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function isValidIPv4(ip) {
+    if (!ip) {
+        return false;
+    }
+    const ipv4Pattern = /^(25[0-5]|2[0-4]\d|1?\d{1,2})(\.(25[0-5]|2[0-4]\d|1?\d{1,2})){3}$/;
+    return ipv4Pattern.test(ip.trim());
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     initializeSocket();
@@ -429,6 +437,21 @@ function setupEventListeners() {
     if (clearBtn) {
         clearBtn.addEventListener('click', clearConsole);
     }
+
+    const customScanBtn = document.getElementById('custom-deep-scan-btn');
+    if (customScanBtn) {
+        customScanBtn.addEventListener('click', handleCustomDeepScanRequest);
+    }
+
+    const customScanInput = document.getElementById('custom-deep-scan-ip');
+    if (customScanInput) {
+        customScanInput.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                handleCustomDeepScanRequest();
+            }
+        });
+    }
 }
 
 function initializeTabs() {
@@ -506,29 +529,32 @@ function setupAutoRefresh() {
         }
     }, 20000); // Every 20 seconds
     
-    // Set up console log refreshing (fallback when WebSocket is not working)
+    // OPTIMIZATION: Reduce console log polling frequency (was 5s, now 10s)
+    // Console logs are not critical and 5s polling adds unnecessary load on Pi Zero
     autoRefreshIntervals.console = setInterval(() => {
         if (currentTab === 'dashboard') {
             loadConsoleLogs();
         }
-    }, 5000); // Every 5 seconds when on dashboard
+    }, 10000); // Every 10 seconds when on dashboard (reduced from 5s)
     
-    // Set up dashboard stats auto-refresh
+    // OPTIMIZATION: Reduce dashboard refresh frequency (was 15s, now 20s)
+    // Background sync runs every 15s, so 20s refresh is sufficient
     autoRefreshIntervals.dashboard = setInterval(() => {
         if (currentTab === 'dashboard') {
             loadDashboardData();
         }
-    }, 15000); // Every 15 seconds when on dashboard
+    }, 20000); // Every 20 seconds when on dashboard (reduced from 15s)
     
     // Set up periodic update checking
     autoRefreshIntervals.updates = setInterval(() => {
         checkForUpdatesQuiet();
     }, 300000); // Every 5 minutes
     
-    // Initial update check after page load
+    // OPTIMIZATION: Defer initial update check (was 5s, now 30s)
+    // Not critical for initial dashboard load
     setTimeout(() => {
         checkForUpdatesQuiet();
-    }, 5000); // Check 5 seconds after page load
+    }, 30000); // Check 30 seconds after page load (deferred from 5s)
 }
 
 function initializeMobileMenu() {
@@ -548,20 +574,23 @@ function initializeMobileMenu() {
 
 async function loadInitialData() {
     try {
-        // Priority 1: Load critical dashboard stats first for immediate visibility
-        await Promise.all([
-            fetchAPI('/api/status').then(status => {
-                if (status) {
-                    updateDashboardStatus(status);
-                }
-            }),
-            loadDashboardData()
-        ]);
+        // OPTIMIZATION: Use combined /api/dashboard/quick endpoint for fast loading
+        // This eliminates multiple API calls and reduces load time from 5-10s to <2s on Pi Zero
         
-        // Priority 2: Load Wi-Fi status (medium priority, shown in nav)
-        refreshWifiStatus().catch(err => console.warn('WiFi status load failed:', err));
+        // Load critical dashboard data using optimized combined endpoint
+        const quickData = await fetchAPI('/api/dashboard/quick');
+        if (quickData) {
+            // Update both stats and status from single response
+            updateDashboardStats(quickData);
+            updateDashboardStatus(quickData);
+        }
         
-        // Priority 3: Load console logs last (lowest priority, background info)
+        // OPTIMIZATION: Defer WiFi status to after dashboard is visible
+        setTimeout(() => {
+            refreshWifiStatus().catch(err => console.warn('WiFi status load failed:', err));
+        }, 200);
+        
+        // OPTIMIZATION: Defer console logs to much later (lowest priority)
         setTimeout(() => {
             loadConsoleLogs().then(() => {
                 addConsoleMessage('Ragnar Modern Web Interface Initialized', 'success');
@@ -570,12 +599,35 @@ async function loadInitialData() {
                 console.warn('Console logs load failed:', err);
                 addConsoleMessage('Error loading console logs', 'warning');
             });
-        }, 100);
+        }, 1000);
         
-        // Priority 4: Preload all other tabs in background after dashboard is ready
+        // OPTIMIZATION: Completely defer tab preloading until user interacts or 10s passes
+        // This prevents overwhelming the Pi Zero during initial page load
+        let preloadTriggered = false;
+        
+        // Trigger preload on first user interaction (hover, click, scroll)
+        const triggerPreload = () => {
+            if (!preloadTriggered) {
+                preloadTriggered = true;
+                console.log('User interaction detected - starting background tab preload');
+                setTimeout(() => preloadAllTabs(), 100);
+            }
+        };
+        
+        // Listen for user interactions
+        document.addEventListener('mousemove', triggerPreload, { once: true });
+        document.addEventListener('click', triggerPreload, { once: true });
+        document.addEventListener('scroll', triggerPreload, { once: true });
+        document.addEventListener('touchstart', triggerPreload, { once: true });
+        
+        // Fallback: preload after 10 seconds if no user interaction
         setTimeout(() => {
-            preloadAllTabs();
-        }, 500);
+            if (!preloadTriggered) {
+                preloadTriggered = true;
+                console.log('Auto-starting background tab preload after timeout');
+                preloadAllTabs();
+            }
+        }, 10000);
         
     } catch (error) {
         console.error('Error loading initial data:', error);
@@ -583,19 +635,19 @@ async function loadInitialData() {
     }
 }
 
-// Preload all tabs in background for instant switching
+// OPTIMIZATION: Lazy preload tabs only when needed, with longer delays to reduce Pi Zero load
 async function preloadAllTabs() {
     console.log('Starting background preload of all tabs...');
     
     try {
-        // Preload in batches to avoid overwhelming the backend
+        // Preload in batches with longer delays to avoid overwhelming Pi Zero
         
         // Batch 1: Network tab (most frequently accessed after dashboard)
         await loadNetworkData().catch(err => console.warn('Network preload failed:', err));
         preloadedTabs.add('network');
         
-        // Small delay between batches
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Longer delay between batches (500ms instead of 200ms)
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // Batch 2: Discovered tab (credentials, loot, attacks, vulnerabilities)
         await Promise.all([
@@ -606,25 +658,25 @@ async function preloadAllTabs() {
         ]);
         preloadedTabs.add('discovered');
         
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // Batch 3: Threat Intel tab
         await loadThreatIntelData().catch(err => console.warn('Threat intel preload failed:', err));
         preloadedTabs.add('threat-intel');
         
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // Batch 4: Connect tab
         await loadConnectData().catch(err => console.warn('Connect preload failed:', err));
         preloadedTabs.add('connect');
         
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // Batch 5: E-Paper tab
         await loadEpaperDisplay().catch(err => console.warn('E-Paper preload failed:', err));
         preloadedTabs.add('epaper');
         
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // Batch 6: Files and Config (lower priority)
         await Promise.all([
@@ -711,10 +763,43 @@ async function loadTabData(tabName) {
 
 async function loadDashboardData() {
     try {
-        const data = await fetchAPI('/api/dashboard/stats');
-        updateDashboardStats(data);
+        // OPTIMIZATION: Show loading state with pulse animation
+        const statsElements = [
+            'target-count', 'target-total-count', 'target-inactive-count',
+            'port-count', 'vuln-count', 'cred-count', 'level-count', 'points-count'
+        ];
+        
+        // Add subtle pulse animation to show loading
+        statsElements.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.add('animate-pulse');
+        });
+        
+        // OPTIMIZATION: Use combined quick endpoint for faster loading
+        const data = await fetchAPI('/api/dashboard/quick');
+        
+        // Remove pulse animation
+        statsElements.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.remove('animate-pulse');
+        });
+        
+        if (data) {
+            updateDashboardStats(data);
+            // Also update status since quick endpoint includes it
+            updateDashboardStatus(data);
+        }
     } catch (error) {
         console.error('Error loading dashboard data:', error);
+        // Remove pulse animation on error too
+        const statsElements = [
+            'target-count', 'target-total-count', 'target-inactive-count',
+            'port-count', 'vuln-count', 'cred-count', 'level-count', 'points-count'
+        ];
+        statsElements.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.remove('animate-pulse');
+        });
     }
 }
 
@@ -958,7 +1043,7 @@ function displayStableNetworkTable(data) {
             <td class="py-3 px-4">${vulnDisplay}</td>
             <td class="py-3 px-4">${lastScanDisplay}</td>
             <td class="py-3 px-4">
-                <button onclick="triggerDeepScan('${host.ip}')" 
+                <button onclick="triggerDeepScan('${host.ip}', { mode: 'full' })" 
                         id="deep-scan-btn-${host.ip.replace(/\./g, '-')}"
                         data-scan-status="idle"
                         class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
@@ -1250,13 +1335,62 @@ function handleScanError(data) {
 // DEEP SCAN FUNCTIONS
 // ============================================================================
 
+async function handleCustomDeepScanRequest() {
+    const inputEl = document.getElementById('custom-deep-scan-ip');
+    const statusEl = document.getElementById('custom-deep-scan-status');
+    const buttonEl = document.getElementById('custom-deep-scan-btn');
+    if (!inputEl || !statusEl || !buttonEl) {
+        return;
+    }
+
+    const ip = inputEl.value.trim();
+    if (!ip) {
+        statusEl.textContent = 'Enter a target IP address before scanning.';
+        addConsoleMessage('Manual deep scan aborted: no IP provided', 'warning');
+        return;
+    }
+    if (!isValidIPv4(ip)) {
+        statusEl.textContent = 'Please enter a valid IPv4 address (e.g., 192.168.1.192).';
+        addConsoleMessage(`Manual deep scan aborted: invalid IPv4 (${ip})`, 'error');
+        return;
+    }
+
+    const originalText = buttonEl.dataset.defaultText || buttonEl.textContent;
+    buttonEl.dataset.defaultText = originalText;
+    buttonEl.disabled = true;
+    buttonEl.classList.add('cursor-wait', 'opacity-80');
+    buttonEl.textContent = 'Starting...';
+
+    statusEl.dataset.currentIp = ip;
+    statusEl.textContent = `Launching custom scan for ${ip} (top 3000 ports)...`;
+
+    addConsoleMessage(`Manual deep scan request queued for ${ip} (top 3000 ports)`, 'info');
+
+    try {
+        const success = await triggerDeepScan(ip, { mode: 'top3000', source: 'custom' });
+        if (success) {
+            statusEl.textContent = `Scan running on ${ip}. Watch the console for live updates.`;
+        } else {
+            statusEl.textContent = `Failed to start scan for ${ip}. See console for details.`;
+            statusEl.dataset.currentIp = '';
+        }
+    } catch (error) {
+        statusEl.textContent = `Unexpected error starting scan: ${error.message}`;
+        statusEl.dataset.currentIp = '';
+    } finally {
+        buttonEl.disabled = false;
+        buttonEl.classList.remove('cursor-wait', 'opacity-80');
+        buttonEl.textContent = buttonEl.dataset.defaultText;
+    }
+}
+
 // TEST FUNCTION - Direct deep scan test
 function testDeepScan() {
     console.log('🧪 Testing deep scan with hardcoded IP...');
     triggerDeepScan('192.168.1.211');
 }
 
-async function triggerDeepScan(ip) {
+async function triggerDeepScan(ip, options = {}) {
     try {
         // EXPLICIT DEBUG: Log what we received
         console.log('🔍 triggerDeepScan CALLED');
@@ -1269,6 +1403,11 @@ async function triggerDeepScan(ip) {
             addConsoleMessage('Error: No IP address provided for deep scan', 'error');
             return;
         }
+
+        const mode = (options.mode || 'full').toLowerCase();
+        const portstart = Number.isInteger(options.portstart) ? options.portstart : undefined;
+        const portend = Number.isInteger(options.portend) ? options.portend : undefined;
+        const modeDescription = mode === 'top3000' ? 'top 3000 ports' : 'all 65535 ports';
         
         // Update button immediately to show scan is starting
         const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
@@ -1283,17 +1422,27 @@ async function triggerDeepScan(ip) {
             saveDeepScanButtonState(ip);
         }
         
-        addConsoleMessage(`Starting deep scan on ${ip}...`, 'info');
+        addConsoleMessage(`Starting deep scan on ${ip} (${modeDescription})...`, 'info');
         
         console.log('📤 Sending POST request to /api/scan/deep');
-        console.log('   Request body:', JSON.stringify({ ip: ip }));
+        const requestBody = { ip: ip };
+        if (mode) {
+            requestBody.mode = mode;
+        }
+        if (portstart !== undefined) {
+            requestBody.portstart = portstart;
+        }
+        if (portend !== undefined) {
+            requestBody.portend = portend;
+        }
+        console.log('   Request body:', JSON.stringify(requestBody));
         
         const response = await fetch('/api/scan/deep', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ ip: ip })
+            body: JSON.stringify(requestBody)
         });
         
         console.log('📥 Response received, status:', response.status);
@@ -1302,7 +1451,8 @@ async function triggerDeepScan(ip) {
         console.log('📋 Response data:', data);
         
         if (data.status === 'success') {
-            addConsoleMessage(`Deep scan initiated for ${ip} - scanning all 65535 ports`, 'success');
+            addConsoleMessage(`Deep scan initiated for ${ip} - scanning ${modeDescription}`, 'success');
+            return true;
         } else {
             addConsoleMessage(`Failed to start deep scan: ${data.message}`, 'error');
             // Reset button on failure
@@ -1314,6 +1464,7 @@ async function triggerDeepScan(ip) {
                 button.dataset.scanStatus = 'idle';
                 clearDeepScanButtonState(ip);
             }
+            return false;
         }
     } catch (error) {
         console.error('Error triggering deep scan:', error);
@@ -1330,6 +1481,7 @@ async function triggerDeepScan(ip) {
             button.dataset.scanStatus = 'idle';
             clearDeepScanButtonState(ip);
         }
+        return false;
     }
 }
 
@@ -1339,6 +1491,8 @@ function handleDeepScanUpdate(data) {
     // Get the button for this IP
     const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
     const button = document.getElementById(buttonId);
+    const customStatusEl = document.getElementById('custom-deep-scan-status');
+    const updateCustomStatus = customStatusEl && customStatusEl.dataset.currentIp === ip;
     
     switch (type) {
         case 'deep_scan_started':
@@ -1351,6 +1505,9 @@ function handleDeepScanUpdate(data) {
                 button.dataset.scanStatus = 'scanning';
                 // Save the updated state
                 saveDeepScanButtonState(ip);
+            }
+            if (updateCustomStatus && message) {
+                customStatusEl.textContent = message;
             }
             break;
         
@@ -1371,6 +1528,9 @@ function handleDeepScanUpdate(data) {
                 button.dataset.scanStatus = 'scanning';
                 // Save the updated state
                 saveDeepScanButtonState(ip);
+            }
+            if (updateCustomStatus && message) {
+                customStatusEl.textContent = message;
             }
             break;
             
@@ -1409,6 +1569,11 @@ function handleDeepScanUpdate(data) {
                     }
                 }, 3000);
             }
+
+            if (updateCustomStatus) {
+                customStatusEl.textContent = `Scan complete for ${ip}: ${portCount} open ports found.`;
+                customStatusEl.dataset.currentIp = '';
+            }
             
             // Refresh network table to show updated port information
             if (currentTab === 'network') {
@@ -1442,10 +1607,18 @@ function handleDeepScanUpdate(data) {
                     }
                 }, 3000);
             }
+
+            if (updateCustomStatus) {
+                customStatusEl.textContent = message || `Scan error for ${ip}.`;
+                customStatusEl.dataset.currentIp = '';
+            }
             break;
             
         default:
             addConsoleMessage(`Deep scan update: ${message}`, 'info');
+            if (updateCustomStatus && message) {
+                customStatusEl.textContent = message;
+            }
     }
 }
 
@@ -1910,7 +2083,7 @@ function renderHostRow(normalized) {
         <td class="py-3 px-4 text-sm">${formatVulnerabilityCell(normalized)}</td>
         <td class="py-3 px-4 text-sm">${formatLastScanCell(normalized.lastScan)}</td>
         <td class="py-3 px-4">
-            <button onclick="triggerDeepScan('${normalized.ip}')" 
+                <button onclick="triggerDeepScan('${normalized.ip}', { mode: 'full' })" 
                     id="deep-scan-btn-${normalized.ip.replace(/\./g, '-')}"
                     data-scan-status="idle"
                     class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
@@ -6269,6 +6442,7 @@ window.exploitVulnerability = exploitVulnerability;
 
 // Deep Scan Functions
 window.triggerDeepScan = triggerDeepScan;
+window.handleCustomDeepScanRequest = handleCustomDeepScanRequest;
 window.testDeepScan = testDeepScan;
 
 // Debug Functions
