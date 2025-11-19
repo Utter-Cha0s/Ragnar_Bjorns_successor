@@ -38,6 +38,8 @@ import json
 import csv
 import logging
 import threading
+import re
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from contextlib import contextmanager
@@ -283,6 +285,9 @@ class DatabaseManager:
         
         # Clean up any duplicate entries
         self.cleanup_duplicate_hosts()
+
+        # Ensure legacy hostnames are cleaned up once on startup
+        self.sanitize_all_hostnames()
     
     def _migrate_from_csv(self):
         """
@@ -375,6 +380,69 @@ class DatabaseManager:
         if not mac:
             return False
         return mac.lower().startswith('00:00:')
+
+    def sanitize_hostname(self, hostname: Optional[str]) -> str:
+        """Normalize hostnames by removing control chars, collapsing duplicates, and limiting length."""
+        if hostname is None:
+            return ''
+
+        # Normalize unicode and drop non-printable characters
+        normalized = unicodedata.normalize('NFKC', str(hostname))
+        normalized = ''.join(ch for ch in normalized if ch.isprintable())
+        normalized = normalized.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+
+        # Split on known separators and collapse whitespace
+        raw_tokens = re.split(r'[;,\|]+', normalized)
+        cleaned_tokens = []
+        seen = set()
+
+        for token in raw_tokens:
+            token = re.sub(r'\s+', ' ', token).strip(" _-.")
+            if not token:
+                continue
+            token_key = token.lower()
+            if token_key in seen:
+                continue
+            seen.add(token_key)
+            cleaned_tokens.append(token)
+            if len(cleaned_tokens) >= 4:
+                break  # Prevent very long alias lists
+
+        sanitized = ' / '.join(cleaned_tokens)
+        if not sanitized:
+            return ''
+
+        # Enforce max length to keep DB rows tidy
+        return sanitized[:128]
+
+    def sanitize_all_hostnames(self) -> int:
+        """Retroactively sanitize hostnames already stored in the database."""
+        try:
+            updated = 0
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT mac, hostname FROM hosts")
+                rows = cursor.fetchall()
+                now = datetime.now().isoformat()
+
+                for row in rows:
+                    mac = row['mac'] if isinstance(row, sqlite3.Row) else row[0]
+                    current_hostname = row['hostname'] if isinstance(row, sqlite3.Row) else row[1]
+                    sanitized = self.sanitize_hostname(current_hostname)
+
+                    if sanitized != (current_hostname or ''):
+                        cursor.execute(
+                            "UPDATE hosts SET hostname = ?, updated_at = ? WHERE mac = ?",
+                            (sanitized, now, mac)
+                        )
+                        updated += 1
+
+            if updated:
+                logger.info(f"Sanitized {updated} hostnames with invalid formatting")
+            return updated
+        except Exception as e:
+            logger.error(f"Failed to sanitize existing hostnames: {e}")
+            return 0
     
     def upsert_host(self, mac: str, ip: str = None, hostname: str = None, 
                    vendor: str = None, ports: str = None, services: str = None,
@@ -479,8 +547,9 @@ class DatabaseManager:
                         update_values.append(ip)
                     
                     if hostname is not None:
+                        cleaned_hostname = self.sanitize_hostname(hostname)
                         update_fields.append("hostname = ?")
-                        update_values.append(hostname)
+                        update_values.append(cleaned_hostname)
                     
                     if vendor is not None:
                         update_fields.append("vendor = ?")
@@ -531,7 +600,7 @@ class DatabaseManager:
                     insert_data = {
                         'mac': mac,
                         'ip': ip or '',
-                        'hostname': hostname or '',
+                        'hostname': self.sanitize_hostname(hostname) if hostname is not None else '',
                         'vendor': vendor or '',
                         'ports': ports or '',
                         'services': json.dumps(services) if isinstance(services, dict) else (services or ''),
