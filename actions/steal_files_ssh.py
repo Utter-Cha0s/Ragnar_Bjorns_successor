@@ -63,7 +63,8 @@ class StealFilesSSH:
                 if any(file.endswith(ext) for ext in self.shared_data.steal_file_extensions) or \
                    any(file_name in file for file_name in self.shared_data.steal_file_names):
                     matching_files.append(file)
-            logger.info(f"Found {len(matching_files)} matching files in {dir_path}")
+            display_dir = dir_path if dir_path == '/' else dir_path.rstrip('/') + '/'
+            logger.info(f"Found {len(matching_files)} matching files in {display_dir}")
             return matching_files
         except Exception as e:
             logger.error(f"Error finding files in directory {dir_path}: {e}")
