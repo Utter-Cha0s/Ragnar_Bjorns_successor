@@ -4913,10 +4913,19 @@ function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
 // CONSOLE
 // ============================================================================
 
-let consoleBuffer = [];
 const MAX_CONSOLE_LINES = 200;
-let lastConsoleLogCount = 0;
-let lastConsoleLogSignature = null;
+const CONSOLE_NOISE_PATTERNS = [
+    'comment.py - INFO - Comments loaded successfully from cache'
+];
+const HISTORY_LOG_TYPE_COLORS = {
+    'success': 'text-green-400',
+    'error': 'text-red-400',
+    'warning': 'text-yellow-400',
+    'info': 'text-gray-300'
+};
+
+let consoleBuffer = [];
+let lastConsoleLogLine = null;
 
 function addConsoleMessage(message, type = 'info') {
     const timestamp = new Date().toLocaleTimeString();
@@ -4945,15 +4954,56 @@ function addConsoleMessage(message, type = 'info') {
     updateConsoleDisplay();
 }
 
+function shouldHideConsoleLog(logLine) {
+    return CONSOLE_NOISE_PATTERNS.some(pattern => logLine.includes(pattern));
+}
+
+function determineConsoleLogType(logLine) {
+    if (!logLine) return 'info';
+    const normalized = logLine.toLowerCase();
+    if (normalized.includes('error')) return 'error';
+    if (normalized.includes('warn')) return 'warning';
+    if (normalized.includes('success')) return 'success';
+    return 'info';
+}
+
+const LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+function extractLogTimestamp(logLine) {
+    if (!logLine || logLine.length < 19) {
+        return new Date().toLocaleTimeString();
+    }
+    const timestampCandidate = logLine.slice(0, 19);
+    if (LOG_TIMESTAMP_PATTERN.test(timestampCandidate)) {
+        const parsed = new Date(timestampCandidate.replace(' ', 'T'));
+        if (!Number.isNaN(parsed.getTime())) {
+            return parsed.toLocaleTimeString();
+        }
+    }
+    return new Date().toLocaleTimeString();
+}
+
+function createConsoleEntryFromLog(logLine) {
+    const type = determineConsoleLogType(logLine);
+    return {
+        timestamp: extractLogTimestamp(logLine),
+        message: logLine,
+        type,
+        colorClass: HISTORY_LOG_TYPE_COLORS[type] || HISTORY_LOG_TYPE_COLORS['info']
+    };
+}
+
 function updateConsole(logs) {
     if (!logs || !Array.isArray(logs)) {
+        // If no logs available, add informational messages
         if (consoleBuffer.length === 0) {
             addConsoleMessage('No historical logs available', 'warning');
             addConsoleMessage('New activity will appear here as it occurs', 'info');
         }
         return;
     }
-
+    
+    // If logs are empty array, provide user feedback
     if (logs.length === 0) {
         if (consoleBuffer.length === 0) {
             addConsoleMessage('No recent activity logged', 'info');
@@ -4961,73 +5011,47 @@ function updateConsole(logs) {
         }
         return;
     }
+    
+    const cleanedLogs = logs
+        .map(log => typeof log === 'string' ? log.trim() : '')
+        .filter(log => log && !shouldHideConsoleLog(log));
 
-    const processLogLine = (log) => {
-        if (!log || !log.trim()) return;
-
-        let type = 'info';
-        if (log.match(/error/i)) type = 'error';
-        else if (log.match(/warn/i)) type = 'warning';
-        else if (log.match(/success/i)) type = 'success';
-
-        const colors = {
-            'success': 'text-green-400',
-            'error': 'text-red-400',
-            'warning': 'text-yellow-400',
-            'info': 'text-gray-300'
-        };
-
-        consoleBuffer.push({
-            timestamp: new Date().toLocaleTimeString(),
-            message: log.trim(),
-            type,
-            colorClass: colors[type]
-        });
-
-        if (consoleBuffer.length > MAX_CONSOLE_LINES) {
-            consoleBuffer = consoleBuffer.slice(-MAX_CONSOLE_LINES);
-        }
-    };
-
-    const rebuildBuffer = () => {
-        consoleBuffer = [];
-        const recentLogs = logs.slice(-MAX_CONSOLE_LINES);
-        recentLogs.forEach(processLogLine);
-    };
-
-    const appendNewEntries = () => {
-        if (!lastConsoleLogSignature) {
-            rebuildBuffer();
-            return;
-        }
-
-        const lastIndex = logs.lastIndexOf(lastConsoleLogSignature);
-        if (lastIndex === -1) {
-            rebuildBuffer();
-            return;
-        }
-
-        let skipIndex = lastIndex + 1;
-        // Handle duplicates of the signature value at the end of the array
-        for (let i = lastIndex + 1; i < logs.length; i++) {
-            if (logs[i] === lastConsoleLogSignature) {
-                skipIndex = i + 1;
-            } else {
-                break;
-            }
-        }
-
-        logs.slice(skipIndex).forEach(processLogLine);
-    };
-
-    if (!lastConsoleLogCount || logs.length < lastConsoleLogCount) {
-        rebuildBuffer();
-    } else {
-        appendNewEntries();
+    if (cleanedLogs.length === 0) {
+        return;
     }
 
-    lastConsoleLogCount = logs.length;
-    lastConsoleLogSignature = logs[logs.length - 1];
+    let newLogLines = [];
+    if (!lastConsoleLogLine) {
+        consoleBuffer = [];
+        newLogLines = cleanedLogs.slice(-MAX_CONSOLE_LINES);
+    } else {
+        const lastIndex = cleanedLogs.lastIndexOf(lastConsoleLogLine);
+        if (lastIndex === cleanedLogs.length - 1) {
+            lastConsoleLogLine = cleanedLogs[cleanedLogs.length - 1];
+            return;
+        }
+        if (lastIndex !== -1) {
+            newLogLines = cleanedLogs.slice(lastIndex + 1);
+        } else {
+            consoleBuffer = [];
+            newLogLines = cleanedLogs.slice(-MAX_CONSOLE_LINES);
+        }
+    }
+
+    if (newLogLines.length === 0) {
+        lastConsoleLogLine = cleanedLogs[cleanedLogs.length - 1];
+        return;
+    }
+    
+    newLogLines.forEach(logLine => {
+        consoleBuffer.push(createConsoleEntryFromLog(logLine));
+    });
+    
+    if (consoleBuffer.length > MAX_CONSOLE_LINES) {
+        consoleBuffer = consoleBuffer.slice(-MAX_CONSOLE_LINES);
+    }
+    
+    lastConsoleLogLine = cleanedLogs[cleanedLogs.length - 1];
     updateConsoleDisplay();
 }
 

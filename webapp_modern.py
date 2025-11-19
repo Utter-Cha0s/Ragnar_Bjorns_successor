@@ -2400,6 +2400,15 @@ def get_logs():
                         # Skip files that can't be read
                         continue
         
+        noise_filters = (
+            'comment.py - INFO - Comments loaded successfully from cache',
+        )
+        if noise_filters:
+            all_logs = [
+                log for log in all_logs
+                if not any(noise in log for noise in noise_filters)
+            ]
+
         # Sort logs chronologically if they have timestamps
         # Logs are in format: YYYY-MM-DD HH:MM:SS - filename - LEVEL - message
         def extract_timestamp(log_line):
