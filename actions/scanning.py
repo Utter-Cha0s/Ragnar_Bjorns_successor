@@ -548,6 +548,8 @@ class NetworkScanner:
                     mac, ip, hostname, ports = data
                     if not mac or mac == "STANDALONE" or ip == "STANDALONE" or hostname == "STANDALONE":
                         continue
+
+                    hostname = self.db.sanitize_hostname(hostname)
                     
                     # MAC/host resolution: SQLITE DB ONLY - CSV logic removed
                     # Pseudo-MAC generation: ONLY in update_netkb() via DB operations
@@ -655,6 +657,8 @@ class NetworkScanner:
                         # Get primary IP (first one if multiple)
                         primary_ip = sorted(data['IPs'], key=self.ip_key)[0] if data['IPs'] else ''
                         hostname = '; '.join(sorted(data['Hostnames'])) if data['Hostnames'] else ''
+                        if hostname:
+                            hostname = self.db.sanitize_hostname(hostname)
                         
                         # Prepare ports string
                         valid_ports = [p for p in data['Ports'] if p]
