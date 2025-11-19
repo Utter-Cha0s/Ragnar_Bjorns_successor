@@ -25,6 +25,7 @@ import time
 import logging
 import sys
 import threading
+import re
 from datetime import datetime, timedelta
 from actions.nmap_vuln_scanner import NmapVulnScanner
 from init_shared import shared_data
@@ -447,8 +448,44 @@ class Orchestrator:
     @staticmethod
     def _extract_ports(row):
         """Return a sanitized list of ports extracted from a data row."""
-        ports_field = row.get("Ports", "") or ""
-        return [port.strip() for port in ports_field.split(';') if port and port.strip()]
+        ports_field = row.get("Ports") or ""
+
+        # Support multiple storage formats (list, tuple, CSV string, etc.)
+        if isinstance(ports_field, (list, tuple, set)):
+            raw_ports = ports_field
+        else:
+            normalized = str(ports_field).strip()
+            if not normalized:
+                return []
+
+            # Remove artifacts like brackets and quotes produced by JSON/CSV dumps
+            normalized = normalized.strip('[]')
+            normalized = normalized.replace('"', '').replace("'", "")
+
+            # Split on commas, semicolons, or whitespace
+            raw_ports = re.split(r"[;,\s]+", normalized)
+
+        sanitized_ports = []
+        for port in raw_ports:
+            if port is None:
+                continue
+
+            port_str = str(port).strip()
+            if not port_str:
+                continue
+
+            # Remove protocol suffixes such as 22/tcp
+            port_str = port_str.split('/')[0]
+
+            try:
+                port_num = int(port_str)
+            except ValueError:
+                continue
+
+            if 0 < port_num <= 65535:
+                sanitized_ports.append(str(port_num))
+
+        return sanitized_ports
 
     def execute_standalone_action(self, action, current_data):
         """Execute a standalone action with timeout protection"""
