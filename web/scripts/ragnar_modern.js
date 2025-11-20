@@ -740,10 +740,9 @@ async function loadTabData(tabName) {
             break;
         case 'files':
             if (!alreadyPreloaded) {
-                await Promise.all([
-                    loadFilesData(),
-                    loadImagesData()
-                ]);
+                await loadFilesData();
+                // Images are not auto-loaded to save processing power
+                // User must click "Load Images" button to load them
             }
             break;
         case 'system':
@@ -6483,13 +6482,21 @@ function showNotification(message, type) {
 
 let currentImageFilter = 'all';
 let allImages = [];
+let imagesLoaded = false;
 
 function loadImagesData() {
     fetch('/api/images/list')
         .then(response => response.json())
         .then(images => {
             allImages = images;
+            imagesLoaded = true;
             displayImages(images);
+            
+            // Hide the load images button after loading
+            const loadBtn = document.getElementById('load-images-btn');
+            if (loadBtn) {
+                loadBtn.style.display = 'none';
+            }
         })
         .catch(error => {
             console.error('Error loading images:', error);
@@ -6684,8 +6691,25 @@ function captureScreenshot() {
     });
 }
 
-function refreshImages() {
+function manualLoadImages() {
+    const loadBtn = document.getElementById('load-images-btn');
+    if (loadBtn) {
+        loadBtn.disabled = true;
+        loadBtn.innerHTML = `
+            <svg class="animate-spin w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            Loading...
+        `;
+    }
     loadImagesData();
+}
+
+function refreshImages() {
+    // Only refresh if images have already been loaded
+    if (imagesLoaded) {
+        loadImagesData();
+    }
 }
 
 function showImageSuccess(message) {
@@ -7349,6 +7373,7 @@ window.downloadImage = downloadImage;
 window.deleteImage = deleteImage;
 window.captureScreenshot = captureScreenshot;
 window.refreshImages = refreshImages;
+window.manualLoadImages = manualLoadImages;
 
 // System Monitoring Functions
 window.loadSystemData = loadSystemData;
