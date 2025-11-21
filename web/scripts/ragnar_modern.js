@@ -8313,9 +8313,28 @@ function formatAIText(text) {
 // AI INSIGHTS FUNCTIONS
 // ============================================================================
 
+// Client-side AI insights cache (1 hour TTL to match server-side cache)
+let aiInsightsCache = {
+    data: null,
+    timestamp: null,
+    ttl: 3600000 // 1 hour in milliseconds
+};
+
 // Load AI status and insights
 async function loadAIInsights() {
     try {
+        // Check client-side cache first
+        const now = Date.now();
+        if (aiInsightsCache.data && aiInsightsCache.timestamp) {
+            const age = now - aiInsightsCache.timestamp;
+            if (age < aiInsightsCache.ttl) {
+                // Use cached data - don't make API call
+                console.log(`AI insights cached (${Math.floor(age / 1000)}s old, refreshes in ${Math.floor((aiInsightsCache.ttl - age) / 1000)}s)`);
+                displayAIInsights(aiInsightsCache.data);
+                return;
+            }
+        }
+        
         // First check AI status
         const statusResponse = await fetch('/api/ai/status');
         const status = await statusResponse.json();
@@ -8327,6 +8346,9 @@ async function loadAIInsights() {
             // Show configuration message
             if (aiSection) aiSection.style.display = 'none';
             if (aiNotConfigured) aiNotConfigured.style.display = 'block';
+            // Clear cache
+            aiInsightsCache.data = null;
+            aiInsightsCache.timestamp = null;
             return;
         }
         
@@ -8341,48 +8363,15 @@ async function loadAIInsights() {
         }
         
         // Load comprehensive insights
+        console.log('Fetching fresh AI insights from server...');
         const insightsResponse = await fetch('/api/ai/insights');
         const insights = await insightsResponse.json();
         
-        if (insights.enabled) {
-            // Update network summary
-            const networkSummary = document.getElementById('ai-network-summary');
-            if (networkSummary) {
-                networkSummary.innerHTML = formatAIText(insights.network_summary || 'Analyzing network...');
-            }
-            
-            // Update vulnerability analysis
-            const vulnAnalysis = document.getElementById('ai-vuln-analysis');
-            const vulnSection = document.getElementById('ai-vuln-section');
-            if (vulnAnalysis) {
-                if (insights.vulnerability_analysis) {
-                    vulnAnalysis.innerHTML = formatAIText(insights.vulnerability_analysis);
-                    if (vulnSection) vulnSection.style.display = 'block';
-                } else {
-                    vulnAnalysis.textContent = 'No vulnerabilities detected';
-                    if (vulnSection) vulnSection.style.display = 'block';
-                }
-            }
-            
-            // Update weakness analysis
-            const weaknessAnalysis = document.getElementById('ai-weakness-analysis');
-            const weaknessSection = document.getElementById('ai-weakness-section');
-            if (weaknessAnalysis) {
-                if (insights.weakness_analysis) {
-                    weaknessAnalysis.innerHTML = formatAIText(insights.weakness_analysis);
-                    if (weaknessSection) weaknessSection.style.display = 'block';
-                } else {
-                    weaknessAnalysis.textContent = 'Analyzing network topology...';
-                    if (weaknessSection) weaknessSection.style.display = 'block';
-                }
-            }
-            
-            // Update last update time
-            const lastUpdate = document.getElementById('ai-last-update');
-            if (lastUpdate) {
-                lastUpdate.textContent = 'Just now';
-            }
-        }
+        // Cache the insights
+        aiInsightsCache.data = insights;
+        aiInsightsCache.timestamp = now;
+        
+        displayAIInsights(insights);
         
     } catch (error) {
         console.error('Error loading AI insights:', error);
@@ -8390,10 +8379,63 @@ async function loadAIInsights() {
     }
 }
 
-// Refresh AI insights
+// Display AI insights (separated for reuse with cache)
+function displayAIInsights(insights) {
+    if (insights.enabled) {
+        // Update network summary
+        const networkSummary = document.getElementById('ai-network-summary');
+        if (networkSummary) {
+            networkSummary.innerHTML = formatAIText(insights.network_summary || 'Analyzing network...');
+        }
+        
+        // Update vulnerability analysis
+        const vulnAnalysis = document.getElementById('ai-vuln-analysis');
+        const vulnSection = document.getElementById('ai-vuln-section');
+        if (vulnAnalysis) {
+            if (insights.vulnerability_analysis) {
+                vulnAnalysis.innerHTML = formatAIText(insights.vulnerability_analysis);
+                if (vulnSection) vulnSection.style.display = 'block';
+            } else {
+                vulnAnalysis.textContent = 'No vulnerabilities detected';
+                if (vulnSection) vulnSection.style.display = 'block';
+            }
+        }
+        
+        // Update weakness analysis
+        const weaknessAnalysis = document.getElementById('ai-weakness-analysis');
+        const weaknessSection = document.getElementById('ai-weakness-section');
+        if (weaknessAnalysis) {
+            if (insights.weakness_analysis) {
+                weaknessAnalysis.innerHTML = formatAIText(insights.weakness_analysis);
+                if (weaknessSection) weaknessSection.style.display = 'block';
+            } else {
+                weaknessAnalysis.textContent = 'Analyzing network topology...';
+                if (weaknessSection) weaknessSection.style.display = 'block';
+            }
+        }
+        
+        // Update last update time
+        const lastUpdate = document.getElementById('ai-last-update');
+        if (lastUpdate && aiInsightsCache.timestamp) {
+            const age = Math.floor((Date.now() - aiInsightsCache.timestamp) / 1000);
+            const nextRefresh = Math.floor((aiInsightsCache.ttl - (Date.now() - aiInsightsCache.timestamp)) / 1000);
+            if (age < 60) {
+                lastUpdate.textContent = `Updated ${age}s ago (next refresh in ${Math.floor(nextRefresh / 60)}m)`;
+            } else {
+                lastUpdate.textContent = `Updated ${Math.floor(age / 60)}m ago (next refresh in ${Math.floor(nextRefresh / 60)}m)`;
+            }
+        }
+    }
+}
+
+// Refresh AI insights (force refresh, clear both client and server cache)
 async function refreshAIInsights() {
     try {
-        // Clear cache first
+        // Clear client-side cache
+        aiInsightsCache.data = null;
+        aiInsightsCache.timestamp = null;
+        
+        // Clear server-side cache
         await fetch('/api/ai/clear-cache', { method: 'POST' });
         
         // Show loading state
@@ -8405,7 +8447,7 @@ async function refreshAIInsights() {
         if (vulnAnalysis) vulnAnalysis.textContent = 'Analyzing vulnerabilities...';
         if (weaknessAnalysis) weaknessAnalysis.textContent = 'Identifying network weaknesses...';
         
-        // Reload insights
+        // Reload insights (will fetch fresh data since cache is cleared)
         await loadAIInsights();
         
         showNotification('AI insights refreshed successfully', 'success');

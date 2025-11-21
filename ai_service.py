@@ -51,7 +51,7 @@ class AIService:
 
         # Cache
         self.cache = {}
-        self.cache_ttl = 300  # 5 minutes
+        self.cache_ttl = 3600  # 1 hour (3600 seconds) - reduce token consumption
 
         # Client initialization
         self.client = None
