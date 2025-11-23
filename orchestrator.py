@@ -15,8 +15,8 @@
 # - Logging events and errors to ensure maintainability and ease of debugging.
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
 
-# VERSION: 11:23:20:30 - FEATURE: 24-hour timestamp tracking for vuln scans (avoid re-scanning within 24h unless force=True)
-ORCHESTRATOR_VERSION = "11:23:20:30"
+# VERSION: 11:23:21:00 - PERFORMANCE: Pre-filter hosts by port BEFORE semaphore (eliminates 100s of unnecessary lock acquisitions)
+ORCHESTRATOR_VERSION = "11:23:21:00"
 
 import json
 import importlib
@@ -306,19 +306,32 @@ class Orchestrator:
         for action in self.actions:
             if action.b_parent_action is None:
                 action_key = action.action_name
+                required_port = getattr(action, 'port', None)
                 
+                # Pre-filter hosts by port requirement (FAST - no semaphore needed)
                 for row in current_data:
                     if row["Alive"] != '1':
                         continue
+                    
+                    ip = row["IPs"]
+                    ports = self._extract_ports(row)
+                    
+                    # OPTIMIZATION: Check port requirement BEFORE acquiring semaphore
+                    # This prevents serializing hundreds of "port not found" checks
+                    if required_port not in (None, '', 0, '0'):
+                        required_port_str = str(required_port).strip().split('/')[0]
+                        ports_normalized = [str(p).strip().split('/')[0] for p in ports]
+                        
+                        if required_port_str not in ports_normalized:
+                            # Skip silently - port not available (no semaphore needed)
+                            continue
                     
                     # MEMORY CHECK: Prevent OOM kills
                     if not resource_monitor.can_start_operation(f"action_{action_key}", min_memory_mb=30):
                         logger.warning(f"Insufficient memory to execute {action_key}, skipping to prevent OOM")
                         continue
                     
-                    ip = row["IPs"]
-                    ports = self._extract_ports(row)
-                    
+                    # Only acquire semaphore when we actually need to execute
                     with self.semaphore:
                         if self.execute_action(action, ip, ports, row, action_key, current_data):
                             action_executed_status = action_key
@@ -339,19 +352,31 @@ class Orchestrator:
         for child_action in self.actions:
             if child_action.b_parent_action:
                 action_key = child_action.action_name
+                required_port = getattr(child_action, 'port', None)
                 
                 for row in current_data:
                     if row["Alive"] != '1':
                         continue
+                    
+                    ip = row["IPs"]
+                    ports = self._extract_ports(row)
+                    
+                    # OPTIMIZATION: Check port requirement BEFORE acquiring semaphore
+                    # This prevents serializing hundreds of "port not found" checks
+                    if required_port not in (None, '', 0, '0'):
+                        required_port_str = str(required_port).strip().split('/')[0]
+                        ports_normalized = [str(p).strip().split('/')[0] for p in ports]
+                        
+                        if required_port_str not in ports_normalized:
+                            # Skip silently - port not available (no semaphore/logging overhead)
+                            continue
                     
                     # MEMORY CHECK: Prevent OOM kills
                     if not resource_monitor.can_start_operation(f"child_action_{action_key}", min_memory_mb=30):
                         logger.warning(f"Insufficient memory to execute child {action_key}, skipping to prevent OOM")
                         continue
                     
-                    ip = row["IPs"]
-                    ports = self._extract_ports(row)
-                    
+                    # Only acquire semaphore when we actually need to execute
                     with self.semaphore:
                         if self.execute_action(child_action, ip, ports, row, action_key, current_data):
                             action_executed_status = child_action.action_name
@@ -369,18 +394,8 @@ class Orchestrator:
 
     def execute_action(self, action, ip, ports, row, action_key, current_data):
         """Execute an action on a target with timeout protection"""
-        # Check if action requires a specific port
-        required_port = getattr(action, 'port', None)
-        if required_port not in (None, '', 0, '0'):
-            # Normalize port comparison - strip whitespace and remove protocol suffixes
-            required_port_str = str(required_port).strip().split('/')[0]
-            ports_normalized = [str(p).strip().split('/')[0] for p in ports]
-            
-            if required_port_str not in ports_normalized:
-                logger.debug(
-                    f"Skipping {action.action_name} for {ip} - required port {required_port} not in {ports}"
-                )
-                return False
+        # NOTE: Port checking is now done BEFORE calling this method (performance optimization)
+        # The caller pre-filters by port to avoid unnecessary semaphore acquisitions
 
         # Check if attacks are enabled (skip attack actions if disabled, but allow scanning)
         enable_attacks = getattr(self.shared_data, 'enable_attacks', True)
