@@ -7305,6 +7305,9 @@ window.toggleHostDetails = toggleHostDetails;
 window.showVulnerabilityDetails = showVulnerabilityDetails;
 window.closeVulnerabilityModal = closeVulnerabilityModal;
 
+// AI Insights Functions
+window.toggleAIExpand = toggleAIExpand;
+
 // ===========================================
 // THREAT INTELLIGENCE FUNCTIONS
 // ===========================================
@@ -8109,18 +8112,18 @@ async function loadAIInsights() {
 // Display AI insights (separated for reuse with cache)
 function displayAIInsights(insights) {
     if (insights.enabled) {
-        // Update network summary
+        // Update network summary (keep short, no expansion needed)
         const networkSummary = document.getElementById('ai-network-summary');
         if (networkSummary) {
             networkSummary.innerHTML = formatAIText(insights.network_summary || 'Analyzing network...');
         }
         
-        // Update vulnerability analysis
+        // Update vulnerability analysis (use expandable format)
         const vulnAnalysis = document.getElementById('ai-vuln-analysis');
         const vulnSection = document.getElementById('ai-vuln-section');
         if (vulnAnalysis) {
             if (insights.vulnerability_analysis) {
-                vulnAnalysis.innerHTML = formatAIText(insights.vulnerability_analysis);
+                vulnAnalysis.innerHTML = createExpandableAIContent(insights.vulnerability_analysis, 3);
                 if (vulnSection) vulnSection.style.display = 'block';
             } else {
                 vulnAnalysis.textContent = 'No vulnerabilities detected';
@@ -8128,12 +8131,12 @@ function displayAIInsights(insights) {
             }
         }
         
-        // Update weakness analysis
+        // Update weakness analysis (use expandable format)
         const weaknessAnalysis = document.getElementById('ai-weakness-analysis');
         const weaknessSection = document.getElementById('ai-weakness-section');
         if (weaknessAnalysis) {
             if (insights.weakness_analysis) {
-                weaknessAnalysis.innerHTML = formatAIText(insights.weakness_analysis);
+                weaknessAnalysis.innerHTML = createExpandableAIContent(insights.weakness_analysis, 3);
                 if (weaknessSection) weaknessSection.style.display = 'block';
             } else {
                 weaknessAnalysis.textContent = 'Analyzing network topology...';
