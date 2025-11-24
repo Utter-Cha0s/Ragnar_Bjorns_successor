@@ -187,7 +187,7 @@ class SharedData:
             "manual_mode": False,
             "websrv": True,
             "web_increment": False,
-            "debug_mode": True,
+            "debug_mode": False,
             "scan_vuln_running": True,
             "scan_vuln_no_ports": False,
             "enable_attacks": False,
@@ -196,7 +196,7 @@ class SharedData:
             "blacklistcheck": True,
             "displaying_csv": True,
             "log_debug": False,
-            "log_info": True,
+            "log_info": False,
             "log_warning": True,
             "log_error": True,
             "log_critical": True,
@@ -227,7 +227,7 @@ class SharedData:
             "mac_scan_blacklist": [],
             "ip_scan_blacklist": [],
             "steal_file_names": ["ssh.csv","hack.txt","password","passwd","credential","key","secret","config","backup","settings","credentials","auth","environment","docker-compose","kubeconfig"],
-            "steal_file_extensions": [".txt",".conf",".json",".xml",".db",".sql",".key",".pem",".crt",".log",".yaml",".yml",".config",".ini",".env",".cfg"],
+            "steal_file_extensions": [".txt",".conf",".xml",".db",".sql",".key",".pem",".crt",".yaml",".yml",".config",".ini",".env",".cfg"],
             
             "__title_network__": "Network",
             "nmap_scan_aggressivity": "-T4",
@@ -699,8 +699,16 @@ class SharedData:
                     module_name = filename[:-3]
                     try:
                         module = importlib.import_module(f'actions.{module_name}')
-                        b_class = getattr(module, 'b_class')
-                        b_status = getattr(module, 'b_status')
+                        if getattr(module, 'BYPASS_ACTION_MODULE', False):
+                            logger.debug(f"Skipping helper module {module_name} (BYPASS_ACTION_MODULE)")
+                            continue
+
+                        b_class = getattr(module, 'b_class', None)
+                        b_status = getattr(module, 'b_status', None)
+                        if not b_class or not b_status:
+                            logger.debug(f"Skipping module {module_name} without action metadata")
+                            continue
+
                         b_port = getattr(module, 'b_port', None)
                         b_parent = getattr(module, 'b_parent', None)
                         actions_config.append({
