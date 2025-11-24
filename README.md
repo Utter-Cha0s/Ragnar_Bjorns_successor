@@ -114,7 +114,7 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
 - 2.13-inch e-Paper HAT connected to GPIO pins.
 
 Ragnar is built for 64 bit trixie and 
-Waveshare 2.13inch E-Paper Display HAT V4 for 32 bit system i recommend using Ragnars little brother [Bjorn](https://github.com/infinition/Bjorn) 
+Waveshare 2.13inch E-Paper Display HAT V4 for 32 bit system i recommend using Ragnars son [Bjorn](https://github.com/infinition/Bjorn) 
 
 #### Reccomendation
 - In nano, edit ~/.config/labwc/autostart and comment out the line
