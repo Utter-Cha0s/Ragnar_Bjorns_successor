@@ -1,4 +1,4 @@
-// Ragnar_modern.js - Enhanced Modern JavaScript for Ragnar web interface by Pierre Gode
+// Ragnar_modern.js - Enhanced Modern JavaScript for Ragnar web interface by Pierre Gode 2025
 
 let socket;
 let reconnectAttempts = 0;
