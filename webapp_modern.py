@@ -52,6 +52,7 @@ from logger import Logger
 from threat_intelligence import ThreatIntelligenceFusion
 from lynis_parser import parse_lynis_dat
 from actions.lynis_pentest_ssh import LynisPentestSSH
+from actions.connector_utils import CredentialChecker
 
 # Initialize logger
 logger = Logger(name="webapp_modern.py", level=logging.DEBUG)
@@ -7809,6 +7810,15 @@ MANUAL_ATTACK_MATRIX = {
     'sql': {'label': 'SQL Brute Force', 'ports': [3306]}
 }
 
+MANUAL_ATTACK_CREDENTIAL_ATTR = {
+    'ssh': 'sshfile',
+    'ftp': 'ftpfile',
+    'telnet': 'telnetfile',
+    'smb': 'smbfile',
+    'rdp': 'rdpfile',
+    'sql': 'sqlfile'
+}
+
 
 def _collect_manual_targets():
     """Collect targets available for manual operations."""
@@ -7938,6 +7948,37 @@ def _collect_manual_targets():
     return targets
 
 
+def _emit_manual_attack_update(action, ip, port, stage, message, status='info'):
+    try:
+        socketio.emit('manual_attack_update', {
+            'action': action,
+            'ip': ip,
+            'port': port,
+            'stage': stage,
+            'status': status,
+            'message': message,
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        })
+    except Exception as exc:
+        logger.warning(f"Failed to emit manual attack update: {exc}")
+
+
+def _get_existing_credentials_snapshot(action, ip):
+    attr = MANUAL_ATTACK_CREDENTIAL_ATTR.get(action)
+    if not attr:
+        return []
+
+    credential_file = getattr(shared_data, attr, None)
+    if not credential_file or not os.path.exists(credential_file):
+        return []
+
+    try:
+        return CredentialChecker.check_existing_credentials(credential_file, ip) or []
+    except Exception as exc:
+        logger.warning(f"Unable to read credential cache for {action} on {ip}: {exc}")
+        return []
+
+
 def _normalize_port_value(port_value):
     try:
         return str(int(port_value))
@@ -8032,6 +8073,17 @@ def execute_manual_attack():
             }), 400
 
         target_port = normalized_port
+        cached_credentials = _get_existing_credentials_snapshot(attack_type, target_ip)
+        cached_count = len(cached_credentials)
+
+        _emit_manual_attack_update(
+            attack_type,
+            target_ip,
+            target_port,
+            stage='queued',
+            message=f"{attack_type.upper()} attack queued for {target_ip}:{target_port}",
+            status='info'
+        )
 
         status_name = attack_display_names.get(attack_type, f"{attack_type.upper()}Bruteforce")
         shared_data.ragnarstatustext = status_name
@@ -8043,6 +8095,14 @@ def execute_manual_attack():
         # Execute attack in background
         def execute_attack():
             try:
+                _emit_manual_attack_update(
+                    attack_type,
+                    target_ip,
+                    target_port,
+                    stage='running',
+                    message=f"{attack_type.upper()} module running on {target_ip}:{target_port}",
+                    status='info'
+                )
                 # Import the attack module dynamically
                 import importlib
                 module = importlib.import_module(attack_modules[attack_type])
@@ -8050,13 +8110,34 @@ def execute_manual_attack():
                 # Create attack instance
                 attack_class_name = attack_type.upper() + 'Bruteforce' if attack_type != 'sql' else 'SQLBruteforce'
                 attack_class = getattr(module, attack_class_name, None)
+                result_message = "Attack module unavailable"
+                emit_status = 'error'
                 
                 if attack_class:
                     attack_instance = attack_class(shared_data)
                     # Execute with appropriate parameters
+                    execution_result = None
                     if hasattr(attack_instance, 'execute'):
                         row = {'ip': target_ip, 'hostname': target_ip, 'mac': '00:00:00:00:00:00'}
-                        attack_instance.execute(target_ip, target_port, row, f"manual_{attack_type}")
+                        execution_result = attack_instance.execute(target_ip, target_port, row, f"manual_{attack_type}")
+
+                    updated_credentials = _get_existing_credentials_snapshot(attack_type, target_ip)
+                    updated_count = len(updated_credentials)
+                    delta = max(0, updated_count - cached_count)
+
+                    if execution_result == 'success':
+                        if delta > 0:
+                            result_message = f"Captured {delta} new credential(s). Total stored: {updated_count}."
+                        elif updated_count > 0:
+                            result_message = f"Existing credentials verified ({updated_count} account(s))."
+                        else:
+                            result_message = "Module completed without discovering credentials."
+                        emit_status = 'success'
+                    else:
+                        result_message = "Attack completed without valid credentials."
+                        emit_status = 'warning'
+                else:
+                    result_message = f"{attack_type.upper()} module is unavailable on this build."
                     
                 # Update status when attack completes
                 shared_data.ragnarstatustext = "IDLE"
@@ -8064,6 +8145,14 @@ def execute_manual_attack():
                 
                 # Broadcast completion status
                 broadcast_status_update()
+                _emit_manual_attack_update(
+                    attack_type,
+                    target_ip,
+                    target_port,
+                    stage='completed',
+                    message=result_message,
+                    status=emit_status
+                )
                 
                 logger.info(f"Manual attack completed: {attack_type} on {target_ip}:{target_port}")
                     
@@ -8074,6 +8163,14 @@ def execute_manual_attack():
                 shared_data.ragnarstatustext2 = f"Attack error: {str(e)[:40]}"
                 # Broadcast error status
                 broadcast_status_update()
+                _emit_manual_attack_update(
+                    attack_type,
+                    target_ip,
+                    target_port,
+                    stage='error',
+                    message=f"Manual {attack_type.upper()} attack failed: {str(e)[:80]}",
+                    status='error'
+                )
         
         # Start attack in background thread
         import threading

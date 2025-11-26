@@ -419,6 +419,10 @@ function initializeSocket() {
         handleLynisUpdate(data);
     });
 
+    socket.on('manual_attack_update', function(data) {
+        handleManualAttackUpdate(data);
+    });
+
     socket.on('connect_error', function(error) {
         reconnectAttempts++;
         console.error('Connection error:', error);
@@ -5065,6 +5069,31 @@ function appendManualAttackLog(message, type = 'info') {
     logContainer.scrollTop = logContainer.scrollHeight;
 }
 
+function handleManualAttackUpdate(update) {
+    if (!update || (!update.action && !update.ip)) {
+        return;
+    }
+
+    const severity = update.status || 'info';
+    const stage = update.stage || 'info';
+    const actionLabel = (update.action || 'attack').toUpperCase();
+    const targetLabel = update.ip ? `${update.ip}${update.port ? `:${update.port}` : ''}` : 'target';
+    const body = update.message || `${actionLabel} update`;
+    const composedMessage = `${actionLabel} on ${targetLabel} • ${body}`;
+
+    appendManualAttackLog(composedMessage, severity);
+
+    if (stage === 'running') {
+        setManualAttackStatus(body, 'info');
+    } else if (stage === 'completed') {
+        setManualAttackStatus(body, severity);
+    } else if (stage === 'error') {
+        setManualAttackStatus(body, 'error');
+    } else if (stage === 'queued') {
+        setManualAttackStatus(body, 'info');
+    }
+}
+
 async function executeManualAttack() {
     const ip = document.getElementById('manual-ip-dropdown')?.value;
     const port = document.getElementById('manual-port-dropdown')?.value;
@@ -5107,7 +5136,6 @@ async function executeManualAttack() {
     try {
         addConsoleMessage(`Executing manual attack: ${attackLabel}`, 'info');
         setManualAttackStatus(`Dispatching ${attackLabel}. This may take up to a minute depending on module output.`, 'info');
-        appendManualAttackLog(`Queued ${attackLabel}`, 'info');
         setButtonState(true, 'Launching...');
         
         const data = await postAPI('/api/manual/execute-attack', {
@@ -5117,10 +5145,10 @@ async function executeManualAttack() {
         });
         
         if (data.success) {
-            const successMessage = data.message || 'Manual attack executed successfully';
-            addConsoleMessage(`Manual attack executed successfully: ${successMessage}`, 'success');
-            setManualAttackStatus(`${successMessage}. Monitor Discovered → Attack Logs for module output.`, 'success');
-            appendManualAttackLog(successMessage, 'success');
+            const dispatchMessage = data.message || 'Manual attack accepted';
+            addConsoleMessage(dispatchMessage, 'info');
+            setManualAttackStatus(`${dispatchMessage}. Awaiting live module output...`, 'info');
+            appendManualAttackLog(dispatchMessage, 'info');
         } else {
             const failureMessage = data.message || 'Unknown error';
             addConsoleMessage(`Manual attack failed: ${failureMessage}`, 'error');
