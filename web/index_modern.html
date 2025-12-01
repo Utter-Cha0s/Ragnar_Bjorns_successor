@@ -427,10 +427,11 @@
 
                 <!-- Level Card -->
                 <div class="glass rounded-xl p-6 sm:hover:scale-105 transition-transform">
-                    <div class="flex items-center justify-between">
+                    <div class="flex items-start justify-between">
                         <div>
                             <p class="text-gray-400 text-sm">Level</p>
                             <p id="level-count" class="text-3xl font-bold text-purple-400">0</p>
+                            <p class="text-gray-500 text-xs mt-1">Points <span id="points-count" class="text-amber-300 font-semibold">0</span></p>
                         </div>
                         <div class="w-12 h-12 bg-purple-500 bg-opacity-20 rounded-full flex items-center justify-center">
                             <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -440,18 +441,16 @@
                     </div>
                 </div>
 
-                <!-- Points Card -->
-                <div class="glass rounded-xl p-6 sm:hover:scale-105 transition-transform">
-                    <div class="flex items-center justify-between">
+                <!-- Scanned Networks Card -->
+                <div class="glass rounded-xl p-6 sm:hover:scale-105 transition-transform cursor-pointer" onclick="showTab('network')">
+                    <div class="flex items-start justify-between">
                         <div>
-                            <p class="text-gray-400 text-sm">Points</p>
-                            <p id="points-count" class="text-3xl font-bold text-amber-400">0</p>
+                            <p class="text-gray-400 text-sm">Scanned Networks</p>
+                            <p id="dashboard-scanned-network-count" class="text-3xl font-bold text-cyan-400">0</p>
                         </div>
-                        <div class="w-12 h-12 bg-amber-500 bg-opacity-20 rounded-full flex items-center justify-center">
-                            <svg class="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-3.314 0-6 1.343-6 3s2.686 3 6 3 6-1.343 6-3-2.686-3-6-3z" />
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 11v2c0 1.657 2.686 3 6 3s6-1.343 6-3v-2" />
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 15v2c0 1.657 2.686 3 6 3s6-1.343 6-3v-2" />
+                        <div class="w-12 aspect-square bg-cyan-500 bg-opacity-20 rounded-full flex items-center justify-center">
+                            <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path>
                             </svg>
                         </div>
                     </div>
@@ -717,6 +716,22 @@
                             </svg>
                             Refresh
                         </button>
+                    </div>
+                </div>
+
+                <!-- Offline Detection Info Banner -->
+                <div class="mt-4 bg-blue-950/30 border border-blue-800/50 rounded-lg p-4">
+                    <div class="flex items-start space-x-3">
+                        <svg class="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div class="flex-1 text-sm">
+                            <p class="text-blue-200 font-semibold mb-1">Host Status Detection</p>
+                            <p class="text-blue-300/80">
+                                ARP scans run every <strong>60 seconds</strong>. A host shows as offline (🔴 red dot) after <strong id="network-status-failed-pings">15</strong> consecutive failed pings 
+                                (~<strong id="network-status-offline-time">15 minutes</strong>). Configure <em>Max Failed Pings Before Offline</em> in <a href="#" onclick="showTab('config'); return false;" class="text-blue-400 hover:text-blue-300 underline">Config</a>.
+                            </p>
+                        </div>
                     </div>
                 </div>
 
@@ -1315,6 +1330,46 @@
                         <p class="text-gray-400">Loading loot data...</p>
                     </div>
                 </div>
+            </div>
+
+            <!-- Pwnagotchi Summary (hidden until installed) -->
+            <div id="pwn-discovered-card" class="glass rounded-xl p-6 mb-6 hidden">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <h2 class="text-2xl font-bold">Pwnagotchi Activity</h2>
+                        <p class="text-sm text-gray-400">Live status is mirrored from the Config tab so you can track swaps and installs while reviewing loot.</p>
+                    </div>
+                    <span id="pwn-card-badge" class="text-xs font-semibold uppercase tracking-wide px-3 py-1 rounded-full bg-slate-700 text-slate-200">Status Pending</span>
+                </div>
+                <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-slate-800 bg-opacity-50 rounded-lg p-4">
+                        <div class="text-sm text-gray-400 mb-1">Message</div>
+                        <div id="pwn-card-message" class="text-base text-white font-medium">Waiting for status...</div>
+                    </div>
+                    <div class="bg-slate-800 bg-opacity-50 rounded-lg p-4">
+                        <div class="text-sm text-gray-400 mb-1">Mode</div>
+                        <div id="pwn-card-mode" class="text-xl font-semibold text-green-400">Ragnar</div>
+                        <p class="text-xs text-gray-400 mt-2">Phase: <span id="pwn-card-phase">Idle</span></p>
+                    </div>
+                    <div class="bg-slate-800 bg-opacity-50 rounded-lg p-4">
+                        <div class="text-sm text-gray-400 mb-1">Service State</div>
+                        <div class="flex items-center gap-2">
+                            <span id="pwn-card-service" class="text-xl font-semibold text-slate-200">Stopped</span>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-2">Enabled: <span id="pwn-card-enabled">No</span></p>
+                    </div>
+                </div>
+                <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="bg-slate-900 bg-opacity-60 rounded-lg p-4">
+                        <div class="text-sm text-gray-400 mb-1">Target Mode</div>
+                        <div id="pwn-card-target" class="text-base font-semibold text-slate-100">Ragnar</div>
+                    </div>
+                    <div class="bg-slate-900 bg-opacity-60 rounded-lg p-4">
+                        <div class="text-sm text-gray-400 mb-1">Last Switch</div>
+                        <div id="pwn-card-last-switch" class="text-base font-semibold text-slate-100">Never</div>
+                    </div>
+                </div>
+                <div class="mt-4 text-xs text-gray-400" id="pwn-card-updated">Updated: pending</div>
             </div>
             
             <!-- Vulnerability Intel Section -->
@@ -2169,6 +2224,119 @@
                             </button>
                         </div>
                         
+                        <!-- Pwnagotchi Toggle Card -->
+                        <div class="glass rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h4 class="font-medium">Pwnagotchi Features</h4>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="pwnagotchi-enabled" class="sr-only peer" onchange="togglePwnagotchiVisibility()">
+                                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                </label>
+                            </div>
+                            <div class="text-sm text-gray-400 mb-3">
+                                Enable Pwnagotchi integration and display settings
+                            </div>
+                            <div class="text-xs text-gray-500">
+                                Toggle to show/hide Pwnagotchi Bridge configuration options below
+                            </div>
+                        </div>
+                        
+                    </div>
+                </div>
+
+                <!-- Pwnagotchi Bridge Section -->
+                <div id="pwnagotchi-section" class="mb-8" style="display: none;">
+                    <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                        <div>
+                            <h3 class="text-xl font-semibold text-Ragnar-400">Pwnagotchi Bridge</h3>
+                            <p class="text-sm text-gray-400 mt-1">Install Pwnagotchi alongside Ragnar and swap which service owns the display without reflashing the SD card.</p>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span id="pwn-status-badge" class="text-xs font-semibold uppercase tracking-wide px-3 py-1 rounded-full bg-slate-700 text-slate-200">Status Pending</span>
+                            <button id="pwn-refresh-btn" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg transition-colors">
+                                Refresh Status
+                            </button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+                        <div class="glass rounded-lg p-4">
+                            <div class="space-y-3">
+                                <div>
+                                    <p class="text-sm text-gray-400">Current Message</p>
+                                    <p id="pwn-status-message" class="text-base text-white font-medium mt-1">Waiting for status...</p>
+                                </div>
+                                <div class="grid grid-cols-1 gap-2 text-sm text-gray-300">
+                                    <div class="flex justify-between">
+                                        <span>Active Mode</span>
+                                        <span id="pwn-mode-value" class="font-semibold text-green-400">Ragnar</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Target Mode</span>
+                                        <span id="pwn-target-value" class="font-semibold text-slate-200">Ragnar</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Phase</span>
+                                        <span id="pwn-phase-value" class="font-semibold text-slate-200">Idle</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Service State</span>
+                                        <span id="pwn-service-state" class="font-semibold text-slate-200">Stopped</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Service Enabled</span>
+                                        <span id="pwn-service-enabled" class="font-semibold text-slate-200">No</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Last Switch</span>
+                                        <span id="pwn-last-switch-value" class="font-semibold text-slate-200">Never</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Updated</span>
+                                        <span id="pwn-last-updated" class="font-semibold text-slate-200">—</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="glass rounded-lg p-4">
+                            <h4 class="font-medium text-lg mb-2">Install or Repair</h4>
+                            <p class="text-sm text-gray-400 mb-4">Run the bundled installer to fetch dependencies, clone Pwnagotchi, and stage services. This can take 20 - 40 minutes on a Raspberry Pi. Note that the Ragnar web might be unresponsive or slow during this process.</p>
+                            <button id="pwn-install-btn" class="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-lg transition-colors">
+                                Install Pwnagotchi
+                            </button>
+                            <p id="pwn-install-note" class="text-xs text-gray-500 mt-3">Installer runs in the background and updates the status card as it progresses.</p>
+                        </div>
+                        <div class="glass rounded-lg p-4">
+                            <h4 class="font-medium text-lg mb-2">Swap Control</h4>
+                            <p class="text-sm text-gray-400 mb-4">Trigger a graceful hand-off between Ragnar and Pwnagotchi. Ragnar UI will stop responding once the switch begins, so plan to reboot back via SSH.</p>
+                            <div>
+                                <button id="pwn-swap-to-pwn-btn" class="bg-fuchsia-600 hover:bg-fuchsia-700 text-white py-2 px-4 rounded-lg transition-colors w-full">
+                                    Switch to Pwnagotchi
+                                </button>
+                            </div>
+                            <p id="pwn-swap-hint" class="text-xs text-gray-500 mt-3">Ragnar UI becomes unavailable once the service stops. Keep SSH access handy before swapping.</p>
+                        </div>
+                    </div>
+                    <div id="pwn-status-alert" class="hidden mt-4 p-4 rounded-lg border border-slate-700 bg-slate-900 text-sm text-gray-200">
+                        Awaiting first status update...
+                    </div>
+                    <div class="glass rounded-lg p-4 mt-4">
+                        <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <h4 class="font-medium text-lg">Installer Log</h4>
+                                    <span id="pwn-log-stream-indicator" class="hidden text-xs font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-green-700/40 text-green-200">Live</span>
+                                </div>
+                                <p id="pwn-log-path" class="text-xs text-gray-500 mt-1 truncate">Log path will appear once the installer starts.</p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button id="pwn-log-refresh-btn" class="bg-slate-800 hover:bg-slate-700 text-white text-sm px-3 py-1.5 rounded-lg transition-colors">
+                                    Refresh Log
+                                </button>
+                            </div>
+                        </div>
+                        <div id="pwn-log-viewer" class="mt-3 bg-slate-950/70 border border-slate-800 rounded-lg p-3 h-56 overflow-y-auto font-mono text-xs text-gray-200">
+                            <p id="pwn-log-empty" class="text-gray-500">Installer output will stream here during installation.</p>
+                        </div>
                     </div>
                 </div>
                 
@@ -2235,7 +2403,7 @@
                         <div class="flex items-center justify-between mb-3">
                             <div>
                                 <h4 class="font-medium text-lg">Hardware Detection</h4>
-                                <p class="text-sm text-gray-400 mt-1">Automatically detect your hardware and apply optimal settings</p>
+                                <p class="text-sm text-gray-400 mt-1">Automatically detect hardware.</p>
                             </div>
                             <button onclick="detectAndApplyHardware()" 
                                     class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-4 rounded transition-colors">
@@ -2332,7 +2500,7 @@
     </main>
 
     <!-- JavaScript -->
-    <script src="/web/scripts/ragnar_modern.min.js?v=20251123"></script>
+    <script src="/web/scripts/ragnar_modern.js?v=20251127"></script>
     
 </body>
 </html>
