@@ -38,6 +38,7 @@ class Ragnar:
 
         # Expose this instance to other modules
         self.shared_data.ragnar_instance = self
+        self.shared_data.headless_mode = True
 
     # ---------------------------------------------------------------------
     # Main loop

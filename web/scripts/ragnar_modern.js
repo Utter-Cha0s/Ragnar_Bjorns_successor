@@ -37,6 +37,7 @@ let pwnLogStreaming = false;
 let pwnLogStopTimeout = null;
 let pwnLogActiveFile = null;
 let pwnLogFetchInFlight = false;
+let headlessMode = false;
 
 const configMetadata = {
     manual_mode: {
@@ -3600,6 +3601,11 @@ function togglePwnagotchiVisibility() {
         return;
     }
 
+     if (checkbox.disabled) {
+         checkbox.checked = false;
+         return;
+     }
+
     const isEnabled = checkbox.checked;
     localStorage.setItem('pwnagotchi-enabled', isEnabled ? 'true' : 'false');
     applyPwnVisibilityPreference(isEnabled);
@@ -3614,6 +3620,42 @@ function initializePwnagotchiVisibility() {
     const isEnabled = arePwnFeaturesEnabled();
     checkbox.checked = isEnabled;
     applyPwnVisibilityPreference(isEnabled);
+}
+
+function updatePwnToggleAvailability(isHeadless) {
+    headlessMode = Boolean(isHeadless);
+    const checkbox = document.getElementById('pwnagotchi-enabled');
+    if (!checkbox) {
+        return;
+    }
+
+    const wrapper = document.getElementById('pwn-toggle-wrapper');
+    const warning = document.getElementById('pwn-headless-warning');
+
+    if (headlessMode) {
+        if (checkbox.checked) {
+            checkbox.checked = false;
+            localStorage.setItem('pwnagotchi-enabled', 'false');
+            applyPwnVisibilityPreference(false);
+        }
+        checkbox.disabled = true;
+        checkbox.setAttribute('aria-disabled', 'true');
+        if (wrapper) {
+            wrapper.classList.add('cursor-not-allowed', 'opacity-60', 'pointer-events-none');
+        }
+        if (warning) {
+            warning.classList.remove('hidden');
+        }
+    } else {
+        checkbox.disabled = false;
+        checkbox.removeAttribute('aria-disabled');
+        if (wrapper) {
+            wrapper.classList.remove('cursor-not-allowed', 'opacity-60', 'pointer-events-none');
+        }
+        if (warning) {
+            warning.classList.add('hidden');
+        }
+    }
 }
 
 // ============================================================================
@@ -6441,6 +6483,8 @@ function updateDashboardStatus(data) {
     updateConnectivityIndicator('bluetooth-status', data.bluetooth_active);
     updateConnectivityIndicator('usb-status', data.usb_active);
     updateConnectivityIndicator('pan-status', data.pan_connected);
+
+    updatePwnToggleAvailability(Boolean(data.headless_mode));
 }
 
 function updateAutomationToggleButton(automationEnabled, options = {}) {

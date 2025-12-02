@@ -2051,6 +2051,7 @@ def get_status():
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),
             'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
+            'headless_mode': safe_bool(getattr(shared_data, 'headless_mode', False)),
             'pwnagotchi_mode': shared_data.config.get('pwnagotchi_mode', 'ragnar'),
             'pwnagotchi_installed': safe_bool(shared_data.config.get('pwnagotchi_installed', False)),
             'timestamp': datetime.now().isoformat()
@@ -8325,6 +8326,7 @@ def get_current_status():
         'pan_connected': safe_bool(shared_data.pan_connected),
         'usb_active': safe_bool(shared_data.usb_active),
         'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
+        'headless_mode': safe_bool(getattr(shared_data, 'headless_mode', False)),
         'timestamp': datetime.now().isoformat()
     }
 
