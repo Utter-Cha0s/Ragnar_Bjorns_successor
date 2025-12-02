@@ -23,6 +23,10 @@ ragnar_USER="ragnar"
 ragnar_PATH="/home/${ragnar_USER}/Ragnar"
 CURRENT_STEP=0
 TOTAL_STEPS=9
+HEADLESS_MODE=false
+HEADLESS_VARIANT=""
+HEADLESS_VARIANT_LABEL=""
+RAGNAR_ENTRYPOINT="Ragnar.py"
 
 if [[ "$1" == "--help" ]]; then
     echo "Usage: sudo ./install_ragnar.sh"
@@ -476,7 +480,11 @@ setup_ragnar() {
     # Update the default EPD type in shared.py with the detected version
     log "INFO" "Updating E-Paper display default configuration in shared.py..."
     if [ -z "${EPD_VERSION:-}" ]; then
-        log "WARNING" "EPD version not detected - skipping shared.py update"
+        if [ "$HEADLESS_MODE" = true ]; then
+            log "INFO" "Headless mode selected - skipping shared.py default E-Paper configuration"
+        else
+            log "WARNING" "EPD version not detected - skipping shared.py update"
+        fi
     elif [ -f "$ragnar_PATH/shared.py" ]; then
         # Replace the hardcoded default epd_type in get_default_config() method
         sed -i "s/\"epd_type\": \"epd2in13_V4\"/\"epd_type\": \"$EPD_VERSION\"/" "$ragnar_PATH/shared.py"
@@ -579,33 +587,47 @@ setup_ragnar() {
     }
 
     # Verify Waveshare e-Paper Python library (already installed in main())
-    log "INFO" "Verifying Waveshare e-Paper library installation for $EPD_VERSION..."
-    cd /home/$ragnar_USER/e-Paper/RaspberryPi_JetsonNano/python
-    pip3 install . --break-system-packages
-    
-    python3 -c "from waveshare_epd import ${EPD_VERSION}; print('EPD module OK')" \
-        && log "SUCCESS" "$EPD_VERSION driver verified successfully" \
-        || log "ERROR" "EPD driver $EPD_VERSION failed to import"
+    if [ "$HEADLESS_MODE" = true ] || [ -z "${EPD_VERSION:-}" ]; then
+        log "INFO" "Headless mode or unknown E-Paper version detected - skipping driver verification"
+    else
+        log "INFO" "Verifying Waveshare e-Paper library installation for $EPD_VERSION..."
+        cd /home/$ragnar_USER/e-Paper/RaspberryPi_JetsonNano/python
+        pip3 install . --break-system-packages
+        
+        python3 -c "from waveshare_epd import ${EPD_VERSION}; print('EPD module OK')" \
+            && log "SUCCESS" "$EPD_VERSION driver verified successfully" \
+            || log "ERROR" "EPD driver $EPD_VERSION failed to import"
+    fi
 
     check_success "Installed Python requirements"
 
-    # Configure modern webapp by default
-    log "INFO" "Configuring modern web interface..."
-    if [ -f "$ragnar_PATH/Ragnar.py" ] && [ -f "$ragnar_PATH/webapp_modern.py" ]; then
-        # Backup original Ragnar.py if not already backed up
-        if [ ! -f "$ragnar_PATH/Ragnar.py.original" ]; then
-            cp "$ragnar_PATH/Ragnar.py" "$ragnar_PATH/Ragnar.py.original"
-        fi
-        
-        # Update Ragnar.py to use modern webapp
-        if grep -q "from webapp import web_thread" "$ragnar_PATH/Ragnar.py"; then
-            sed -i 's/from webapp import web_thread/# Old webapp - replaced with modern\n# from webapp import web_thread\nfrom webapp_modern import run_server as web_thread/' "$ragnar_PATH/Ragnar.py"
-            log "SUCCESS" "Configured to use modern web interface"
+    # Configure Ragnar entrypoint according to the selected mode
+    log "INFO" "Configuring Ragnar entrypoint ($RAGNAR_ENTRYPOINT)..."
+    local entrypoint_path="$ragnar_PATH/$RAGNAR_ENTRYPOINT"
+
+    if [ -f "$entrypoint_path" ]; then
+        if [ "$RAGNAR_ENTRYPOINT" = "Ragnar.py" ]; then
+            if [ -f "$ragnar_PATH/webapp_modern.py" ]; then
+                # Backup original Ragnar.py if not already backed up
+                if [ ! -f "${entrypoint_path}.original" ]; then
+                    cp "$entrypoint_path" "${entrypoint_path}.original"
+                fi
+
+                # Update Ragnar.py to use modern webapp
+                if grep -q "from webapp import web_thread" "$entrypoint_path"; then
+                    sed -i 's/from webapp import web_thread/# Old webapp - replaced with modern\n# from webapp import web_thread\nfrom webapp_modern import run_server as web_thread/' "$entrypoint_path"
+                    log "SUCCESS" "Configured to use modern web interface"
+                else
+                    log "INFO" "Modern webapp already configured or different setup detected"
+                fi
+            else
+                log "WARNING" "Modern webapp files not found, using default configuration"
+            fi
         else
-            log "INFO" "Modern webapp already configured or different setup detected"
+            log "INFO" "Headless variant selected (${HEADLESS_VARIANT_LABEL:-headless}); skipping display configuration"
         fi
     else
-        log "WARNING" "Modern webapp files not found, using default configuration"
+        log "WARNING" "Entrypoint $entrypoint_path not found, using default configuration"
     fi
 
     # Set correct permissions and ownership
@@ -742,6 +764,8 @@ EOF
 # Configure services
 setup_services() {
     log "INFO" "Setting up system services..."
+
+    local entrypoint_file="$RAGNAR_ENTRYPOINT"
     
     # Create kill_port_8000.sh script
     cat > $ragnar_PATH/kill_port_8000.sh << 'EOF'
@@ -766,7 +790,7 @@ After=local-fs.target
 
 [Service]
 ExecStartPre=/home/ragnar/Ragnar/kill_port_8000.sh
-ExecStart=/usr/bin/python3 -OO /home/ragnar/Ragnar/Ragnar.py
+ExecStart=/usr/bin/python3 -OO /home/ragnar/Ragnar/${entrypoint_file}
 WorkingDirectory=/home/ragnar/Ragnar
 StandardOutput=inherit
 StandardError=inherit
@@ -929,6 +953,38 @@ EOF
     systemctl start usb-gadget
 
     check_success "USB Gadget configuration completed"
+}
+
+# Prompt for which headless variant to install when no e-paper is selected
+select_headless_variant() {
+    echo -e "\n${BLUE}Headless Installation Options${NC}"
+    echo "1. Install on Raspberry Pi (no e-paper display)"
+    echo "2. Install hbp0_ragnar by DezusAZ"
+
+    while true; do
+        read -p "Choose an option (1/2): " headless_choice
+        case $headless_choice in
+            1)
+                HEADLESS_MODE=true
+                HEADLESS_VARIANT="raspberry_pi"
+                HEADLESS_VARIANT_LABEL="Raspberry Pi headless"
+                RAGNAR_ENTRYPOINT="headlessRagnar.py"
+                log "INFO" "Selected headless installation for Raspberry Pi"
+                break
+                ;;
+            2)
+                HEADLESS_MODE=true
+                HEADLESS_VARIANT="hbp0_ragnar"
+                HEADLESS_VARIANT_LABEL="hbp0_ragnar by DezusAZ"
+                RAGNAR_ENTRYPOINT="headlessRagnar.py"
+                log "INFO" "Selected headless installation: hbp0_ragnar by DezusAZ"
+                break
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Please select 1 or 2.${NC}"
+                ;;
+        esac
+    done
 }
 
 # Verify installation
@@ -1097,19 +1153,30 @@ main() {
         echo "3. epd2in13_V3"
         echo "4. epd2in13_V4"
         echo "5. epd2in7"
+        echo "6. No e-Paper (headless install)"
         
         while true; do
-            read -p "Enter your choice (1-5): " epd_choice
+            read -p "Enter your choice (1-6): " epd_choice
             case $epd_choice in
                 1) EPD_VERSION="epd2in13"; break;;
                 2) EPD_VERSION="epd2in13_V2"; break;;
                 3) EPD_VERSION="epd2in13_V3"; break;;
                 4) EPD_VERSION="epd2in13_V4"; break;;
                 5) EPD_VERSION="epd2in7"; break;;
-                *) echo -e "${RED}Invalid choice. Please select 1-5.${NC}";;
+                6)
+                    select_headless_variant
+                    EPD_VERSION=""
+                    break
+                    ;;
+                *) echo -e "${RED}Invalid choice. Please select 1-6.${NC}";;
             esac
         done
-        log "INFO" "Manually selected E-Paper Display version: $EPD_VERSION"
+
+        if [ "$HEADLESS_MODE" = true ]; then
+            log "INFO" "No e-Paper selected. Headless mode enabled (${HEADLESS_VARIANT_LABEL:-unspecified})."
+        else
+            log "INFO" "Manually selected E-Paper Display version: $EPD_VERSION"
+        fi
     fi
 
     case $install_option in
