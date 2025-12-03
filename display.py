@@ -447,11 +447,12 @@ class Display:
         return None, None
 
     def get_wifi_wave_count(self, quality):
-        """Translate a 0-100 quality value into 0-3 wave arcs."""
+        """Translate a 0-100 quality value into 0-4 wave arcs."""
         if quality is None:
             return 0
 
-        thresholds = [30, 55, 80]
+        # The first three thresholds preserve previous behavior; the last one enables a 4th arc.
+        thresholds = [30, 55, 80, 95]
         waves = 0
         for threshold in thresholds:
             if quality >= threshold:
