@@ -472,8 +472,8 @@ class Display:
         if waves <= 0:
             waves = 1  # Always show at least one wave when connected
 
-        base_radius = max(1, int(1.5 * scale))
-        wave_spacing = max(2, int(2.5 * scale) + 2)
+        base_radius = max(2, int(1.5 * scale))
+        wave_spacing = max(2, int(2.0 * scale))
         line_width = max(1, int(scale) + 1)
 
         center_x = base_x + base_radius + wave_spacing * 2
@@ -488,7 +488,7 @@ class Display:
                 center_x + radius,
                 center_y + radius
             )
-            draw.arc(bbox, start=210, end=330, fill=0, width=line_width)
+            draw.arc(bbox, start=220, end=320, fill=0, width=line_width)
 
         if ip_last_octet:
             text_x = center_x + wave_spacing + base_radius
