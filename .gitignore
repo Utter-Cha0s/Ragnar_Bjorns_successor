@@ -206,4 +206,4 @@ resources/comments/comments.json
 *.backup
 *.bak
 *.orig
-Bjorn.py.original
+web/screen.png
