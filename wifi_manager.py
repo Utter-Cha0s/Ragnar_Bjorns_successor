@@ -1105,7 +1105,7 @@ class WiFiManager:
             subprocess.run(rescan_cmd, capture_output=True, timeout=15)
             
             # Get scan results
-            list_cmd = ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi']
+            list_cmd = ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list']
             if target_iface:
                 list_cmd.extend(['ifname', target_iface])
             result = subprocess.run(list_cmd, capture_output=True, text=True, timeout=15)
