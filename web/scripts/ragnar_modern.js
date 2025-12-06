@@ -4458,7 +4458,11 @@ async function startAPMode() {
 
 async function refreshWifiStatus() {
     try {
-        const data = await fetchAPI('/api/wifi/status');
+        let activeInterface = getActiveWifiInterface();
+        const statusQuery = activeInterface
+            ? `/api/wifi/status?interface=${encodeURIComponent(activeInterface)}`
+            : '/api/wifi/status';
+        const data = await fetchAPI(statusQuery);
         console.log('Wi-Fi status data received:', data);
         
         const statusIndicator = document.getElementById('wifi-status-indicator');
@@ -4471,6 +4475,15 @@ async function refreshWifiStatus() {
         }
         
         console.log('Wi-Fi status elements found, updating...');
+
+        if (!activeInterface && data.interface) {
+            activeInterface = setSelectedWifiInterface(data.interface, { skipRefresh: true });
+        }
+        if (Array.isArray(data.interfaces)) {
+            renderWifiInterfaceSwitch(data.interfaces);
+        }
+        const interfaceLabel = data.interface ? data.interface : activeInterface;
+        const ipBadge = data.ip_address ? ` (${data.ip_address})` : '';
         
         if (data.ap_mode_active) {
             const apMessage = `AP Mode Active: "${data.ap_ssid || 'Ragnar'}" | Connect to configure Wi-Fi`;
@@ -4481,18 +4494,23 @@ async function refreshWifiStatus() {
             wifiInfo.textContent = apMessage;
         } else if (data.wifi_connected) {
             const ssid = data.current_ssid || 'Unknown Network';
-            const connectedMessage = `Connected to: ${ssid}`;
+            const connectedMessage = interfaceLabel
+                ? `Connected to: ${ssid} on ${interfaceLabel}${ipBadge}`
+                : `Connected to: ${ssid}`;
             console.log('Setting connected status:', connectedMessage);
             updateWifiStatus(connectedMessage, 'connected');
-            statusIndicator.textContent = 'Connected';
+            statusIndicator.textContent = interfaceLabel ? `${interfaceLabel} • Connected` : 'Connected';
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-300';
             wifiInfo.textContent = connectedMessage;
         } else {
             console.log('Setting disconnected status');
-            updateWifiStatus('Wi-Fi disconnected', 'disconnected');
-            statusIndicator.textContent = 'Disconnected';
+            const disconnectedMessage = interfaceLabel
+                ? `Wi-Fi disconnected on ${interfaceLabel}`
+                : 'Wi-Fi disconnected';
+            updateWifiStatus(disconnectedMessage, 'disconnected');
+            statusIndicator.textContent = interfaceLabel ? `${interfaceLabel} • Disconnected` : 'Disconnected';
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
-            wifiInfo.textContent = 'No Wi-Fi connection';
+            wifiInfo.textContent = disconnectedMessage;
         }
         
         console.log('Wi-Fi status updated successfully');
@@ -4528,14 +4546,11 @@ let currentWifiNetworks = [];
 let selectedWifiNetwork = null;
 const WIFI_INTERFACE_STORAGE_KEY = 'wifi-selected-interface';
 let selectedWifiInterface = null;
+let wifiInterfaceMetadata = [];
 
 function handleWifiInterfaceChange(event) {
-    selectedWifiInterface = (event?.target?.value || '').trim() || null;
-    if (selectedWifiInterface) {
-        localStorage.setItem(WIFI_INTERFACE_STORAGE_KEY, selectedWifiInterface);
-    } else {
-        localStorage.removeItem(WIFI_INTERFACE_STORAGE_KEY);
-    }
+    const nextInterface = (event?.target?.value || '').trim() || null;
+    setSelectedWifiInterface(nextInterface);
 }
 
 function getActiveWifiInterface() {
@@ -4555,6 +4570,116 @@ function getActiveWifiInterface() {
     return null;
 }
 
+function updateWifiInterfaceSwitchActiveState(activeInterface) {
+    const buttonsContainer = document.getElementById('wifi-interface-switch-buttons');
+    if (!buttonsContainer) return;
+    const buttons = buttonsContainer.querySelectorAll('button[data-interface]');
+    buttons.forEach(button => {
+        const isActive = button.dataset.interface === activeInterface;
+        button.classList.remove('bg-Ragnar-600', 'border-Ragnar-400', 'text-white', 'shadow-lg', 'bg-slate-800', 'border-slate-600', 'text-gray-300');
+        if (isActive) {
+            button.classList.add('bg-Ragnar-600', 'border-Ragnar-400', 'text-white', 'shadow-lg');
+        } else {
+            button.classList.add('bg-slate-800', 'border-slate-600', 'text-gray-300');
+        }
+    });
+}
+
+function renderWifiInterfaceSwitch(interfaces = []) {
+    wifiInterfaceMetadata = Array.isArray(interfaces) ? interfaces : [];
+    const switchContainer = document.getElementById('wifi-interface-switch');
+    const buttonsContainer = document.getElementById('wifi-interface-switch-buttons');
+    if (!switchContainer || !buttonsContainer) {
+        return;
+    }
+
+    const connectedInterfaces = wifiInterfaceMetadata.filter(iface => iface && iface.connected);
+    const shouldDisplay = connectedInterfaces.length >= 2;
+    buttonsContainer.innerHTML = '';
+    switchContainer.classList.toggle('hidden', !shouldDisplay);
+
+    if (!shouldDisplay) {
+        return;
+    }
+
+    const activeName = getActiveWifiInterface() || (connectedInterfaces[0] ? connectedInterfaces[0].name : null);
+
+    connectedInterfaces.forEach(iface => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.interface = iface.name;
+        button.className = 'wifi-switch-btn flex-1 min-w-[180px] px-3 py-2 rounded-lg border transition-all text-left';
+        const ssidLabel = iface.connected_ssid || iface.connection || 'No SSID';
+        const ipLabel = iface.ip_address || 'No IP';
+        const stateLabel = iface.state || 'UNKNOWN';
+        button.innerHTML = `
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <div class="text-sm font-semibold">${iface.name}</div>
+                    <div class="text-[11px] text-gray-300">${ssidLabel}</div>
+                </div>
+                <div class="text-right text-[11px] leading-tight text-gray-400">
+                    <div>${ipLabel}</div>
+                    <div>${stateLabel}</div>
+                </div>
+            </div>
+        `;
+        button.addEventListener('click', () => {
+            if (iface.name !== getActiveWifiInterface()) {
+                setSelectedWifiInterface(iface.name);
+            }
+        });
+        buttonsContainer.appendChild(button);
+    });
+
+    updateWifiInterfaceSwitchActiveState(activeName);
+}
+
+async function refreshWifiNetworksForInterface(interfaceName) {
+    if (!interfaceName) {
+        return;
+    }
+    const networksList = document.getElementById('wifi-networks-list');
+    if (!networksList) {
+        return;
+    }
+    try {
+        const query = `/api/wifi/networks?interface=${encodeURIComponent(interfaceName)}`;
+        const data = await fetchAPI(query);
+        if (data) {
+            displayWifiNetworks(data);
+        }
+    } catch (error) {
+        console.warn('Unable to refresh Wi-Fi networks for interface', interfaceName, error);
+    }
+}
+
+function setSelectedWifiInterface(interfaceName, options = {}) {
+    const normalized = (interfaceName || '').trim() || null;
+    const hasChanged = normalized !== selectedWifiInterface;
+    selectedWifiInterface = normalized;
+
+    if (selectedWifiInterface) {
+        localStorage.setItem(WIFI_INTERFACE_STORAGE_KEY, selectedWifiInterface);
+    } else {
+        localStorage.removeItem(WIFI_INTERFACE_STORAGE_KEY);
+    }
+
+    const interfaceSelect = document.getElementById('wifi-interface-select');
+    if (interfaceSelect && interfaceSelect.value !== (selectedWifiInterface || '')) {
+        interfaceSelect.value = selectedWifiInterface || '';
+    }
+
+    updateWifiInterfaceSwitchActiveState(selectedWifiInterface);
+
+    if (!options.skipRefresh && hasChanged) {
+        refreshWifiStatus().catch(err => console.warn('Wi-Fi status refresh failed for interface change', err));
+        refreshWifiNetworksForInterface(selectedWifiInterface).catch(err => console.warn('Wi-Fi networks refresh failed for interface change', err));
+    }
+
+    return selectedWifiInterface;
+}
+
 async function loadWifiInterfaces() {
     try {
         const data = await fetchAPI('/api/wifi/interfaces');
@@ -4563,22 +4688,42 @@ async function loadWifiInterfaces() {
         if (!interfaceSelect) return;
         const savedInterface = localStorage.getItem(WIFI_INTERFACE_STORAGE_KEY);
         let selectionApplied = false;
+        let firstConnectedInterface = null;
+        let defaultInterface = null;
         
-        if (data.success && data.interfaces && data.interfaces.length > 0) {
+        if (data && Array.isArray(data.interfaces) && data.interfaces.length > 0) {
+            wifiInterfaceMetadata = data.interfaces;
             interfaceSelect.innerHTML = '';
             data.interfaces.forEach(iface => {
                 const option = document.createElement('option');
                 option.value = iface.name;
                 option.textContent = `${iface.name}${iface.is_default ? ' (default)' : ''} - ${iface.state}`;
+                if (!firstConnectedInterface && iface.connected) {
+                    firstConnectedInterface = iface.name;
+                }
+                if (iface.is_default) {
+                    defaultInterface = iface.name;
+                }
                 if (!selectionApplied && savedInterface && iface.name === savedInterface) {
-                    option.selected = true;
-                    selectionApplied = true;
-                } else if (!selectionApplied && iface.is_default) {
                     option.selected = true;
                     selectionApplied = true;
                 }
                 interfaceSelect.appendChild(option);
             });
+            if (!selectionApplied && firstConnectedInterface) {
+                const match = Array.from(interfaceSelect.options).find(opt => opt.value === firstConnectedInterface);
+                if (match) {
+                    match.selected = true;
+                    selectionApplied = true;
+                }
+            }
+            if (!selectionApplied && defaultInterface) {
+                const match = Array.from(interfaceSelect.options).find(opt => opt.value === defaultInterface);
+                if (match) {
+                    match.selected = true;
+                    selectionApplied = true;
+                }
+            }
             console.log('Loaded Wi-Fi interfaces:', data.interfaces);
         } else {
             interfaceSelect.innerHTML = '<option value="wlan0">wlan0 (default)</option>';
@@ -4589,19 +4734,19 @@ async function loadWifiInterfaces() {
             interfaceSelect.options[0].selected = true;
         }
 
-        selectedWifiInterface = interfaceSelect.value || null;
-        if (selectedWifiInterface) {
-            localStorage.setItem(WIFI_INTERFACE_STORAGE_KEY, selectedWifiInterface);
-        }
+        setSelectedWifiInterface(interfaceSelect.value || null, { skipRefresh: true });
 
         interfaceSelect.removeEventListener('change', handleWifiInterfaceChange);
         interfaceSelect.addEventListener('change', handleWifiInterfaceChange);
+
+    renderWifiInterfaceSwitch((data && data.interfaces) || []);
     } catch (error) {
         console.error('Error loading Wi-Fi interfaces:', error);
         const interfaceSelect = document.getElementById('wifi-interface-select');
         if (interfaceSelect) {
             interfaceSelect.innerHTML = '<option value="wlan0">wlan0 (default)</option>';
         }
+        renderWifiInterfaceSwitch([]);
     }
 }
 

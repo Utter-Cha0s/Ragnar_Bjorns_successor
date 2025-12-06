@@ -28,7 +28,7 @@ import ipaddress
 import socket
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Dict, List
 from email.utils import format_datetime
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response, make_response
 from flask_socketio import SocketIO, emit
@@ -5865,42 +5865,116 @@ def _parse_wifi_interface_arg(raw_value):
         raise ValueError("Invalid interface name")
     return candidate
 
+
+def _get_interface_ip_address(interface_name: str) -> Optional[str]:
+    """Return the primary IPv4 address for the given interface, if any."""
+    try:
+        result = subprocess.run(
+            ['ip', '-o', '-4', 'addr', 'show', interface_name],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        if result.returncode == 0 and result.stdout:
+            match = re.search(r'inet\s+([0-9.]+)', result.stdout)
+            if match:
+                return match.group(1)
+    except Exception as exc:
+        logger.debug(f"Unable to read IP address for {interface_name}: {exc}")
+    return None
+
+
+def _gather_wifi_interfaces() -> List[Dict]:
+    """Collect Wi-Fi interface metadata from nmcli and ip utilities."""
+    interfaces: Dict[str, Dict] = {}
+
+    try:
+        nmcli_result = subprocess.run(
+            ['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'dev', 'status'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if nmcli_result.returncode == 0:
+            for line in nmcli_result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+                parts = line.split(':', 3)
+                if len(parts) < 4:
+                    continue
+                device, dev_type, state, connection = parts
+                if dev_type != 'wifi':
+                    continue
+                normalized_connection = connection if connection and connection != '--' else None
+                interfaces[device] = {
+                    'name': device,
+                    'state': state or 'UNKNOWN',
+                    'is_default': device == 'wlan0',
+                    'connected_ssid': normalized_connection,
+                    'connection': normalized_connection,
+                    'connected': (state or '').lower() == 'connected' and bool(normalized_connection),
+                }
+    except Exception as exc:
+        logger.debug(f"nmcli dev status failed: {exc}")
+
+    # Supplement with ip link data to capture interfaces nmcli may miss
+    wifi_name_pattern = re.compile(r'^(wlan\d+|wlp[\w\d]+|wlx[\w\d]+)$')
+    try:
+        ip_result = subprocess.run(
+            ['ip', '-o', 'link', 'show'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if ip_result.returncode == 0:
+            for line in ip_result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+                name_match = re.match(r'\d+:\s+(\S+):', line)
+                if not name_match:
+                    continue
+                iface_name = name_match.group(1)
+                if not wifi_name_pattern.match(iface_name):
+                    continue
+                entry = interfaces.setdefault(iface_name, {
+                    'name': iface_name,
+                    'state': 'UNKNOWN',
+                    'is_default': iface_name == 'wlan0',
+                    'connected_ssid': None,
+                    'connection': None,
+                    'connected': False,
+                })
+                state_match = re.search(r'state\s+(\w+)', line)
+                if state_match:
+                    entry['state'] = state_match.group(1)
+                mac_match = re.search(r'link/ether\s+([0-9a-f:]{17})', line)
+                if mac_match:
+                    entry['mac_address'] = mac_match.group(1)
+    except Exception as exc:
+        logger.debug(f"ip link show failed: {exc}")
+
+    if not interfaces:
+        interfaces['wlan0'] = {
+            'name': 'wlan0',
+            'state': 'UNKNOWN',
+            'is_default': True,
+            'connected_ssid': None,
+            'connection': None,
+            'connected': False,
+        }
+
+    # Populate IP addresses and ensure consistent fields
+    for iface in interfaces.values():
+        iface['ip_address'] = _get_interface_ip_address(iface['name'])
+        iface.setdefault('mac_address', None)
+
+    return sorted(interfaces.values(), key=lambda entry: entry['name'])
+
 @app.route('/api/wifi/interfaces')
 def get_wifi_interfaces():
     """Get available Wi-Fi interfaces"""
     try:
-        interfaces = []
-        
-        # Try to get interfaces from system
-        try:
-            result = subprocess.run(['ip', 'link', 'show'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                for line in result.stdout.split('\n'):
-                    # Look for wireless interfaces (wlan, wlp, etc.)
-                    if re.search(r'^\d+:\s+(wlan\d+|wlp\w+|wlx\w+)', line):
-                        match = re.search(r'^\d+:\s+(\S+):', line)
-                        if match:
-                            interface_name = match.group(1)
-                            # Check if interface is up
-                            state_match = re.search(r'state\s+(\w+)', line)
-                            state = state_match.group(1) if state_match else 'UNKNOWN'
-                            
-                            interfaces.append({
-                                'name': interface_name,
-                                'state': state,
-                                'is_default': interface_name == 'wlan0'
-                            })
-        except Exception as e:
-            logger.warning(f"Failed to get interfaces via ip command: {e}")
-            
-        # If no interfaces found, add default
-        if not interfaces:
-            interfaces.append({
-                'name': 'wlan0',
-                'state': 'UNKNOWN',
-                'is_default': True
-            })
-        
+        interfaces = _gather_wifi_interfaces()
         return jsonify({
             'success': True,
             'interfaces': interfaces
@@ -5911,39 +5985,86 @@ def get_wifi_interfaces():
         return jsonify({
             'success': False,
             'error': str(e),
-            'interfaces': [{'name': 'wlan0', 'state': 'UNKNOWN', 'is_default': True}]
-        })
+            'interfaces': [{
+                'name': 'wlan0',
+                'state': 'UNKNOWN',
+                'is_default': True,
+                'connected_ssid': None,
+                'connection': None,
+                'connected': False,
+                'ip_address': None,
+                'mac_address': None,
+            }]
+        }), 500
 
 @app.route('/api/wifi/status')
 def get_wifi_status():
     """Get Wi-Fi manager status"""
     try:
-        wifi_manager = getattr(shared_data, 'ragnar_instance', None)
-        if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
-            status = wifi_manager.wifi_manager.get_status()
+        try:
+            requested_interface = _parse_wifi_interface_arg(request.args.get('interface'))
+        except ValueError as invalid_iface:
+            return jsonify({'error': str(invalid_iface)}), 400
+
+        try:
+            interfaces = _gather_wifi_interfaces()
+        except Exception as interface_error:
+            logger.error(f"Failed to gather Wi-Fi interfaces: {interface_error}")
+            interfaces = [{
+                'name': 'wlan0',
+                'state': 'UNKNOWN',
+                'is_default': True,
+                'connected_ssid': None,
+                'connection': None,
+                'connected': False,
+                'ip_address': None,
+                'mac_address': None,
+            }]
+
+        default_interface = next((iface['name'] for iface in interfaces if iface.get('is_default')), interfaces[0]['name'])
+        connected_interface = next((iface['name'] for iface in interfaces if iface.get('connected')), None)
+        active_interface = requested_interface or connected_interface or default_interface
+
+        wifi_manager_wrapper = getattr(shared_data, 'ragnar_instance', None)
+        if wifi_manager_wrapper and hasattr(wifi_manager_wrapper, 'wifi_manager'):
+            status = wifi_manager_wrapper.wifi_manager.get_status()
             logger.debug(f"Wi-Fi status from manager: {status}")
-            return jsonify(status)
         else:
-            # Fallback: try to get Wi-Fi status from system
-            wifi_connected = getattr(shared_data, 'wifi_connected', False)
-            current_ssid = get_current_wifi_ssid() if wifi_connected else None
-            
-            fallback_status = {
-                'wifi_connected': wifi_connected,
+            any_connected = any(iface.get('connected') for iface in interfaces)
+            current_ssid = next((iface.get('connected_ssid') for iface in interfaces if iface.get('connected')), None)
+            status = {
+                'wifi_connected': any_connected,
                 'ap_mode_active': False,
                 'current_ssid': current_ssid,
                 'ap_ssid': None,
                 'error': 'Wi-Fi manager not available, using fallback'
             }
-            logger.debug(f"Wi-Fi status fallback: {fallback_status}")
-            return jsonify(fallback_status)
+            logger.debug(f"Wi-Fi status fallback: {status}")
+
+        selected_interface = next((iface for iface in interfaces if iface['name'] == active_interface), None)
+        if selected_interface:
+            status['connected_ssid'] = selected_interface.get('connected_ssid')
+            status['interface_state'] = selected_interface.get('state')
+            status['ip_address'] = selected_interface.get('ip_address')
+            status['interface_mac'] = selected_interface.get('mac_address')
+            status['interface_connected'] = selected_interface.get('connected')
+            status.setdefault('current_ssid', selected_interface.get('connected_ssid'))
+
+        status['interface'] = active_interface
+        status['interfaces'] = interfaces
+        status['default_interface'] = default_interface
+        status.setdefault('wifi_connected', any(iface.get('connected') for iface in interfaces))
+
+        return jsonify(status)
     except Exception as e:
         logger.error(f"Error getting Wi-Fi status: {e}")
         return jsonify({
             'error': str(e),
             'wifi_connected': False,
             'ap_mode_active': False,
-            'current_ssid': None
+            'current_ssid': None,
+            'interface': None,
+            'interfaces': []
         }), 500
 
 @app.route('/api/wifi/scan', methods=['POST'])
