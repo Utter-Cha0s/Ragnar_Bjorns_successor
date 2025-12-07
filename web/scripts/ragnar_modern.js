@@ -4464,6 +4464,8 @@ async function refreshWifiStatus() {
             : '/api/wifi/status';
         const data = await fetchAPI(statusQuery);
         console.log('Wi-Fi status data received:', data);
+        const multiState = data.multi_interface || null;
+        wifiMultiInterfaceState = multiState;
         
         const statusIndicator = document.getElementById('wifi-status-indicator');
         const wifiInfo = document.getElementById('wifi-info');
@@ -4555,6 +4557,9 @@ async function refreshWifiStatus() {
             connectedList.innerHTML = listMarkup;
             connectedList.classList.remove('hidden');
         }
+
+        renderDashboardMultiInterfaceSummary(multiState, data);
+        renderConnectTabMultiInterface(multiState);
         
         console.log('Wi-Fi status updated successfully');
             
@@ -4577,6 +4582,9 @@ async function refreshWifiStatus() {
             connectedList.innerHTML = '<div class="text-xs text-red-300">Unable to load adapter list</div>';
             connectedList.classList.remove('hidden');
         }
+        wifiMultiInterfaceState = null;
+        renderDashboardMultiInterfaceSummary(null);
+        renderConnectTabMultiInterface(null);
     }
 }
 
@@ -4597,6 +4605,197 @@ let selectedWifiInterface = null;
 let wifiInterfaceMetadata = [];
 const WIFI_NETWORK_CACHE_KEY_DEFAULT = '__default__';
 const wifiNetworkResultCache = new Map();
+let wifiMultiInterfaceState = null;
+
+function formatInterfaceRole(role) {
+    if (!role) {
+        return 'Adapter';
+    }
+    if (role === 'internal') {
+        return 'Internal';
+    }
+    if (role === 'external') {
+        return 'External';
+    }
+    return role.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function formatInterfaceReason(reason) {
+    if (!reason) {
+        return '';
+    }
+    const labels = {
+        global_disabled: 'Multi-scan disabled',
+        user_disabled: 'Paused by user',
+        no_ssid: 'No SSID',
+        disconnected: 'Adapter offline'
+    };
+    return labels[reason] || reason.replace(/_/g, ' ');
+}
+
+function renderDashboardMultiInterfaceSummary(state, statusData = {}) {
+    const container = document.getElementById('wifi-dashboard-interfaces');
+    if (!container) {
+        return;
+    }
+
+    if (!state || !Array.isArray(state.interfaces) || state.interfaces.length === 0) {
+        container.innerHTML = '<div class="text-gray-500 text-[11px]">No additional adapters detected yet.</div>';
+        return;
+    }
+
+    const markup = state.interfaces.map(entry => {
+        const roleClass = entry.role === 'external'
+            ? 'bg-indigo-900 text-indigo-100'
+            : 'bg-slate-800 text-slate-100';
+        const scanActive = Boolean(entry.scan_enabled && entry.connected && entry.connected_ssid);
+        const scanLabel = scanActive ? 'Scanning' : 'Paused';
+        const scanClass = scanActive ? 'text-green-300' : 'text-gray-400';
+        const reason = entry.reason ? ` • ${formatInterfaceReason(entry.reason)}` : '';
+        const ssidLabel = entry.connected_ssid ? escapeHtml(entry.connected_ssid) : 'No SSID';
+        return `
+            <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 text-gray-100">
+                    <span class="font-semibold text-xs">${escapeHtml(entry.name || 'iface')}</span>
+                    <span class="text-[10px] px-2 py-0.5 rounded ${roleClass}">${formatInterfaceRole(entry.role)}</span>
+                </div>
+                <div class="text-right leading-tight text-[11px] ${scanClass}">
+                    <div>${ssidLabel}</div>
+                    <div class="text-[10px] text-gray-400">${scanLabel}${reason}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    container.innerHTML = markup;
+
+    const connectedEntry = state.interfaces.find(entry => entry.connected && entry.connected_ssid);
+    const anyConnected = state.interfaces.some(entry => entry.connected);
+    const fallbackSsid = connectedEntry ? connectedEntry.connected_ssid : (statusData && statusData.current_ssid);
+    const apMode = Boolean(statusData && statusData.ap_mode_active);
+    updateConnectivityIndicator('wifi-status', anyConnected || Boolean(statusData && statusData.wifi_connected), fallbackSsid, apMode);
+}
+
+function renderConnectTabMultiInterface(state) {
+    const summaryEl = document.getElementById('wifi-multi-status-summary');
+    const listEl = document.getElementById('wifi-multi-interface-list');
+    const pillEl = document.getElementById('wifi-multi-global-pill');
+    const noteEl = document.getElementById('wifi-multi-limit-note');
+    if (!summaryEl || !listEl || !pillEl) {
+        return;
+    }
+
+    if (!state) {
+        pillEl.textContent = 'Unavailable';
+        pillEl.className = 'text-xs px-2 py-1 rounded bg-red-700 text-red-200';
+        summaryEl.textContent = 'Multi-interface controller unavailable. Refresh Wi-Fi status to retry.';
+        listEl.innerHTML = '<div class="text-xs text-red-300 bg-red-900/30 border border-red-800 rounded-lg p-3">Unable to load adapter details.</div>';
+        return;
+    }
+
+    const interfaces = Array.isArray(state.interfaces) ? state.interfaces : [];
+    const globalEnabled = Boolean(state.global_enabled);
+    pillEl.textContent = globalEnabled ? 'Enabled' : 'Disabled';
+    pillEl.className = `text-xs px-2 py-1 rounded ${globalEnabled ? 'bg-green-700 text-green-100' : 'bg-slate-700 text-gray-200'}`;
+    if (noteEl) {
+        const maxAdapters = state.max_interfaces || 1;
+        noteEl.textContent = `Monitoring up to ${maxAdapters} adapter${maxAdapters === 1 ? '' : 's'} simultaneously.`;
+    }
+
+    if (interfaces.length === 0) {
+        summaryEl.textContent = 'Waiting for eligible adapters...';
+        listEl.innerHTML = '<div class="text-xs text-gray-400 bg-slate-900/60 border border-dashed border-slate-700 rounded-lg p-3">Connect adapters to begin multi-interface scanning.</div>';
+        return;
+    }
+
+    const activeCount = interfaces.filter(entry => entry.scan_enabled && entry.connected && entry.connected_ssid).length;
+    summaryEl.textContent = activeCount > 0
+        ? `Actively scanning ${activeCount} adapter${activeCount === 1 ? '' : 's'}.`
+        : 'All adapters are currently paused.';
+
+    listEl.innerHTML = interfaces.map(entry => {
+        const scanning = Boolean(entry.scan_enabled && entry.connected && entry.connected_ssid);
+        const buttonLabel = scanning ? 'Pause Scans' : 'Resume Scans';
+        const buttonClasses = scanning
+            ? 'text-xs px-3 py-1 rounded bg-yellow-600 hover:bg-yellow-500 text-white transition-colors'
+            : 'text-xs px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white transition-colors';
+        const connectionLabel = entry.connected
+            ? (entry.connected_ssid ? `SSID: ${escapeHtml(entry.connected_ssid)}` : 'Connected')
+            : escapeHtml(entry.state || 'Disconnected');
+        const scanNote = scanning ? 'Scanning' : (entry.reason ? `Paused • ${formatInterfaceReason(entry.reason)}` : 'Paused');
+        const scanClass = scanning ? 'text-green-300' : 'text-gray-400';
+        const ipLabel = entry.ip_address ? ` • ${escapeHtml(entry.ip_address)}` : '';
+        const roleClass = entry.role === 'external' ? 'bg-indigo-900 text-indigo-200' : 'bg-slate-800 text-slate-200';
+        return `
+            <div class="border border-slate-700 rounded-lg p-3 bg-slate-900/50 flex flex-col gap-3">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="flex items-center gap-2 text-sm font-semibold text-white">
+                            <span>${escapeHtml(entry.name || 'iface')}</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded ${roleClass}">${formatInterfaceRole(entry.role)}</span>
+                        </div>
+                        <div class="text-[11px] text-gray-400">${connectionLabel}</div>
+                    </div>
+                    <button type="button" class="${buttonClasses}" data-interface="${escapeHtml(entry.name || '')}" data-scan-state="${scanning ? 'enabled' : 'disabled'}">${buttonLabel}</button>
+                </div>
+                <div class="text-[11px] ${scanClass}">${scanNote}${ipLabel}</div>
+            </div>
+        `;
+    }).join('');
+
+    listEl.querySelectorAll('button[data-interface]').forEach(button => {
+        button.addEventListener('click', handleScanControlToggle);
+    });
+}
+
+function handleScanControlToggle(event) {
+    const button = event.currentTarget;
+    if (!button || button.dataset.busy === 'true') {
+        return;
+    }
+    const interfaceName = button.dataset.interface;
+    const currentlyEnabled = button.dataset.scanState === 'enabled';
+    updateInterfaceScanState(interfaceName, !currentlyEnabled, button);
+}
+
+async function updateInterfaceScanState(interfaceName, enable, button) {
+    if (!interfaceName) {
+        return;
+    }
+    const endpoint = enable ? '/api/wifi/scan-control/start' : '/api/wifi/scan-control/stop';
+    if (button) {
+        button.dataset.busy = 'true';
+        button.disabled = true;
+        button.classList.add('opacity-60', 'cursor-not-allowed');
+        button.textContent = enable ? 'Resuming…' : 'Pausing…';
+    }
+
+    let updated = false;
+    try {
+        const response = await postAPI(endpoint, { interface: interfaceName });
+        if (!response || response.success === false) {
+            throw new Error((response && (response.error || response.message)) || 'Request failed');
+        }
+        addConsoleMessage(`${enable ? 'Resumed' : 'Paused'} scans on ${interfaceName}`, 'info');
+        updated = true;
+    } catch (error) {
+        console.error('Error updating scan interface:', error);
+        addConsoleMessage(`Scan control failed on ${interfaceName}: ${error.message}`, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.classList.remove('opacity-60', 'cursor-not-allowed');
+            delete button.dataset.busy;
+        }
+    }
+
+    if (updated) {
+        try {
+            await refreshWifiStatus();
+        } catch (error) {
+            console.warn('Wi-Fi status refresh failed after scan control change:', error);
+        }
+    }
+}
 
 function cacheWifiNetworkResult(interfaceName, payload) {
     if (!payload) {

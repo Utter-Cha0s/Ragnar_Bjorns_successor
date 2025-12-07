@@ -1,0 +1,219 @@
+"""Multi-interface coordination utilities for Ragnar."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import contextmanager
+from dataclasses import dataclass
+import threading
+import time
+from typing import Dict, List, Optional
+
+from logger import Logger
+from wifi_interfaces import gather_wifi_interfaces
+
+logger = Logger(name="multi_interface", level=logging.INFO)
+
+
+@dataclass
+class ScanJob:
+    """Represents a scheduled Wi-Fi scanning job for a network interface."""
+    interface: str
+    ssid: str
+    role: str
+    ip_address: Optional[str] = None
+    cidr: Optional[int] = None
+    network_cidr: Optional[str] = None
+
+
+class NetworkContextRegistry:
+    """Provides safe context switching between per-network storage roots."""
+
+    def __init__(self, shared_data):
+        self.shared_data = shared_data
+        self._lock = threading.RLock()
+
+    def _snapshot_current(self) -> Optional[Dict[str, str]]:
+        ssid = self.shared_data.active_network_ssid
+        try:
+            return self.shared_data.storage_manager.get_context_snapshot(ssid)
+        except Exception as exc:
+            logger.warning(f"Unable to snapshot current network context: {exc}")
+            return None
+
+    def _apply_context(self, context: Optional[Dict[str, str]]):
+        if not context:
+            return
+        self.shared_data._apply_network_context(context, configure_db=False)
+        self.shared_data._refresh_network_components()
+
+    @contextmanager
+    def activate(self, ssid: Optional[str]):
+        """Temporarily switch shared data to the requested SSID context."""
+        if not ssid:
+            yield None
+            return
+
+        with self._lock:
+            previous_context = self._snapshot_current()
+            target_context = self.shared_data.storage_manager.get_context_snapshot(ssid)
+            self._apply_context(target_context)
+
+        try:
+            yield target_context
+        finally:
+            with self._lock:
+                self._apply_context(previous_context)
+
+
+class MultiInterfaceState:
+    """Tracks Wi-Fi interfaces and orchestrates multi-network scanning limits."""
+
+    def __init__(self, shared_data):
+        self.shared_data = shared_data
+        self._lock = threading.RLock()
+        self.interfaces: Dict[str, Dict] = {}
+        raw_overrides = shared_data.config.get('wifi_scan_interface_overrides') or {}
+        self.scan_overrides: Dict[str, bool] = {k: bool(v) for k, v in raw_overrides.items()}
+        self.last_refresh = 0.0
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def refresh_from_system(self) -> List[Dict]:
+        """Probe system interfaces and update cached state."""
+        default_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+        discovered = gather_wifi_interfaces(default_iface)
+        self.sync_from_interfaces(discovered)
+        return discovered
+
+    def sync_from_interfaces(self, interfaces: List[Dict]):
+        """Sync incoming interface metadata (from nmcli, wifi manager, or API)."""
+        selected = self._select_interfaces(interfaces)
+        timestamp = time.time()
+        global_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
+        default_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+
+        with self._lock:
+            new_state: Dict[str, Dict] = {}
+            for iface in selected:
+                name = iface.get('name')
+                if not name:
+                    continue
+                role = 'internal' if name == default_iface else 'external'
+                base_enabled = self._resolve_enabled_flag(name, global_enabled)
+                entry = {
+                    'name': name,
+                    'role': role,
+                    'state': iface.get('state', 'UNKNOWN'),
+                    'connected': bool(iface.get('connected')),
+                    'connected_ssid': iface.get('connected_ssid'),
+                    'ip_address': iface.get('ip_address'),
+                    'cidr': iface.get('cidr'),
+                    'network_cidr': iface.get('network_cidr'),
+                    'mac_address': iface.get('mac_address'),
+                    'scan_enabled': base_enabled,
+                    'last_refresh': timestamp,
+                    'reason': None,
+                }
+
+                if not global_enabled:
+                    entry['scan_enabled'] = False
+                    entry['reason'] = 'global_disabled'
+                elif not entry['connected_ssid']:
+                    entry['scan_enabled'] = False
+                    entry['reason'] = 'no_ssid'
+                elif not entry['connected']:
+                    entry['scan_enabled'] = False
+                    entry['reason'] = 'disconnected'
+
+                new_state[name] = entry
+
+            self.interfaces = new_state
+            self.last_refresh = timestamp
+
+    def get_scan_jobs(self) -> List[ScanJob]:
+        """Return all scan jobs respecting interface limits and enable flags."""
+        max_interfaces = max(1, int(self.shared_data.config.get('wifi_multi_scan_max_interfaces', 2)))
+        global_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
+        if not global_enabled:
+            return []
+
+        jobs: List[ScanJob] = []
+        with self._lock:
+            for entry in self.interfaces.values():
+                if len(jobs) >= max_interfaces:
+                    break
+                if not entry.get('scan_enabled'):
+                    continue
+                if not entry.get('connected') or not entry.get('connected_ssid'):
+                    continue
+                jobs.append(
+                    ScanJob(
+                        interface=entry['name'],
+                        ssid=entry['connected_ssid'],
+                        role=entry['role'],
+                        ip_address=entry.get('ip_address'),
+                        cidr=entry.get('cidr'),
+                        network_cidr=entry.get('network_cidr'),
+                    )
+                )
+        return jobs
+
+    def get_state_payload(self) -> Dict:
+        with self._lock:
+            return {
+                'global_enabled': bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False)),
+                'max_parallel': max(1, int(self.shared_data.config.get('wifi_multi_scan_max_parallel', 1))),
+                'max_interfaces': max(1, int(self.shared_data.config.get('wifi_multi_scan_max_interfaces', 2))),
+                'last_refresh': self.last_refresh,
+                'interfaces': list(self.interfaces.values()),
+            }
+
+    def set_scan_enabled(self, interface_name: str, enabled: bool) -> Dict:
+        """Override scan enable flag for a specific interface."""
+        with self._lock:
+            self.scan_overrides[interface_name] = bool(enabled)
+            self.shared_data.config['wifi_scan_interface_overrides'] = self.scan_overrides
+            self.shared_data.save_config()
+            if interface_name in self.interfaces:
+                self.interfaces[interface_name]['scan_enabled'] = bool(enabled)
+                if not enabled:
+                    self.interfaces[interface_name]['reason'] = 'user_disabled'
+                else:
+                    self.interfaces[interface_name]['reason'] = None
+                return self.interfaces[interface_name]
+        return {}
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _resolve_enabled_flag(self, interface_name: str, global_enabled: bool) -> bool:
+        if interface_name in self.scan_overrides:
+            return bool(self.scan_overrides[interface_name])
+        return global_enabled
+
+    def _select_interfaces(self, interfaces: List[Dict]) -> List[Dict]:
+        max_interfaces = max(1, int(self.shared_data.config.get('wifi_multi_scan_max_interfaces', 2)))
+        default_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+        hint = (self.shared_data.config.get('wifi_external_interface_hint') or '').strip()
+
+        primary = next((iface for iface in interfaces if iface.get('name') == default_iface), None)
+        externals = [iface for iface in interfaces if iface.get('name') != default_iface]
+        externals.sort(key=lambda iface: (hint and iface.get('name') != hint, not iface.get('connected'), iface.get('name') or ''))
+
+        selected: List[Dict] = []
+        if primary:
+            selected.append(primary)
+        if externals:
+            selected.append(externals[0])
+
+        allowed = self.shared_data.config.get('wifi_allowed_scan_interfaces') or []
+        if allowed:
+            whitelisted = []
+            for iface in selected:
+                if iface.get('name') in allowed or iface.get('name') == default_iface:
+                    whitelisted.append(iface)
+            selected = whitelisted
+
+        return selected[:max_interfaces]

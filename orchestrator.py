@@ -391,6 +391,55 @@ class Orchestrator:
 
         return any_action_executed
 
+    def _execute_network_scans(self, reason="cycle"):
+        if not self.network_scanner:
+            return
+        multi_state = getattr(self.shared_data, 'multi_interface_state', None)
+        multi_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
+
+        if not multi_state or not multi_enabled:
+            self.network_scanner.scan()
+            return
+
+        try:
+            multi_state.refresh_from_system()
+        except Exception as exc:
+            logger.debug(f"Unable to refresh multi-interface state: {exc}")
+
+        jobs = multi_state.get_scan_jobs()
+        if not jobs:
+            logger.info("Multi-network scanning enabled but no eligible interfaces detected - running default scan")
+            self.network_scanner.scan()
+            return
+
+        for job in jobs:
+            context_ssid = getattr(job, 'ssid', None)
+            label = context_ssid or 'unknown'
+            with self.shared_data.context_registry.activate(context_ssid):
+                self.shared_data.ragnarstatustext2 = f"{reason}: {label}"
+                logger.info(f"→ Running network scan on {job.interface} ({label})")
+                self.network_scanner.scan(job=job)
+        self.shared_data.ragnarstatustext2 = ""
+
+    def _iter_action_contexts(self):
+        multi_state = getattr(self.shared_data, 'multi_interface_state', None)
+        multi_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
+        if not multi_state or not multi_enabled:
+            yield self.shared_data.active_network_ssid
+            return
+
+        jobs = multi_state.get_scan_jobs()
+        seen = set()
+        if not jobs:
+            yield self.shared_data.active_network_ssid
+            return
+        for job in jobs:
+            ssid = getattr(job, 'ssid', None)
+            if not ssid or ssid in seen:
+                continue
+            seen.add(ssid)
+            yield ssid
+
 
     def execute_action(self, action, ip, ports, row, action_key, current_data):
         """Execute an action on a target with timeout protection"""
@@ -742,7 +791,7 @@ class Orchestrator:
         if self.network_scanner:
             self.shared_data.ragnarorch_status = "NetworkScanner"
             self.shared_data.ragnarstatustext2 = "Initial scan..."
-            self.network_scanner.scan()  # This does ARP ping scan + port scan
+            self._execute_network_scans(reason="startup")
             self.shared_data.ragnarstatustext2 = ""
             logger.info("✓ Phase 1 complete: Network hosts and ports discovered")
         else:
@@ -833,7 +882,7 @@ class Orchestrator:
                     pre_scan_ips = set(row.get("IPs", "") for row in pre_scan_data if row.get("IPs"))
                     
                     # Run the network scan
-                    self.network_scanner.scan()
+                    self._execute_network_scans(reason="cycle")
                     last_network_scan_time = current_time
                     
                     # Check for new IPs after scan
@@ -914,18 +963,25 @@ class Orchestrator:
             
             # Prefer fresh in-memory scan results over CSV file reads
             # This eliminates race conditions and provides instant access to live hosts
-            current_data = self.shared_data.get_latest_scan_results()
-            if current_data is not None:
-                logger.debug("✅ Using fresh scan results from memory (no CSV read needed)")
-            else:
-                logger.debug("📄 No in-memory results available - falling back to netkb.csv file read")
-                current_data = self.shared_data.read_data()
-            
             any_action_executed = False
             action_retry_pending = False
-            
-            # Execute actions (only attack actions will be filtered by enable_attacks)
-            any_action_executed = self.process_alive_ips(current_data)
+
+            for ssid in self._iter_action_contexts():
+                with self.shared_data.context_registry.activate(ssid):
+                    current_data = self.shared_data.get_latest_scan_results(ssid)
+                    if current_data is not None:
+                        logger.debug(
+                            f"✅ Using fresh scan results from memory for {ssid or 'default'}"
+                        )
+                    else:
+                        logger.debug(
+                            f"📄 No in-memory results for {ssid or 'default'} - reading from database"
+                        )
+                        current_data = self.shared_data.read_data()
+                    if not current_data:
+                        continue
+                    if self.process_alive_ips(current_data):
+                        any_action_executed = True
 
             # SQLite writes happen automatically in action modules - no CSV write needed
             # self.shared_data.write_data(current_data)
@@ -944,7 +1000,7 @@ class Orchestrator:
                     logger.info("No targets available - running network scan...")
                     if self.network_scanner:
                         self.shared_data.ragnarorch_status = "NetworkScanner"
-                        self.network_scanner.scan()
+                        self._execute_network_scans(reason="idle-refresh")
                         last_network_scan_time = time.time()
                         # Get fresh results from memory (scanner hands them off immediately)
                         current_data = self.shared_data.get_latest_scan_results()

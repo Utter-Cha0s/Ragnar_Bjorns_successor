@@ -29,6 +29,7 @@ from logger import Logger
 from epd_helper import EPDHelper
 from db_manager import get_db
 from network_storage import NetworkStorageManager
+from multi_interface import MultiInterfaceState, NetworkContextRegistry
 
 DEFAULT_EPD_TYPE = "epd2in13_V4"
 DISPLAY_PROFILES = {
@@ -56,6 +57,7 @@ class SharedData:
             self.storage_manager.get_active_context(),
             configure_db=False
         )
+        self.context_registry = NetworkContextRegistry(self)
         self.status_list = [] 
         self.last_comment_time = time.time() # Last time a comment was displayed
         self._stats_lock = threading.Lock()  # Thread-safe lock for update_stats()
@@ -63,6 +65,7 @@ class SharedData:
         self.config = self.default_config.copy() # Configuration of the application
         # Load existing configuration first
         self.load_config()
+        self.multi_interface_state = MultiInterfaceState(self)
         # Ensure the selected EPD profile is consistent and expose flip settings early
         self.config.setdefault('epd_type', DEFAULT_EPD_TYPE)
         self.apply_display_profile(self.config['epd_type'], set_orientation_if_missing=True, persist=True)
@@ -390,6 +393,7 @@ class SharedData:
             
             "__title_wifi__": "Wi-Fi Management",
             "wifi_known_networks": [],
+            "wifi_default_interface": "wlan0",
             "wifi_ap_ssid": "Ragnar",
             "wifi_ap_password": "ragnarconnect",
             "wifi_connection_timeout": 60,
@@ -398,6 +402,12 @@ class SharedData:
             "wifi_monitor_enabled": True,
             "wifi_auto_ap_fallback": True,
             "wifi_ap_timeout": 180,
+            "wifi_multi_network_scans_enabled": False,
+            "wifi_multi_scan_max_interfaces": 2,
+            "wifi_multi_scan_max_parallel": 1,
+            "wifi_allowed_scan_interfaces": [],
+            "wifi_scan_interface_overrides": {},
+            "wifi_external_interface_hint": "",
             "wifi_ap_idle_timeout": 180,
             "wifi_reconnect_interval": 20,
             "wifi_ap_cycle_enabled": True,
@@ -683,11 +693,9 @@ class SharedData:
         self.x_center1 = 0  # Alternative positioning
         self.y_bottom1 = 0  # Alternative positioning
         
-        # In-memory scan results for immediate orchestrator access
-        # Stores latest live hosts from scanner without waiting for CSV writes
-        self.latest_scan_results = None  # List of host dicts with 'MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports', etc.
-        self.latest_scan_timestamp = 0.0  # Time when last scan completed
-        self._scan_results_lock = threading.Lock()  # Thread-safe access to scan results
+        # In-memory scan results keyed per active network for orchestrator access
+        self._latest_scan_results = {}
+        self._scan_results_lock = threading.Lock()
 
     def load_gamification_data(self):
         """Load persistent gamification progress from disk."""
@@ -1134,28 +1142,44 @@ class SharedData:
             raise
 
 
+    def _slug_for_ssid(self, ssid):
+        if hasattr(self.storage_manager, '_slugify'):
+            try:
+                return self.storage_manager._slugify(ssid)
+            except Exception:
+                return self.storage_manager.default_ssid
+        return (ssid or self.storage_manager.default_ssid or 'default')
+
     def set_latest_scan_results(self, scan_data):
-        """Store fresh scan results in memory for immediate orchestrator access.
-        
-        Args:
-            scan_data: List of dictionaries with keys: 'MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports', etc.
-        """
+        """Store fresh scan results scoped to the currently active network."""
+        slug = self._slug_for_ssid(self.active_network_ssid)
         with self._scan_results_lock:
-            self.latest_scan_results = scan_data
-            self.latest_scan_timestamp = time.time()
-            logger.info(f"📋 Stored {len(scan_data)} live hosts in memory for immediate orchestrator access")
+            self._latest_scan_results[slug] = {
+                'data': scan_data,
+                'timestamp': time.time(),
+                'ssid': self.active_network_ssid,
+            }
+            logger.info(
+                f"📋 Stored {len(scan_data or []) if scan_data else 0} hosts for network slug '{slug}'"
+            )
     
-    def get_latest_scan_results(self):
-        """Retrieve fresh scan results from memory if available.
-        
-        Returns:
-            List of host dictionaries if available, None otherwise
-        """
+    def get_latest_scan_results(self, ssid=None):
+        """Retrieve fresh scan results from memory for a specific SSID (defaults to active)."""
+        slug = self._slug_for_ssid(ssid or self.active_network_ssid)
         with self._scan_results_lock:
-            if self.latest_scan_results is not None:
-                age_seconds = time.time() - self.latest_scan_timestamp
-                logger.info(f"📋 Retrieved {len(self.latest_scan_results)} hosts from memory (age: {age_seconds:.1f}s)")
-            return self.latest_scan_results
+            entry = self._latest_scan_results.get(slug)
+            if not entry:
+                return None
+            data = entry.get('data')
+            age_seconds = time.time() - entry.get('timestamp', 0)
+            logger.info(
+                f"📋 Retrieved {len(data or []) if data else 0} hosts from cache (slug={slug}, age={age_seconds:.1f}s)"
+            )
+            return data
+
+    def get_cached_network_slugs(self):
+        with self._scan_results_lock:
+            return list(self._latest_scan_results.keys())
     
     def read_data(self):
         """

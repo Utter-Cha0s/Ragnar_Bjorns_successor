@@ -87,6 +87,7 @@ class NetworkScanner:
         self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
         self.arp_scan_interface = "wlan0"
+    self._active_scan_network = None
         # Initialize SQLite database manager
         self.db = get_db(currentdir=self.currentdir)
 
@@ -772,6 +773,10 @@ class NetworkScanner:
         Retrieves the network information including the default gateway and subnet.
         """
         try:
+            if self._active_scan_network:
+                network = ipaddress.ip_network(self._active_scan_network, strict=False)
+                self.logger.info(f"Network (override): {network}")
+                return network
             if netifaces is None:
                 # Fallback to a common private network range if netifaces is not available
                 self.logger.warning("netifaces not available, using default network range")
@@ -1330,14 +1335,29 @@ class NetworkScanner:
             except Exception as e:
                 self.logger.error(f"Error in clean_scan_results: {e}")
 
-    def scan(self):
+    def scan(self, job=None):
         """
         Initiates the network scan, updates the netkb file, and displays the results.
         Now also stores results in memory for immediate orchestrator access.
         """
+        interface_override = getattr(job, 'interface', None) if job else None
+        network_hint = getattr(job, 'network_cidr', None) if job else None
+        if not network_hint and job and getattr(job, 'ip_address', None) and getattr(job, 'cidr', None):
+            network_hint = f"{job.ip_address}/{job.cidr}"
+
+        previous_interface = self.arp_scan_interface
+        previous_network_hint = self._active_scan_network
+
+        if interface_override:
+            self.arp_scan_interface = interface_override
+        self._active_scan_network = network_hint
+
         try:
             self.shared_data.ragnarorch_status = "NetworkScanner"
-            self.logger.info(f"Starting Network Scanner")
+            job_descriptor = ""
+            if job and getattr(job, 'ssid', None):
+                job_descriptor = f" for {job.ssid} ({self.arp_scan_interface})"
+            self.logger.info(f"Starting Network Scanner{job_descriptor}")
             network = self.get_network()
             self.shared_data.bjornstatustext2 = str(network)
             portstart = self.shared_data.portstart
@@ -1409,6 +1429,9 @@ class NetworkScanner:
             updater.clean_scan_results(self.shared_data.scan_results_dir)
         except Exception as e:
             self.logger.error(f"Error in scan: {e}")
+        finally:
+            self.arp_scan_interface = previous_interface
+            self._active_scan_network = previous_network_hint
 
     def deep_scan_host(self, ip, portstart=1, portend=65535, progress_callback=None, use_top_ports=True):
         # Debug input parameters (single consolidated line for easier grepping)
