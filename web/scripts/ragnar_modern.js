@@ -1096,7 +1096,9 @@ async function updateNetworkStatusBanner() {
 
 async function loadStableNetworkData() {
     try {
-        const data = await fetchAPI('/api/network/stable');
+        const { network } = getSelectedDashboardNetworkKey() || {};
+        const query = network ? `/api/network/stable?network=${encodeURIComponent(network)}` : '/api/network/stable';
+        const data = await fetchAPI(query);
         
         if (data.success) {
             displayStableNetworkTable(data);
