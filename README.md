@@ -42,7 +42,7 @@ sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
 
 **WiFi Configuration Portal** - When Ragnar can't connect to a known network, it automatically creates a WiFi hotspot:
 1. **Connect** to WiFi network: `Ragnar` (password ragnarconnect)
-2. **Navigate** to: `http://192.168.4.1/portal`
+2. **Navigate** to: `http://192.168.4.1:8000`
 3. **Configure** your home WiFi credentials via the mobile-friendly interface
 4. **Monitor** the countdown timer - Ragnar will automatically try to reconnect to kn wifi after som time if AP is unused.
 5. **Done** - Ragnar exits AP mode and connects to your network
