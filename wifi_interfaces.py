@@ -1,4 +1,4 @@
-"""Shared Wi-Fi interface discovery helpers for Ragnar."""
+"""Shared Wi-Fi and Ethernet interface discovery helpers for Ragnar."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from logger import Logger
 logger = Logger(name="wifi_interfaces", level=logging.INFO)
 
 _WIFI_NAME_PATTERN = re.compile(r"^(wlan\d+|wlp[\w\d]+|wlx[\w\d]+)$")
+_ETHERNET_NAME_PATTERN = re.compile(r"^(eth\d+|enp\d+s\d+|eno\d+|ens\d+|enx[\w\d]+)$")
 
 
 def _get_interface_ipv4_details(interface_name: str) -> Dict[str, Optional[str]]:
@@ -224,3 +225,151 @@ def gather_wifi_interfaces(default_interface: str = 'wlan0') -> List[Dict]:
         iface.setdefault('mac_address', None)
 
     return sorted(interfaces.values(), key=lambda entry: entry['name'])
+
+
+def _check_ethernet_carrier(interface_name: str) -> bool:
+    """Check if an Ethernet interface has a physical connection (carrier)."""
+    try:
+        # Check carrier file in sysfs
+        result = subprocess.run(
+            ['cat', f'/sys/class/net/{interface_name}/carrier'],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            carrier = result.stdout.strip()
+            return carrier == '1'
+    except Exception as exc:
+        logger.debug(f"Unable to check carrier for {interface_name}: {exc}")
+
+    # Fallback: check if interface is UP and has an IP
+    try:
+        result = subprocess.run(
+            ['ip', 'link', 'show', interface_name],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            return 'state UP' in result.stdout
+    except Exception:
+        pass
+
+    return False
+
+
+def gather_ethernet_interfaces(default_interface: str = 'eth0') -> List[Dict]:
+    """Collect Ethernet interface metadata using nmcli + ip link fallbacks."""
+    interfaces: Dict[str, Dict] = {}
+
+    # Try nmcli first
+    try:
+        nmcli_result = subprocess.run(
+            ['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'dev', 'status'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if nmcli_result.returncode == 0:
+            for line in nmcli_result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+                parts = line.split(':', 3)
+                if len(parts) < 4:
+                    continue
+                device, dev_type, state, connection = parts
+                if dev_type != 'ethernet':
+                    continue
+                normalized_connection = connection if connection and connection != '--' else None
+                has_carrier = _check_ethernet_carrier(device)
+                interfaces[device] = {
+                    'name': device,
+                    'type': 'ethernet',
+                    'state': state or 'UNKNOWN',
+                    'is_default': device == default_interface,
+                    'connection': normalized_connection,
+                    'connected': (state or '').lower() == 'connected' and has_carrier,
+                    'has_carrier': has_carrier,
+                }
+    except Exception as exc:
+        logger.debug(f"nmcli dev status failed for ethernet: {exc}")
+
+    # Fallback to ip link show
+    try:
+        ip_result = subprocess.run(
+            ['ip', '-o', 'link', 'show'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if ip_result.returncode == 0:
+            for line in ip_result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+                name_match = re.match(r'\d+:\s+(\S+):', line)
+                if not name_match:
+                    continue
+                iface_name = name_match.group(1)
+                if not _ETHERNET_NAME_PATTERN.match(iface_name):
+                    continue
+
+                has_carrier = _check_ethernet_carrier(iface_name)
+                entry = interfaces.setdefault(iface_name, {
+                    'name': iface_name,
+                    'type': 'ethernet',
+                    'state': 'UNKNOWN',
+                    'is_default': iface_name == default_interface,
+                    'connection': None,
+                    'connected': False,
+                    'has_carrier': has_carrier,
+                })
+
+                state_match = re.search(r'state\s+(\w+)', line)
+                if state_match:
+                    entry['state'] = state_match.group(1)
+                    # Update connected status based on state and carrier
+                    entry['connected'] = entry['state'].upper() == 'UP' and has_carrier
+
+                mac_match = re.search(r'link/ether\s+([0-9a-f:]{17})', line)
+                if mac_match:
+                    entry['mac_address'] = mac_match.group(1)
+    except Exception as exc:
+        logger.debug(f"ip link show failed for ethernet: {exc}")
+
+    # Enrich with IPv4 details
+    for iface in interfaces.values():
+        ipv4 = _get_interface_ipv4_details(iface['name'])
+        iface['ip_address'] = ipv4.get('ip')
+        iface['cidr'] = ipv4.get('cidr')
+        iface['netmask'] = ipv4.get('netmask')
+        iface['network_cidr'] = ipv4.get('network')
+        iface.setdefault('mac_address', None)
+
+        # If we have an IP, we're likely connected
+        if iface['ip_address'] and iface.get('has_carrier'):
+            iface['connected'] = True
+
+    return sorted(interfaces.values(), key=lambda entry: entry['name'])
+
+
+def get_active_ethernet_interface() -> Optional[Dict]:
+    """Get the first active (connected with carrier) Ethernet interface."""
+    ethernet_interfaces = gather_ethernet_interfaces()
+    for iface in ethernet_interfaces:
+        if iface.get('connected') and iface.get('has_carrier') and iface.get('ip_address'):
+            return iface
+    return None
+
+
+def is_ethernet_available() -> bool:
+    """Check if any Ethernet interface is available and connected."""
+    return get_active_ethernet_interface() is not None
+
+
+def gather_all_network_interfaces(wifi_default: str = 'wlan0', ethernet_default: str = 'eth0') -> Dict[str, List[Dict]]:
+    """Gather both WiFi and Ethernet interfaces."""
+    return {
+        'wifi': gather_wifi_interfaces(wifi_default),
+        'ethernet': gather_ethernet_interfaces(ethernet_default),
+    }

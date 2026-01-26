@@ -11,20 +11,21 @@ import time
 from typing import Dict, List, Optional
 
 from logger import Logger
-from wifi_interfaces import gather_wifi_interfaces
+from wifi_interfaces import gather_wifi_interfaces, gather_ethernet_interfaces, is_ethernet_available, get_active_ethernet_interface
 
 logger = Logger(name="multi_interface", level=logging.INFO)
 
 
 @dataclass
 class ScanJob:
-    """Represents a scheduled Wi-Fi scanning job for a network interface."""
+    """Represents a scheduled Wi-Fi or Ethernet scanning job for a network interface."""
     interface: str
     ssid: str
     role: str
     ip_address: Optional[str] = None
     cidr: Optional[int] = None
     network_cidr: Optional[str] = None
+    interface_type: str = 'wifi'  # 'wifi' or 'ethernet'
 
 
 class NetworkContextRegistry:
@@ -68,7 +69,7 @@ class NetworkContextRegistry:
 
 
 class MultiInterfaceState:
-    """Tracks Wi-Fi interfaces and orchestrates multi-network scanning limits."""
+    """Tracks Wi-Fi and Ethernet interfaces and orchestrates multi-network scanning limits."""
 
     MODE_SINGLE = 'single'
     MODE_MULTI = 'multi'
@@ -78,9 +79,11 @@ class MultiInterfaceState:
         self.shared_data = shared_data
         self._lock = threading.RLock()
         self.interfaces: Dict[str, Dict] = {}
+        self.ethernet_interfaces: Dict[str, Dict] = {}
         raw_overrides = shared_data.config.get('wifi_scan_interface_overrides') or {}
         self.scan_overrides: Dict[str, bool] = {k: bool(v) for k, v in raw_overrides.items()}
         self.last_refresh = 0.0
+        self.ethernet_last_refresh = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -90,7 +93,109 @@ class MultiInterfaceState:
         default_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
         discovered = gather_wifi_interfaces(default_iface)
         self.sync_from_interfaces(discovered)
+        # Also refresh Ethernet interfaces
+        self.refresh_ethernet_interfaces()
         return discovered
+
+    def refresh_ethernet_interfaces(self) -> List[Dict]:
+        """Probe Ethernet interfaces and update cached state."""
+        default_eth = self.shared_data.config.get('ethernet_default_interface', 'eth0')
+        discovered = gather_ethernet_interfaces(default_eth)
+        self.sync_ethernet_interfaces(discovered)
+        return discovered
+
+    def sync_ethernet_interfaces(self, interfaces: List[Dict]):
+        """Sync Ethernet interface metadata."""
+        timestamp = time.time()
+        ethernet_scan_enabled = self.shared_data.config.get('ethernet_scan_enabled', True)
+        default_eth = self.shared_data.config.get('ethernet_default_interface', 'eth0')
+
+        with self._lock:
+            new_state: Dict[str, Dict] = {}
+            for iface in interfaces:
+                name = iface.get('name')
+                if not name:
+                    continue
+
+                has_carrier = iface.get('has_carrier', False)
+                is_connected = iface.get('connected', False)
+                ip_address = iface.get('ip_address')
+
+                # Determine if this interface can be used for scanning
+                can_scan = ethernet_scan_enabled and has_carrier and is_connected and ip_address
+
+                entry = {
+                    'name': name,
+                    'type': 'ethernet',
+                    'role': 'internal' if name == default_eth else 'external',
+                    'state': iface.get('state', 'UNKNOWN'),
+                    'connected': is_connected,
+                    'has_carrier': has_carrier,
+                    'ip_address': ip_address,
+                    'cidr': iface.get('cidr'),
+                    'network_cidr': iface.get('network_cidr'),
+                    'mac_address': iface.get('mac_address'),
+                    'scan_enabled': can_scan,
+                    'last_refresh': timestamp,
+                    'reason': None if can_scan else ('disabled' if not ethernet_scan_enabled else 'no_connection'),
+                }
+                new_state[name] = entry
+
+            self.ethernet_interfaces = new_state
+            self.ethernet_last_refresh = timestamp
+
+    def get_ethernet_status(self) -> Dict:
+        """Get current Ethernet interface status."""
+        with self._lock:
+            active_interface = None
+            for iface in self.ethernet_interfaces.values():
+                if iface.get('connected') and iface.get('has_carrier') and iface.get('ip_address'):
+                    active_interface = iface
+                    break
+
+            ethernet_scan_enabled = self.shared_data.config.get('ethernet_scan_enabled', True)
+            has_active_connection = active_interface is not None
+
+            return {
+                'available': bool(self.ethernet_interfaces),
+                'active': has_active_connection,
+                'active_interface': active_interface,
+                'interfaces': list(self.ethernet_interfaces.values()),
+                'scan_enabled': ethernet_scan_enabled,
+                'can_toggle_scan': has_active_connection,
+                'last_refresh': self.ethernet_last_refresh,
+            }
+
+    def set_ethernet_scan_enabled(self, enabled: bool) -> Dict:
+        """Enable or disable scanning over Ethernet."""
+        self.shared_data.config['ethernet_scan_enabled'] = bool(enabled)
+        self.shared_data.save_config()
+
+        # Refresh to apply new setting
+        self.refresh_ethernet_interfaces()
+        return self.get_ethernet_status()
+
+    def get_preferred_scan_interface(self) -> Optional[Dict]:
+        """
+        Get the preferred interface for scanning.
+        If Ethernet is available and preferred, use it. Otherwise use WiFi.
+        """
+        prefer_ethernet = self.shared_data.config.get('ethernet_prefer_over_wifi', True)
+        ethernet_scan_enabled = self.shared_data.config.get('ethernet_scan_enabled', True)
+
+        if prefer_ethernet and ethernet_scan_enabled:
+            with self._lock:
+                for iface in self.ethernet_interfaces.values():
+                    if iface.get('connected') and iface.get('has_carrier') and iface.get('ip_address'):
+                        return {**iface, 'preferred_reason': 'ethernet_preferred'}
+
+        # Fall back to WiFi
+        with self._lock:
+            for iface in self.interfaces.values():
+                if iface.get('connected') and iface.get('ip_address'):
+                    return {**iface, 'type': 'wifi', 'preferred_reason': 'wifi_fallback'}
+
+        return None
 
     def sync_from_interfaces(self, interfaces: List[Dict]):
         """Sync incoming interface metadata (from nmcli, wifi manager, or API)."""

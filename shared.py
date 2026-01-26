@@ -416,6 +416,12 @@ class SharedData:
             "wifi_initial_connection_timeout": 60,
             "wifi_failsafe_cycle_limit": 10,
 
+            "__title_ethernet__": "Ethernet/LAN Settings",
+            "ethernet_default_interface": "eth0",
+            "ethernet_scan_enabled": True,
+            "ethernet_prefer_over_wifi": True,
+            "ethernet_auto_detect": True,
+
             "network_device_retention_days": 14,
 
             "__title_network_intelligence__": "Network Intelligence",
@@ -939,6 +945,11 @@ class SharedData:
         try:
             logger.info("Loading configuration...")
             if os.path.exists(self.shared_config_json):
+                # Check if file is empty before attempting to parse
+                if os.path.getsize(self.shared_config_json) == 0:
+                    logger.warning("Configuration file is empty, creating new one with default values...")
+                    self.save_config()
+                    return
                 with open(self.shared_config_json, 'r') as f:
                     config = json.load(f)
                     config = self._normalize_config_keys(config)
@@ -952,6 +963,10 @@ class SharedData:
                 self.save_config()
                 self.load_config()
                 time.sleep(2)
+        except json.JSONDecodeError as e:
+            logger.error(f"Configuration file is corrupted or invalid JSON: {e}")
+            logger.warning("Recreating configuration file with default values...")
+            self.save_config()
         except FileNotFoundError:
             logger.error("Error loading configuration: File not found.")
             self.save_config()

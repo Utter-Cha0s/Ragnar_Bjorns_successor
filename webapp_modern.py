@@ -49,7 +49,7 @@ try:
 except ImportError:
     pandas_available = False
 from init_shared import shared_data
-from wifi_interfaces import gather_wifi_interfaces
+from wifi_interfaces import gather_wifi_interfaces, gather_ethernet_interfaces, is_ethernet_available, get_active_ethernet_interface
 from utils import WebUtils
 from logger import Logger
 from threat_intelligence import ThreatIntelligenceFusion
@@ -6330,6 +6330,137 @@ def update_wifi_scan_mode():
         logger.error(f"Failed to update scan mode: {exc}")
         return jsonify({'success': False, 'error': 'Unable to update scan mode'}), 500
     return jsonify({'success': True, 'state': updated})
+
+
+# ==============================================================================
+# Ethernet/LAN API Endpoints
+# ==============================================================================
+
+@app.route('/api/ethernet/status', methods=['GET'])
+def get_ethernet_status():
+    """Get current Ethernet interface status."""
+    try:
+        state = _get_multi_interface_state()
+        # Refresh Ethernet interfaces
+        state.refresh_ethernet_interfaces()
+        status = state.get_ethernet_status()
+        return jsonify({'success': True, **status})
+    except Exception as exc:
+        logger.error(f"Failed to get Ethernet status: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ethernet/interfaces', methods=['GET'])
+def get_ethernet_interfaces():
+    """Get all Ethernet interfaces."""
+    try:
+        default_eth = shared_data.config.get('ethernet_default_interface', 'eth0')
+        interfaces = gather_ethernet_interfaces(default_eth)
+        return jsonify({
+            'success': True,
+            'interfaces': interfaces,
+            'default_interface': default_eth,
+        })
+    except Exception as exc:
+        logger.error(f"Failed to get Ethernet interfaces: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ethernet/scan-enabled', methods=['GET'])
+def get_ethernet_scan_enabled():
+    """Get Ethernet scanning enabled status."""
+    try:
+        state = _get_multi_interface_state()
+        state.refresh_ethernet_interfaces()
+        status = state.get_ethernet_status()
+        return jsonify({
+            'success': True,
+            'scan_enabled': status.get('scan_enabled', True),
+            'active': status.get('active', False),
+            'can_toggle': status.get('can_toggle_scan', False),
+            'active_interface': status.get('active_interface'),
+        })
+    except Exception as exc:
+        logger.error(f"Failed to get Ethernet scan status: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ethernet/scan-enabled', methods=['POST'])
+def set_ethernet_scan_enabled():
+    """Enable or disable scanning over Ethernet/LAN."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        enabled = payload.get('enabled', True)
+
+        # Validate that we have an active Ethernet connection before enabling
+        state = _get_multi_interface_state()
+        state.refresh_ethernet_interfaces()
+        status = state.get_ethernet_status()
+
+        if enabled and not status.get('active'):
+            return jsonify({
+                'success': False,
+                'error': 'No active Ethernet connection. Cannot enable LAN scanning.',
+                'can_toggle': False,
+            }), 400
+
+        updated_status = state.set_ethernet_scan_enabled(enabled)
+        return jsonify({
+            'success': True,
+            'scan_enabled': updated_status.get('scan_enabled'),
+            'active': updated_status.get('active'),
+            'can_toggle': updated_status.get('can_toggle_scan'),
+            'message': f"Ethernet scanning {'enabled' if enabled else 'disabled'}",
+        })
+    except Exception as exc:
+        logger.error(f"Failed to set Ethernet scan enabled: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ethernet/prefer', methods=['POST'])
+def set_ethernet_preference():
+    """Set whether Ethernet should be preferred over WiFi for scanning."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        prefer = payload.get('prefer', True)
+
+        shared_data.config['ethernet_prefer_over_wifi'] = bool(prefer)
+        shared_data.save_config()
+
+        state = _get_multi_interface_state()
+        preferred = state.get_preferred_scan_interface()
+
+        return jsonify({
+            'success': True,
+            'prefer_ethernet': bool(prefer),
+            'current_preferred': preferred,
+            'message': f"Ethernet {'will be' if prefer else 'will not be'} preferred over WiFi",
+        })
+    except Exception as exc:
+        logger.error(f"Failed to set Ethernet preference: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/network/preferred-interface', methods=['GET'])
+def get_preferred_scan_interface():
+    """Get the preferred interface for network scanning (Ethernet or WiFi)."""
+    try:
+        state = _get_multi_interface_state()
+        state.refresh_from_system()  # Refresh both WiFi and Ethernet
+        preferred = state.get_preferred_scan_interface()
+        ethernet_status = state.get_ethernet_status()
+
+        return jsonify({
+            'success': True,
+            'preferred': preferred,
+            'ethernet_available': ethernet_status.get('active', False),
+            'ethernet_preferred': shared_data.config.get('ethernet_prefer_over_wifi', True),
+            'ethernet_scan_enabled': shared_data.config.get('ethernet_scan_enabled', True),
+        })
+    except Exception as exc:
+        logger.error(f"Failed to get preferred interface: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
 
 @app.route('/api/wifi/scan', methods=['POST'])
 def scan_wifi_networks():
