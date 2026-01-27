@@ -975,6 +975,11 @@ EOF
     # Enable and start services
     systemctl daemon-reload
     systemctl enable ragnar.service
+    if systemctl start ragnar.service; then
+        log "SUCCESS" "Started ragnar.service"
+    else
+        log "WARNING" "Failed to start ragnar.service (it will start on next boot); check logs"
+    fi
 
     check_success "Services setup completed"
 }
@@ -1404,7 +1409,9 @@ main() {
     echo "   - Default Gateway: 172.20.2.1"
     echo "   - DNS Servers: 8.8.8.8, 8.8.4.4"
     echo "2. Web interface will be available at: http://[device-ip]:8000"
-    echo "3. Make sure your e-Paper HAT (2.13-inch) is properly connected"
+    if [ "$SERVER_INSTALL" != true ]; then
+        echo "3. Make sure your e-Paper HAT (2.13-inch) is properly connected"
+    fi
     echo -e "\n${BLUE}To update ragnar in the future:${NC}"
     echo "   cd /home/ragnar/Ragnar"
     echo "   sudo git stash  # Save any local changes"

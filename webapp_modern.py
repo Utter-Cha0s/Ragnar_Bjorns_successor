@@ -1989,6 +1989,57 @@ def update_wifi_network_data():
                     if data['failed_ping_count'] >= MAX_FAILED_PINGS - 3:
                         logger.debug(f"Device {ip} failed ping {data['failed_ping_count']}/{MAX_FAILED_PINGS} - keeping alive per 15-ping rule")
 
+        # Time-based status transitions (offline/lost)
+        offline_hours = shared_data.config.get('network_offline_hours', 3)
+        lost_days = shared_data.config.get('network_lost_days', 8)
+        try:
+            offline_hours = float(offline_hours)
+        except (TypeError, ValueError):
+            offline_hours = 3
+        try:
+            lost_days = float(lost_days)
+        except (TypeError, ValueError):
+            lost_days = 8
+
+        offline_cutoff = datetime.now() - timedelta(hours=offline_hours)
+        lost_cutoff = datetime.now() - timedelta(days=lost_days)
+        hosts_lost = []
+        hosts_offline = []
+
+        for ip, data in existing_data.items():
+            status = 'Online'
+            last_seen_str = data.get('last_seen') or current_time
+            try:
+                last_seen_dt = datetime.fromisoformat(last_seen_str)
+            except Exception:
+                last_seen_dt = datetime.now()
+
+            if last_seen_dt < lost_cutoff:
+                status = 'Lost'
+                data['alive'] = False
+                hosts_lost.append(ip)
+            elif last_seen_dt < offline_cutoff:
+                status = 'Offline'
+                data['alive'] = False
+                hosts_offline.append(ip)
+            else:
+                status = 'Online' if data.get('alive', True) else 'Offline'
+
+            data['status'] = status
+
+        # Resolve findings for lost/offline hosts (network intelligence)
+        if hasattr(shared_data, 'network_intelligence') and shared_data.network_intelligence:
+            for ip in hosts_lost:
+                try:
+                    shared_data.network_intelligence.resolve_host_findings(ip, reason="host_lost_timeout")
+                except Exception as e:
+                    logger.error(f"Failed to resolve findings for lost host {ip}: {e}")
+            for ip in hosts_offline:
+                try:
+                    shared_data.network_intelligence.resolve_host_findings(ip, reason="host_offline_timeout")
+                except Exception as e:
+                    logger.error(f"Failed to resolve findings for offline host {ip}: {e}")
+
         # Add new devices discovered via ARP that aren't in our data yet
         for ip, arp_data in arp_hosts.items():
             if ip not in existing_data:
@@ -7502,18 +7553,26 @@ def get_network_intelligence():
 
 @app.route('/api/vulnerabilities/grouped')
 def get_vulnerabilities_grouped():
-    """Get vulnerabilities grouped by IP address with summary statistics"""
+    """Get vulnerabilities grouped by IP address with summary statistics.
+
+    Query param: status=open|resolved|all (default: open)
+    """
     try:
+        status_filter = request.args.get('status', 'open').lower()
+        if status_filter not in ('open', 'resolved', 'all'):
+            status_filter = 'open'
+
         if (hasattr(shared_data, 'network_intelligence') and 
             shared_data.network_intelligence and 
             shared_data.config.get('network_intelligence_enabled', True)):
             
-            # Get network-aware findings for dashboard
-            dashboard_findings = shared_data.network_intelligence.get_active_findings_for_dashboard()
+            # Get filtered vulnerabilities for dashboard
+            vulnerabilities = shared_data.network_intelligence.get_vulnerabilities_for_network(status_filter)
+            network_id = shared_data.network_intelligence.get_current_network_id()
             
             # Group vulnerabilities by host IP
             grouped = {}
-            for vuln_id, vuln_info in dashboard_findings['vulnerabilities'].items():
+            for vuln_id, vuln_info in vulnerabilities.items():
                 host = vuln_info['host']
                 
                 if host not in grouped:
@@ -7549,7 +7608,8 @@ def get_vulnerabilities_grouped():
                     'vulnerability': vuln_info['vulnerability'],
                     'severity': severity,
                     'discovered': vuln_info['discovered'],
-                    'status': vuln_info['status']
+                    'status': vuln_info.get('status', 'active'),
+                    'resolved': vuln_info.get('resolved')
                 })
             
             # Convert sets to lists for JSON serialization
@@ -7572,10 +7632,11 @@ def get_vulnerabilities_grouped():
             return jsonify({
                 'grouped_vulnerabilities': grouped_list,
                 'total_hosts': len(grouped_list),
-                'total_vulnerabilities': dashboard_findings['counts']['vulnerabilities'],
+                'total_vulnerabilities': sum(len(h['vulnerabilities']) for h in grouped_list),
                 'network_context': {
-                    'current_network': dashboard_findings['network_id'],
-                    'network_name': dashboard_findings.get('network_name', 'Unknown')
+                    'current_network': network_id,
+                    'network_name': 'Unknown',
+                    'status_filter': status_filter
                 }
             })
         else:
