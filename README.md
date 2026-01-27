@@ -22,7 +22,8 @@ The fastest way to install Ragnar is using the automatic installation script :
 # Download and run the installer
 wget https://raw.githubusercontent.com/PierreGode/Ragnar/main/install_ragnar.sh
 sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
-# Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
+# On Raspberry Pi you'll be asked if an e-Paper HAT is attached; on other hardware it auto-selects server (headless) mode.
+# It may take a while as many packages and modules will be installed. Reboot when it finishes.
 ```
 
 
@@ -130,8 +131,15 @@ The fastest way to install Ragnar is using the automatic installation script :
 # Download and run the installer
 wget https://raw.githubusercontent.com/PierreGode/Ragnar/main/install_ragnar.sh
 sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
-# Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
+# On Raspberry Pi you'll be asked if an e-Paper HAT is attached; on other hardware it auto-selects server (headless) mode.
+# It may take a while as many packages and modules will be installed. Reboot when it finishes.
 ```
+
+**Installer intelligence (new):**
+- Auto-detects distro/package manager (apt, dnf, pacman, zypper) and CPU arch to install the right package names.
+- Profiles: **Pi + e-Paper** (display enabled) or **Server/Headless** (no display, modern web UI only). Non-Pi hardware defaults to Server/Headless.
+- On Pi, the only prompt is whether an e-Paper HAT is connected; everything else runs end-to-end automatically.
+- Uses PiWheels on ARM, retries mirrors, and skips Pi-only steps on other hardware.
 
 For **detailed information** about **installation** process go to [Install Guide](INSTALL.md)
 

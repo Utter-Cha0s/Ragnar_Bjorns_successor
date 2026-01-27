@@ -31,6 +31,18 @@ HEADLESS_MODE=false
 HEADLESS_VARIANT=""
 HEADLESS_VARIANT_LABEL=""
 RAGNAR_ENTRYPOINT="Ragnar.py"
+SERVER_INSTALL=false
+
+# Platform detection variables
+OS_ID=""
+OS_VERSION_ID=""
+OS_PRETTY=""
+PKG_MGR=""
+UPDATE_CMD=""
+INSTALL_CMD=""
+PKG_PRESENT_CMD=""
+ARCH=""
+IS_ARM=false
 
 if [[ "$1" == "--help" ]]; then
     echo "Usage: sudo ./install_ragnar.sh"
@@ -92,6 +104,122 @@ check_success() {
     fi
 }
 
+# Detect OS, package manager, and hardware architecture
+detect_platform() {
+    if [ -f "/etc/os-release" ]; then
+        # shellcheck source=/dev/null
+        . /etc/os-release
+        OS_ID=${ID:-unknown}
+        OS_VERSION_ID=${VERSION_ID:-unknown}
+        OS_PRETTY=${PRETTY_NAME:-$OS_ID}
+    else
+        OS_ID="unknown"
+        OS_VERSION_ID="unknown"
+        OS_PRETTY="unknown"
+    fi
+
+    ARCH=$(uname -m 2>/dev/null || echo "unknown")
+    case "$ARCH" in
+        arm*|aarch64) IS_ARM=true ;;
+        *) IS_ARM=false ;;
+    esac
+
+    case "$OS_ID" in
+        debian|ubuntu|raspbian)
+            PKG_MGR="apt"
+            UPDATE_CMD="apt-get update -y"
+            INSTALL_CMD="apt-get install -y"
+            PKG_PRESENT_CMD="dpkg -s"
+            ;;
+        fedora|rhel|centos|rocky|almalinux)
+            PKG_MGR="dnf"
+            UPDATE_CMD="dnf makecache -y"
+            INSTALL_CMD="dnf install -y"
+            PKG_PRESENT_CMD="rpm -q"
+            ;;
+        arch|manjaro|endeavouros)
+            PKG_MGR="pacman"
+            UPDATE_CMD="pacman -Sy --noconfirm"
+            INSTALL_CMD="pacman -S --noconfirm"
+            PKG_PRESENT_CMD="pacman -Qi"
+            ;;
+        opensuse*|sles)
+            PKG_MGR="zypper"
+            UPDATE_CMD="zypper refresh"
+            INSTALL_CMD="zypper install -y"
+            PKG_PRESENT_CMD="rpm -q"
+            ;;
+        *)
+            PKG_MGR="apt"
+            UPDATE_CMD="apt-get update -y"
+            INSTALL_CMD="apt-get install -y"
+            PKG_PRESENT_CMD="dpkg -s"
+            log "WARNING" "Unknown distro; defaulting to apt commands"
+            ;;
+    esac
+
+    log "INFO" "Detected platform: ${OS_PRETTY} (id=${OS_ID}, version=${OS_VERSION_ID}), arch=${ARCH}, pkg_mgr=${PKG_MGR}"
+}
+
+# Provide package-name fallbacks across distros
+package_candidates() {
+    local pkg=$1
+    case "$pkg" in
+        libopenjp2-7) echo "libopenjp2-7 openjpeg2 openjpeg" ;;
+        libopenblas-dev) echo "libopenblas-dev openblas-devel openblas" ;;
+        bluez-tools) echo "bluez-tools bluez-utils bluez-utils-compat" ;;
+        dhcpcd5) echo "dhcpcd5 dhcpcd" ;;
+        python3-pil) echo "python3-pil python3-pillow python-pillow pillow" ;;
+        libjpeg-dev) echo "libjpeg-dev libjpeg-turbo-devel libjpeg-turbo" ;;
+        libpng-dev) echo "libpng-dev libpng-devel" ;;
+        python3-dev) echo "python3-dev python3-devel" ;;
+        libffi-dev) echo "libffi-dev libffi-devel" ;;
+        libssl-dev) echo "libssl-dev openssl-devel" ;;
+        libgpiod-dev) echo "libgpiod-dev libgpiod-devel libgpiod" ;;
+        libi2c-dev) echo "libi2c-dev i2c-tools i2c-tools-devel" ;;
+        build-essential) echo "build-essential base-devel" ;;
+        python3-sqlalchemy) echo "python3-sqlalchemy python-sqlalchemy sqlalchemy" ;;
+        python3-pandas) echo "python3-pandas python-pandas pandas" ;;
+        python3-numpy) echo "python3-numpy python-numpy numpy" ;;
+        network-manager) echo "network-manager NetworkManager networkmanager" ;;
+        iproute2) echo "iproute2 iproute" ;;
+        iputils-ping) echo "iputils-ping iputils" ;;
+        libatlas-base-dev) echo "libatlas-base-dev atlas-devel" ;;
+        arp-scan) echo "arp-scan arpscan" ;;
+        bluez) echo "bluez" ;;
+        hostapd) echo "hostapd" ;;
+        dnsmasq) echo "dnsmasq" ;;
+        wireless-tools) echo "wireless-tools" ;;
+        bridge-utils) echo "bridge-utils" ;;
+        *) echo "$pkg" ;;
+    esac
+}
+
+# Install a package using detected package manager with fallbacks
+install_package() {
+    local pkg=$1
+    local candidates
+    candidates=$(package_candidates "$pkg")
+
+    for candidate in $candidates; do
+        if [ -n "$PKG_PRESENT_CMD" ] && eval "$PKG_PRESENT_CMD $candidate" >/dev/null 2>&1; then
+            log "INFO" "${candidate} already present"
+            return 0
+        fi
+    done
+
+    for candidate in $candidates; do
+        if eval "$INSTALL_CMD $candidate" >/dev/null 2>&1; then
+            log "SUCCESS" "Installed ${candidate}"
+            return 0
+        fi
+        log "WARNING" "Failed to install ${candidate}, trying next fallback"
+    done
+
+    log "WARNING" "Could not install package ${pkg} on ${PKG_MGR}"
+    return 1
+}
+
 # # Check system compatibility
 # check_system_compatibility() {
 #     log "INFO" "Checking system compatibility..."
@@ -112,10 +240,12 @@ check_system_compatibility() {
     log "INFO" "Checking system compatibility..."
     local should_ask_confirmation=false
     
-    # Check if running on Raspberry Pi
-    if ! grep -q "Raspberry Pi" /proc/cpuinfo; then
-        log "WARNING" "This system might not be a Raspberry Pi"
-        should_ask_confirmation=true
+    # Check if running on Raspberry Pi (skip this warning for server installs)
+    if [ "$SERVER_INSTALL" != true ]; then
+        if ! grep -q "Raspberry Pi" /proc/cpuinfo; then
+            log "WARNING" "This system might not be a Raspberry Pi"
+            should_ask_confirmation=true
+        fi
     fi
 
     # Check RAM (Raspberry Pi Zero has 512MB RAM)
@@ -170,22 +300,29 @@ check_system_compatibility() {
     fi
 
     # Check if system is 32-bit ARM (armhf) or 64-bit
-    architecture=$(dpkg --print-architecture)
-    if [ "$architecture" != "armhf" ] && [ "$architecture" != "arm64" ] && [ "$architecture" != "aarch64" ]; then
-        log "WARNING" "Different architecture detected. Expected: armhf or arm64, Found: ${architecture}"
+    if command -v dpkg >/dev/null 2>&1; then
+        architecture=$(dpkg --print-architecture)
+    else
+        architecture=${ARCH:-$(uname -m 2>/dev/null)}
+    fi
+
+    if [ "$architecture" != "armhf" ] && [ "$architecture" != "arm64" ] && [ "$architecture" != "aarch64" ] && [ "$architecture" != "armv7l" ] && [ "$architecture" != "armv6l" ]; then
+        log "WARNING" "Different architecture detected. Expected: armhf/arm64, Found: ${architecture}"
         echo -e "${YELLOW}This script was tested with armhf/arm64 architectures${NC}"
         should_ask_confirmation=true
     else
         log "SUCCESS" "Architecture check passed: ${architecture}"
     fi
     
-    # Additional Pi Zero specific checks if possible
-    if ! (grep -q "Pi Zero" /proc/cpuinfo || grep -q "BCM2835" /proc/cpuinfo); then
-        log "WARNING" "Could not confirm if this is a Raspberry Pi Zero"
-        echo -e "${YELLOW}This script was designed for Raspberry Pi Zero${NC}"
-        should_ask_confirmation=true
-    else
-        log "SUCCESS" "Raspberry Pi Zero detected"
+    # Additional Pi Zero specific checks only when targeting Pi profile
+    if [ "$SERVER_INSTALL" != true ]; then
+        if ! (grep -q "Pi Zero" /proc/cpuinfo || grep -q "BCM2835" /proc/cpuinfo); then
+            log "WARNING" "Could not confirm if this is a Raspberry Pi Zero"
+            echo -e "${YELLOW}This script was designed for Raspberry Pi Zero${NC}"
+            should_ask_confirmation=true
+        else
+            log "SUCCESS" "Raspberry Pi Zero detected"
+        fi
     fi
 
     if [ "$should_ask_confirmation" = true ]; then
@@ -246,11 +383,12 @@ check_internet() {
 # Install system dependencies
 install_dependencies() {
     log "INFO" "Installing system dependencies..."
-    
-    # Update package list
-    apt-get update
-    
-    # List of required packages based on README
+
+    [ -z "$PKG_MGR" ] && detect_platform
+
+    eval "$UPDATE_CMD"
+    check_success "Package index updated via ${PKG_MGR}"
+
     packages=(
         "python3-pip"
         "wget"
@@ -260,9 +398,8 @@ install_dependencies() {
         "libopenjp2-7"
         "nmap"
         "libopenblas-dev"
-        "bluez-tools"
         "bluez"
-        "dhcpcd5"
+        "bluez-tools"
         "bridge-utils"
         "python3-pil"
         "libjpeg-dev"
@@ -271,8 +408,6 @@ install_dependencies() {
         "python3-dev"
         "libffi-dev"
         "libssl-dev"
-        "libgpiod-dev"
-        "libi2c-dev"
         "build-essential"
         "python3-sqlalchemy"
         "python3-pandas"
@@ -287,34 +422,21 @@ install_dependencies() {
         "sqlite3"
         "arp-scan"
     )
-    
-    # Optional packages that may not be available in all distributions
-    optional_packages=(
-        "libatlas-base-dev"
-    )
-    
-    # Optional packages that may not be available in all distributions
-    optional_packages=(
-        "libatlas-base-dev"
-    )
-    
-    # Install required packages
+
+    if [ "$IS_ARM" = true ]; then
+        packages+=("libgpiod-dev" "libi2c-dev" "dhcpcd5")
+    fi
+
+    optional_packages=("libatlas-base-dev")
+
     for package in "${packages[@]}"; do
-        log "INFO" "Installing $package..."
-        apt-get install -y "$package"
-        check_success "Installed $package"
+        install_package "$package"
     done
-    
-    # Install optional packages (don't fail if unavailable)
+
     for package in "${optional_packages[@]}"; do
-        log "INFO" "Attempting to install optional package: $package..."
-        if apt-get install -y "$package" 2>/dev/null; then
-            log "SUCCESS" "Installed optional package: $package"
-        else
-            log "WARNING" "Optional package $package not available (this is OK, using alternatives)"
-        fi
+        install_package "$package" || log "WARNING" "Optional package $package unavailable on ${PKG_MGR}"
     done
-    
+
     # Ensure vulners.nse script is available for vulnerability scanning
     local vulners_path="/usr/share/nmap/scripts/vulners.nse"
     if [ ! -f "$vulners_path" ]; then
@@ -332,10 +454,10 @@ install_dependencies() {
 
     # Update nmap scripts
     nmap --script-updatedb
-    
+
     # Configure WiFi interfaces
     log "INFO" "Configuring WiFi interfaces..."
-    
+
     # Ensure WiFi is not blocked by rfkill
     if command -v rfkill >/dev/null 2>&1; then
         rfkill unblock wifi
@@ -343,7 +465,7 @@ install_dependencies() {
     else
         log "WARNING" "rfkill not available - WiFi blocking status unknown"
     fi
-    
+
     # Create basic wpa_supplicant configuration if it doesn't exist
     if [ ! -f "/etc/wpa_supplicant/wpa_supplicant.conf" ]; then
         log "INFO" "Creating basic wpa_supplicant configuration..."
@@ -359,7 +481,7 @@ EOF
         chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
         log "SUCCESS" "Created basic wpa_supplicant configuration"
     fi
-    
+
     check_success "Dependencies installation completed"
 }
 
@@ -438,12 +560,14 @@ EOF
 # Configure SPI and I2C
 configure_interfaces() {
     log "INFO" "Configuring SPI and I2C interfaces..."
-    
-    # Enable SPI and I2C using raspi-config
-    raspi-config nonint do_spi 0
-    raspi-config nonint do_i2c 0
-    
-    check_success "Interface configuration completed"
+
+    if command -v raspi-config >/dev/null 2>&1; then
+        raspi-config nonint do_spi 0
+        raspi-config nonint do_i2c 0
+        check_success "Interface configuration completed"
+    else
+        log "WARNING" "raspi-config not available; skipping SPI/I2C configuration (non-Raspberry Pi hardware)"
+    fi
 }
 
 # Setup ragnar
@@ -527,7 +651,7 @@ setup_ragnar() {
         log "INFO" "Installing Pillow..."
         pip3 install --break-system-packages "Pillow>=10.0.0" || {
             log "WARNING" "Pillow pip install failed, using system package python3-pil"
-            apt-get install -y python3-pil
+            install_package "python3-pil"
         }
     else
         log "INFO" "Pillow already installed, skipping"
@@ -1097,158 +1221,171 @@ clean_exit() {
 main() {
     log "INFO" "Starting ragnar installation..."
 
+    detect_platform
+
     # Check if script is run as root
     if [ "$(id -u)" -ne 0 ]; then
         echo "This script must be run as root. Please use 'sudo'."
         exit 1
     fi
 
-    echo -e "${BLUE}ragnar Installation Options:${NC}"
-    echo "1. Full installation (recommended)"
-    echo "2. Custom installation"
-    read -p "Choose an option (1/2): " install_option
-
-    # Install Waveshare e-Paper library first (needed for auto-detection)
-    echo -e "\n${BLUE}Installing Waveshare e-Paper library...${NC}"
-    log "INFO" "Installing Waveshare e-Paper library for auto-detection"
-    
-    cd /home/$ragnar_USER 2>/dev/null || mkdir -p /home/$ragnar_USER
-    if [ ! -d "e-Paper" ]; then
-        git clone --depth=1 --filter=blob:none --sparse https://github.com/waveshareteam/e-Paper.git
-        cd e-Paper
-        git sparse-checkout set RaspberryPi_JetsonNano
-        cd RaspberryPi_JetsonNano/python
-        pip3 install . --break-system-packages >/dev/null 2>&1
-        log "SUCCESS" "Installed Waveshare e-Paper library"
-    else
-        log "INFO" "Waveshare e-Paper repository already exists"
-        cd e-Paper/RaspberryPi_JetsonNano/python
-        pip3 install . --break-system-packages >/dev/null 2>&1
+    local is_pi=false
+    if grep -qi "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
+        is_pi=true
     fi
 
-    # Ask user if e-Paper is connected before attempting detection
-    echo -e "\n${BLUE}E-Paper Display Auto-Detection${NC}"
-    echo -e "${YELLOW}I will now attempt to detect your e-Paper display.${NC}"
-    echo -e "${YELLOW}This requires the display to be properly connected via SPI.${NC}"
-    read -p "Is your e-Paper display connected? (y/n): " epd_connected
-    
-    if [[ "$epd_connected" =~ ^[Yy]$ ]]; then
-        # Auto-detect E-Paper Display
-        echo -e "\n${BLUE}Detecting E-Paper Display...${NC}"
-        log "INFO" "Attempting to auto-detect E-Paper display"
-        
-        EPD_VERSION=""
-        EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
-        
-        for version in "${EPD_VERSIONS[@]}"; do
-            if python3 -c "from waveshare_epd import ${version}; epd = ${version}.EPD(); epd.init(); epd.sleep()" 2>/dev/null; then
-                EPD_VERSION="$version"
-                echo -e "${GREEN}✓ Detected E-Paper display: $EPD_VERSION${NC}"
-                log "SUCCESS" "Auto-detected E-Paper display: $EPD_VERSION"
-                break
-            fi
-        done
-        
-        # If auto-detection failed despite user saying it's connected
-        if [ -z "$EPD_VERSION" ]; then
-            echo -e "${YELLOW}⚠ Could not auto-detect E-Paper display${NC}"
-            echo -e "${YELLOW}This might be due to:${NC}"
-            echo -e "${YELLOW}  - SPI interface not enabled${NC}"
-            echo -e "${YELLOW}  - Incorrect wiring${NC}"
-            echo -e "${YELLOW}  - Unsupported display model${NC}"
-            log "WARNING" "E-Paper auto-detection failed despite user confirmation"
-        fi
-    else
-        echo -e "${YELLOW}Skipping auto-detection${NC}"
-        log "INFO" "User indicated e-Paper display is not connected, skipping auto-detection"
-    fi
-    
-    # If auto-detection failed or was skipped, show manual selection
-    if [ -z "$EPD_VERSION" ]; then
-        
-        echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
-        echo "1. epd2in13"
-        echo "2. epd2in13_V2"
-        echo "3. epd2in13_V3"
-        echo "4. epd2in13_V4"
-        echo "5. epd2in7"
-        echo "6. No e-Paper (headless install)"
-        
-        while true; do
-            read -p "Enter your choice (1-6): " epd_choice
-            case $epd_choice in
-                1) EPD_VERSION="epd2in13"; break;;
-                2) EPD_VERSION="epd2in13_V2"; break;;
-                3) EPD_VERSION="epd2in13_V3"; break;;
-                4) EPD_VERSION="epd2in13_V4"; break;;
-                5) EPD_VERSION="epd2in7"; break;;
-                6)
-                    select_headless_variant
-                    EPD_VERSION=""
-                    break
-                    ;;
-                *) echo -e "${RED}Invalid choice. Please select 1-6.${NC}";;
-            esac
-        done
+    if [ "$is_pi" = true ]; then
+        echo -e "${BLUE}Installation profile:${NC}"
+        echo "1. Install on Raspberry Pi with e-Paper"
+        echo "2. Server install (headless, auto-detect packages, no e-Paper)"
+        read -p "Choose an option (1/2): " profile_choice
 
-        if [ "$HEADLESS_MODE" = true ]; then
-            log "INFO" "No e-Paper selected. Headless mode enabled (${HEADLESS_VARIANT_LABEL:-unspecified})."
+        case $profile_choice in
+            1)
+                SERVER_INSTALL=false
+                HEADLESS_MODE=false
+                HEADLESS_VARIANT=""
+                HEADLESS_VARIANT_LABEL=""
+                RAGNAR_ENTRYPOINT="Ragnar.py"
+                ;;
+            2)
+                SERVER_INSTALL=true
+                HEADLESS_MODE=true
+                HEADLESS_VARIANT="server"
+                HEADLESS_VARIANT_LABEL="Server install"
+                RAGNAR_ENTRYPOINT="headlessRagnar.py"
+                log "INFO" "Server install selected on Raspberry Pi hardware"
+                ;;
+            *)
+                log "ERROR" "Invalid option selected"
+                clean_exit 1
+                ;;
+        esac
+    else
+        # Non-Pi hardware defaults to server install with auto-detect
+        SERVER_INSTALL=true
+        HEADLESS_MODE=true
+        HEADLESS_VARIANT="server"
+        HEADLESS_VARIANT_LABEL="Server install"
+        RAGNAR_ENTRYPOINT="headlessRagnar.py"
+        log "INFO" "Non-Raspberry hardware detected; using server install profile"
+    fi
+
+    # Only attempt e-paper setup when not in server/headless profile
+    if [ "$HEADLESS_MODE" != true ]; then
+        echo -e "\n${BLUE}Installing Waveshare e-Paper library...${NC}"
+        log "INFO" "Installing Waveshare e-Paper library for auto-detection"
+        
+        cd /home/$ragnar_USER 2>/dev/null || mkdir -p /home/$ragnar_USER
+        if [ ! -d "e-Paper" ]; then
+            git clone --depth=1 --filter=blob:none --sparse https://github.com/waveshareteam/e-Paper.git
+            cd e-Paper
+            git sparse-checkout set RaspberryPi_JetsonNano
+            cd RaspberryPi_JetsonNano/python
+            pip3 install . --break-system-packages >/dev/null 2>&1
+            log "SUCCESS" "Installed Waveshare e-Paper library"
         else
-            log "INFO" "Manually selected E-Paper Display version: $EPD_VERSION"
+            log "INFO" "Waveshare e-Paper repository already exists"
+            cd e-Paper/RaspberryPi_JetsonNano/python
+            pip3 install . --break-system-packages >/dev/null 2>&1
         fi
+
+        echo -e "\n${BLUE}E-Paper Display Auto-Detection${NC}"
+        echo -e "${YELLOW}I will now attempt to detect your e-Paper display.${NC}"
+        echo -e "${YELLOW}This requires the display to be properly connected via SPI.${NC}"
+        read -p "Is your e-Paper display connected? (y/n): " epd_connected
+        
+        if [[ "$epd_connected" =~ ^[Yy]$ ]]; then
+            echo -e "\n${BLUE}Detecting E-Paper Display...${NC}"
+            log "INFO" "Attempting to auto-detect E-Paper display"
+            
+            EPD_VERSION=""
+            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
+            
+            for version in "${EPD_VERSIONS[@]}"; do
+                if python3 -c "from waveshare_epd import ${version}; epd = ${version}.EPD(); epd.init(); epd.sleep()" 2>/dev/null; then
+                    EPD_VERSION="$version"
+                    echo -e "${GREEN}✓ Detected E-Paper display: $EPD_VERSION${NC}"
+                    log "SUCCESS" "Auto-detected E-Paper display: $EPD_VERSION"
+                    break
+                fi
+            done
+            
+            if [ -z "$EPD_VERSION" ]; then
+                echo -e "${YELLOW}⚠ Could not auto-detect E-Paper display${NC}"
+                echo -e "${YELLOW}This might be due to:${NC}"
+                echo -e "${YELLOW}  - SPI interface not enabled${NC}"
+                echo -e "${YELLOW}  - Incorrect wiring${NC}"
+                echo -e "${YELLOW}  - Unsupported display model${NC}"
+                log "WARNING" "E-Paper auto-detection failed despite user confirmation"
+            fi
+        else
+            echo -e "${YELLOW}Skipping auto-detection${NC}"
+            log "INFO" "User indicated e-Paper display is not connected, skipping auto-detection"
+        fi
+        
+        if [ -z "$EPD_VERSION" ]; then
+            echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
+            echo "1. epd2in13"
+            echo "2. epd2in13_V2"
+            echo "3. epd2in13_V3"
+            echo "4. epd2in13_V4"
+            echo "5. epd2in7"
+            echo "6. No e-Paper (headless install)"
+            
+            while true; do
+                read -p "Enter your choice (1-6): " epd_choice
+                case $epd_choice in
+                    1) EPD_VERSION="epd2in13"; break;;
+                    2) EPD_VERSION="epd2in13_V2"; break;;
+                    3) EPD_VERSION="epd2in13_V3"; break;;
+                    4) EPD_VERSION="epd2in13_V4"; break;;
+                    5) EPD_VERSION="epd2in7"; break;;
+                    6)
+                        select_headless_variant
+                        EPD_VERSION=""
+                        break
+                        ;;
+                    *) echo -e "${RED}Invalid choice. Please select 1-6.${NC}";;
+                esac
+            done
+
+            if [ "$HEADLESS_MODE" = true ]; then
+                log "INFO" "No e-Paper selected. Headless mode enabled (${HEADLESS_VARIANT_LABEL:-unspecified})."
+            else
+                log "INFO" "Manually selected E-Paper Display version: $EPD_VERSION"
+            fi
+        fi
+    else
+        log "INFO" "Headless/server profile selected; skipping e-Paper detection"
     fi
 
-    case $install_option in
-        1)
-            CURRENT_STEP=1; show_progress "Checking system compatibility"
-            check_system_compatibility
-            
-            CURRENT_STEP=2; show_progress "Checking internet connectivity"
-            check_internet
+    CURRENT_STEP=1; show_progress "Checking system compatibility"
+    check_system_compatibility
+    
+    CURRENT_STEP=2; show_progress "Checking internet connectivity"
+    check_internet
 
-            CURRENT_STEP=3; show_progress "Installing system dependencies"
-            install_dependencies
+    CURRENT_STEP=3; show_progress "Installing system dependencies"
+    install_dependencies
 
-            CURRENT_STEP=4; show_progress "Configuring system limits"
-            configure_system_limits
+    CURRENT_STEP=4; show_progress "Configuring system limits"
+    configure_system_limits
 
-            CURRENT_STEP=5; show_progress "Configuring interfaces"
-            configure_interfaces
+    CURRENT_STEP=5; show_progress "Configuring interfaces"
+    configure_interfaces
 
-            CURRENT_STEP=6; show_progress "Setting up ragnar"
-            setup_ragnar
+    CURRENT_STEP=6; show_progress "Setting up ragnar"
+    setup_ragnar
 
-            CURRENT_STEP=7; show_progress "Configuring USB Gadget"
-            configure_usb_gadget
+    CURRENT_STEP=7; show_progress "Configuring USB Gadget"
+    configure_usb_gadget
 
-            CURRENT_STEP=8; show_progress "Setting up services"
-            setup_services
+    CURRENT_STEP=8; show_progress "Setting up services"
+    setup_services
 
-            CURRENT_STEP=8; show_progress "Verifying installation"
-            verify_installation
-            ;;
-        2)
-            echo "Custom installation - select components to install:"
-            read -p "Install dependencies? (y/n): " deps
-            read -p "Configure system limits? (y/n): " limits
-            read -p "Configure interfaces? (y/n): " interfaces
-            read -p "Setup ragnar? (y/n): " ragnar
-            read -p "Configure USB Gadget? (y/n): " usb_gadget
-            read -p "Setup services? (y/n): " services
-
-            [ "$deps" = "y" ] && install_dependencies
-            [ "$limits" = "y" ] && configure_system_limits
-            [ "$interfaces" = "y" ] && configure_interfaces
-            [ "$ragnar" = "y" ] && setup_ragnar
-            [ "$usb_gadget" = "y" ] && configure_usb_gadget
-            [ "$services" = "y" ] && setup_services
-            verify_installation
-            ;;
-        *)
-            log "ERROR" "Invalid option selected"
-            clean_exit 1
-            ;;
-    esac
+    CURRENT_STEP=8; show_progress "Verifying installation"
+    verify_installation
 
     # Git repository is preserved for updates
     # Use .gitignore to protect runtime data and configurations
