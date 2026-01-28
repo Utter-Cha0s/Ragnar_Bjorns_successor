@@ -278,43 +278,12 @@ check_system_compatibility() {
         log "SUCCESS" "Disk space check passed: ${available_space}MB available"
     fi
 
-    # Check OS version
+    # OS/version is now accepted broadly; log for visibility only
     if [ -f "/etc/os-release" ]; then
         source /etc/os-release
-        
-        # Verify if it's Raspbian
-        if [ "$NAME" != "Debian GNU/Linux" ]; then
-            log "WARNING" "Different OS detected. Recommended: Debian GNU/Linux, Found: ${NAME}"
-            echo -e "${YELLOW}Your system is not running Debian GNU/Linux.${NC}"
-            should_ask_confirmation=true
-        fi
-        
-        # Compare versions (expecting trixie = 13)
-        expected_version="13"
-        version_major="${VERSION_ID%%.*}"
-
-        # Only attempt numeric comparison when we have an integer major version
-        if ! [[ "$version_major" =~ ^[0-9]+$ ]]; then
-            log "WARNING" "Could not parse OS version (${VERSION_ID}); skipping numeric comparison"
-            echo -e "${YELLOW}This script was tested with Raspbian GNU/Linux 13 (trixie)${NC}"
-            echo -e "${YELLOW}Current system: ${PRETTY_NAME}${NC}"
-            should_ask_confirmation=true
-        elif [ "$version_major" -ne "$expected_version" ]; then
-            log "WARNING" "Different OS version detected"
-            echo -e "${YELLOW}This script was tested with Raspbian GNU/Linux 13 (trixie)${NC}"
-            echo -e "${YELLOW}Current system: ${PRETTY_NAME}${NC}"
-            if [ "$version_major" -lt "$expected_version" ]; then
-                echo -e "${YELLOW}Your system version ($version_major) is older than recommended ($expected_version)${NC}"
-            elif [ "$version_major" -gt "$expected_version" ]; then
-                echo -e "${YELLOW}Your system version ($version_major) is newer than tested ($expected_version)${NC}"
-            fi
-            should_ask_confirmation=true
-        else
-            log "SUCCESS" "OS version check passed: ${PRETTY_NAME}"
-        fi
+        log "INFO" "OS detected: ${PRETTY_NAME} (${VERSION_ID})"
     else
-        log "WARNING" "Could not determine OS version (/etc/os-release not found)"
-        should_ask_confirmation=true
+        log "INFO" "OS detected: unknown (no /etc/os-release)"
     fi
 
     # Architecture compatibility: supported across tested platforms, log for visibility only
