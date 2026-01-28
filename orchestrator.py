@@ -402,10 +402,14 @@ class Orchestrator:
         try:
             multi_state.refresh_from_system()
         except Exception as exc:
-            logger.debug(f"Unable to refresh multi-interface state: {exc}")
+            logger.warning(f"Unable to refresh multi-interface state: {exc}")
 
-        if multi_state.is_multi_mode_enabled():
+        is_multi = multi_state.is_multi_mode_enabled()
+        logger.debug(f"Multi-interface scan check: is_multi={is_multi}, scan_mode={multi_state.get_scan_mode()}")
+        
+        if is_multi:
             jobs = multi_state.get_scan_jobs()
+            logger.info(f"Multi-scan mode enabled, got {len(jobs)} scan jobs from {len(multi_state.interfaces)} interfaces")
             if not jobs:
                 logger.info("Multi-network scanning enabled but no eligible interfaces detected - running default scan")
                 self.network_scanner.scan()
