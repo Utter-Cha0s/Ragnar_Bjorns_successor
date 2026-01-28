@@ -609,6 +609,7 @@ function setupAutoRefresh() {
     autoRefreshIntervals.connect = setInterval(() => {
         if (currentTab === 'connect') {
             refreshWifiStatus();
+            refreshEthernetStatus();
         }
         if (currentTab === 'pentest' && manualModeActive) {
             refreshBluetoothStatus();
@@ -832,6 +833,7 @@ async function loadTabData(tabName) {
             } else {
                 await refreshWifiStatus().catch(err => console.warn('WiFi refresh failed:', err));
                 await refreshBluetoothStatus().catch(err => console.warn('Bluetooth refresh failed:', err));
+                await refreshEthernetStatus().catch(err => console.warn('Ethernet refresh failed:', err));
             }
             break;
         case 'pentest':
@@ -3588,7 +3590,8 @@ async function loadConnectData() {
         console.log('Loading connect tab, refreshing connectivity status...');
         await Promise.all([
             refreshWifiStatus(),
-            refreshBluetoothStatus()
+            refreshBluetoothStatus(),
+            refreshEthernetStatus()
         ]);
     } catch (error) {
         console.error('Error loading connect data:', error);
@@ -4683,6 +4686,73 @@ async function refreshWifiStatus() {
     setWifiInterfaceMetadata([]);
         renderDashboardMultiInterfaceSummary(null);
         renderConnectTabMultiInterface(null);
+    }
+}
+
+async function refreshEthernetStatus() {
+    const indicator = document.getElementById('lan-status-indicator');
+    const info = document.getElementById('lan-info');
+    const list = document.getElementById('lan-interface-list');
+    if (!indicator || !info) {
+        return;
+    }
+
+    try {
+        const data = await fetchAPI('/api/ethernet/status');
+        const active = data && data.active_interface ? data.active_interface : null;
+        const interfaces = data && Array.isArray(data.interfaces) ? data.interfaces : [];
+
+        if (active) {
+            const ipLabel = active.ip_address ? ` • ${escapeHtml(active.ip_address)}` : '';
+            indicator.textContent = 'LAN Connected';
+            indicator.className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-200';
+            info.textContent = `Connected via ${active.name}${ipLabel}`;
+        } else if (data && data.available) {
+            indicator.textContent = 'No Link';
+            indicator.className = 'text-sm px-2 py-1 rounded bg-amber-700 text-amber-200';
+            info.textContent = 'Ethernet detected but no active link or IP address.';
+        } else {
+            indicator.textContent = 'Unavailable';
+            indicator.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-300';
+            info.textContent = 'No Ethernet interfaces detected on this host.';
+        }
+
+        if (list) {
+            if (interfaces.length === 0) {
+                list.innerHTML = '<div class="text-xs text-gray-500">No Ethernet interfaces found.</div>';
+                list.classList.remove('hidden');
+            } else {
+                const markup = interfaces.map(iface => {
+                    const statusLabel = iface.connected && iface.has_carrier ? 'Online' : 'Offline';
+                    const statusClass = iface.connected && iface.has_carrier ? 'text-green-300' : 'text-gray-400';
+                    const ipLabel = iface.ip_address ? ` • ${escapeHtml(iface.ip_address)}` : '';
+                    const networkLabel = iface.network_cidr ? ` • ${escapeHtml(iface.network_cidr)}` : '';
+                    return `
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <div class="text-sm font-semibold text-white">${escapeHtml(iface.name || 'eth')}</div>
+                                <div class="text-xs text-gray-400">${escapeHtml(iface.state || 'UNKNOWN')}${networkLabel}</div>
+                            </div>
+                            <div class="text-right text-xs ${statusClass}">
+                                <div>${statusLabel}${ipLabel}</div>
+                                ${iface.mac_address ? `<div class="text-[11px] text-gray-500">${escapeHtml(iface.mac_address)}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                list.innerHTML = markup;
+                list.classList.remove('hidden');
+            }
+        }
+    } catch (error) {
+        console.error('Error refreshing Ethernet status:', error);
+        indicator.textContent = 'Error';
+        indicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
+        info.textContent = 'Unable to read LAN status.';
+        if (list) {
+            list.innerHTML = '<div class="text-xs text-red-300">Failed to load Ethernet details.</div>';
+            list.classList.remove('hidden');
+        }
     }
 }
 
@@ -9630,6 +9700,7 @@ window.restartService = restartService;
 window.rebootSystem = rebootSystem;
 window.startAPMode = startAPMode;
 window.refreshWifiStatus = refreshWifiStatus;
+window.refreshEthernetStatus = refreshEthernetStatus;
 window.updateManualPorts = updateManualPorts;
 window.executeManualAttack = executeManualAttack;
 window.startOrchestrator = startOrchestrator;

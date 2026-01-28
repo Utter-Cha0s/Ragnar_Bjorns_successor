@@ -20,7 +20,7 @@ import signal
 from datetime import datetime, timedelta
 from logger import Logger
 from db_manager import get_db
-from wifi_interfaces import gather_wifi_interfaces
+from wifi_interfaces import gather_wifi_interfaces, get_active_ethernet_interface
 
 
 class WiFiManager:
@@ -113,6 +113,10 @@ class WiFiManager:
         self.should_exit = False
         self.monitoring_thread = None
         self.startup_complete = False
+
+        # Connection tracking
+        self.last_connection_type = None  # 'wifi', 'ethernet', or None
+        self.last_ethernet_interface = None
         
         # Load configuration
         self.load_wifi_config()
@@ -492,14 +496,19 @@ class WiFiManager:
                 self.logger.info(f"Waiting {remaining_wait:.1f}s more before starting endless loop (30 seconds after boot)")
                 time.sleep(remaining_wait)
         
-        # Check if we're already connected before starting the loop
-        if self.check_wifi_connection():
-            self.wifi_connected = True
-            self.shared_data.wifi_connected = True
-            self._set_current_ssid(self.get_current_ssid())
-            self._trigger_initial_ping_sweep(self.current_ssid)
-            self.logger.info(f"Already connected to Wi-Fi network: {self.current_ssid}")
-            self._save_connection_state(self.current_ssid, True)
+        # Check if we're already connected before starting the loop (Ethernet preferred)
+        if self.check_network_connectivity():
+            if self.last_connection_type == 'wifi':
+                self.wifi_connected = True
+                self.shared_data.wifi_connected = True
+                self._set_current_ssid(self.get_current_ssid())
+                self._trigger_initial_ping_sweep(self.current_ssid)
+                self.logger.info(f"Already connected to Wi-Fi network: {self.current_ssid}")
+                self._save_connection_state(self.current_ssid, True)
+            elif self.last_connection_type == 'ethernet':
+                self.wifi_connected = False
+                self.shared_data.wifi_connected = False
+                self.logger.info("Active Ethernet connection detected; using LAN as default and skipping Wi-Fi search.")
             self.last_wifi_validation = time.time()
             self.startup_complete = True
             self.endless_loop_active = True
@@ -999,6 +1008,42 @@ class WiFiManager:
             self.logger.info("Starting AP mode due to connection loss")
             self.start_ap_mode()
     
+    def check_network_connectivity(self):
+        """Check for any usable network link, preferring Ethernet when present."""
+        try:
+            try:
+                ethernet_iface = get_active_ethernet_interface()
+            except Exception as exc:
+                ethernet_iface = None
+                self.logger.debug(f"Ethernet check failed: {exc}")
+
+            self.last_ethernet_interface = ethernet_iface
+            lan_active = bool(ethernet_iface)
+
+            if lan_active:
+                self.last_connection_type = 'ethernet'
+                self.shared_data.lan_connected = True
+                self.shared_data.lan_interface = ethernet_iface.get('name') if ethernet_iface else None
+                self.shared_data.lan_ip = ethernet_iface.get('ip_address') if ethernet_iface else None
+                self.shared_data.network_connected = True
+                self.shared_data.wifi_connected = False
+                return True
+
+            # No LAN; fall back to Wi-Fi detection
+            self.shared_data.lan_connected = False
+            self.shared_data.lan_interface = None
+            self.shared_data.lan_ip = None
+
+            wifi_connected = self.check_wifi_connection()
+            self.last_connection_type = 'wifi' if wifi_connected else None
+            self.shared_data.network_connected = wifi_connected
+            self.shared_data.wifi_connected = wifi_connected
+            return wifi_connected
+        except Exception as exc:
+            self.logger.error(f"Error checking network connectivity: {exc}")
+            self.shared_data.network_connected = False
+            return False
+
     def check_wifi_connection(self):
         """Check if Wi-Fi is connected using multiple methods"""
         try:
@@ -1038,7 +1083,7 @@ class WiFiManager:
                                                 capture_output=True, text=True, timeout=3)
                     if route_result.returncode == 0 and 'dev wlan0' in route_result.stdout:
                         return True
-            except:
+            except Exception:
                 pass  # Network unreachable, that's fine
             
             return False
@@ -2280,11 +2325,14 @@ port=0
     def get_status(self):
         """Get current Wi-Fi manager status with real-time SSID check"""
         # Always get fresh connection status and SSID
+        network_connected = self.check_network_connectivity()
         wifi_connected = self.check_wifi_connection()
         current_ssid = self.get_current_ssid() if wifi_connected else None
-        
+
         # Update internal state
         self.wifi_connected = wifi_connected
+        self.shared_data.wifi_connected = wifi_connected
+        self.shared_data.network_connected = network_connected
         if current_ssid:
             self._set_current_ssid(current_ssid)
         elif not wifi_connected:
@@ -2292,6 +2340,10 @@ port=0
         
         status = {
             'wifi_connected': wifi_connected,
+            'network_connected': network_connected,
+            'connection_type': self.last_connection_type if self.last_connection_type else ('wifi' if wifi_connected else None),
+            'lan_connected': bool(self.last_ethernet_interface),
+            'lan_interface': self.last_ethernet_interface,
             'ap_mode_active': self.ap_mode_active,
             'current_ssid': current_ssid,
             'known_networks_count': len(self.known_networks),
