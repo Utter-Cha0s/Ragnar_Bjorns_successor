@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-Content \"C:\\\\Users\\\\pigo01\\\\OneDrive - Signup Software AB\\\\Documents\\\\GitHub\\\\Ragnar\\\\config\\\\shared_config.json\" -Raw)",
+      "Bash(python3:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(for:*)",
+      "Bash(do python3 -m py_compile \"$f\")",
+      "Bash(echo:*)",
+      "Bash(done)"
+    ]
+  }
+}

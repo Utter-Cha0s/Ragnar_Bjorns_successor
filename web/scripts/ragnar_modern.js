@@ -42,6 +42,7 @@ const RELEASE_GATE_DEFAULT_MESSAGE = 'A controlled release is rolling out. Updat
 let releaseGateState = { enabled: false, message: RELEASE_GATE_DEFAULT_MESSAGE };
 let releaseGateResolver = null;
 let releaseGatePendingPromise = null;
+let threatIntelStatusFilter = 'open';
 
 const configMetadata = {
     manual_mode: {
@@ -359,8 +360,10 @@ document.addEventListener('DOMContentLoaded', function() {
     setupAutoRefresh();
     setupEpaperAutoRefresh();
     setupEventListeners();
+    initializeThreatIntelFilters();
     initializePwnUI();
     initializePwnagotchiVisibility();
+    handleHeadlessMode();
 });
 
 
@@ -606,6 +609,7 @@ function setupAutoRefresh() {
     autoRefreshIntervals.connect = setInterval(() => {
         if (currentTab === 'connect') {
             refreshWifiStatus();
+            refreshEthernetStatus();
         }
         if (currentTab === 'pentest' && manualModeActive) {
             refreshBluetoothStatus();
@@ -662,6 +666,23 @@ function initializeMobileMenu() {
     }
 }
 
+function initializeThreatIntelFilters() {
+    const buttons = document.querySelectorAll('.threat-intel-filter-btn');
+    if (!buttons || buttons.length === 0) {
+        return;
+    }
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const status = btn.getAttribute('data-status');
+            setThreatIntelFilter(status);
+        });
+    });
+
+    // Ensure initial visual state matches default filter without reloading data
+    setThreatIntelFilter(threatIntelStatusFilter, { skipReload: true });
+}
+
 // ============================================================================
 // DATA LOADING
 // ============================================================================
@@ -679,9 +700,10 @@ async function loadInitialData() {
             updateDashboardStatus(quickData);
         }
         
-        // OPTIMIZATION: Defer WiFi status to after dashboard is visible
+        // OPTIMIZATION: Defer WiFi and Ethernet status to after dashboard is visible
         setTimeout(() => {
             refreshWifiStatus().catch(err => console.warn('WiFi status load failed:', err));
+            refreshEthernetStatus().catch(err => console.warn('Ethernet status load failed:', err));
         }, 200);
         
         // OPTIMIZATION: Defer console logs to much later (lowest priority)
@@ -812,6 +834,7 @@ async function loadTabData(tabName) {
             } else {
                 await refreshWifiStatus().catch(err => console.warn('WiFi refresh failed:', err));
                 await refreshBluetoothStatus().catch(err => console.warn('Bluetooth refresh failed:', err));
+                await refreshEthernetStatus().catch(err => console.warn('Ethernet refresh failed:', err));
             }
             break;
         case 'pentest':
@@ -891,9 +914,9 @@ async function loadDashboardData() {
         });
         
         if (data) {
-            updateDashboardStats(data);
-            // Also update status since quick endpoint includes it
+            // Update status block immediately
             updateDashboardStatus(data);
+            await refreshDashboardStatsForCurrentSelection({ forceRefresh: true, fallbackData: data });
         }
         
         // Load AI insights if configured
@@ -1096,7 +1119,9 @@ async function updateNetworkStatusBanner() {
 
 async function loadStableNetworkData() {
     try {
-        const data = await fetchAPI('/api/network/stable');
+        const { network } = getSelectedDashboardNetworkKey() || {};
+        const query = network ? `/api/network/stable?network=${encodeURIComponent(network)}` : '/api/network/stable';
+        const data = await fetchAPI(query);
         
         if (data.success) {
             displayStableNetworkTable(data);
@@ -1333,7 +1358,7 @@ async function startRealtimeScan() {
         startBtn.disabled = true;
         startBtn.innerHTML = '⏳ Starting...';
         
-        const response = await fetch('/api/scan/start-realtime', {
+        const response = await networkAwareFetch('/api/scan/start-realtime', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1581,7 +1606,7 @@ async function triggerDeepScan(ip, options = {}) {
         }
         console.log('   Request body:', JSON.stringify(requestBody));
         
-        const response = await fetch('/api/scan/deep', {
+        const response = await networkAwareFetch('/api/scan/deep', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -2404,7 +2429,7 @@ function updateHostInTable(hostData) {
 
 async function scanSingleHost(ip) {
     try {
-        const response = await fetch('/api/scan/host', {
+        const response = await networkAwareFetch('/api/scan/host', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -2472,7 +2497,7 @@ async function loadAttackLogs(options = {}) {
 
     attackLogsInFlight = (async () => {
         try {
-            const response = await fetch('/api/attack?limit=200&days=7', { headers });
+            const response = await networkAwareFetch('/api/attack?limit=200&days=7', { headers });
 
             if (response.status === 304) {
                 console.debug('Attack logs unchanged; skipping DOM update');
@@ -3566,7 +3591,8 @@ async function loadConnectData() {
         console.log('Loading connect tab, refreshing connectivity status...');
         await Promise.all([
             refreshWifiStatus(),
-            refreshBluetoothStatus()
+            refreshBluetoothStatus(),
+            refreshEthernetStatus()
         ]);
     } catch (error) {
         console.error('Error loading connect data:', error);
@@ -3659,6 +3685,76 @@ function updatePwnToggleAvailability(isHeadless) {
         if (warning) {
             warning.classList.add('hidden');
         }
+    }
+}
+
+// ============================================================================
+// HEADLESS MODE DETECTION AND MANAGEMENT
+// ============================================================================
+
+/**
+ * Detect and handle headless mode (server installations without e-paper display)
+ * Headless mode hides E-Paper related UI elements
+ */
+async function handleHeadlessMode() {
+    try {
+        const response = await fetch('/api/system/headless');
+        const data = await response.json();
+        
+        const isHeadless = data.headless === true || data.is_headless === true;
+        headlessMode = isHeadless;
+        
+        if (isHeadless) {
+            console.log('[Headless] Headless mode detected - hiding E-Paper UI elements');
+            applyHeadlessVisibility(true);
+        } else {
+            console.log('[Headless] Display mode detected - E-Paper UI elements visible');
+            applyHeadlessVisibility(false);
+        }
+        
+        // Update Pwnagotchi toggle availability based on headless mode
+        updatePwnToggleAvailability(isHeadless);
+        
+    } catch (error) {
+        // If endpoint doesn't exist or fails, assume not headless (default behavior)
+        console.log('[Headless] Detection failed, assuming display mode:', error.message);
+        headlessMode = false;
+        applyHeadlessVisibility(false);
+    }
+}
+
+/**
+ * Apply headless mode visibility settings to UI elements
+ * @param {boolean} isHeadless - Whether the system is in headless mode
+ */
+function applyHeadlessVisibility(isHeadless) {
+    // Find all elements that require a display (E-Paper)
+    const displayElements = document.querySelectorAll('.requires-display');
+    
+    if (isHeadless) {
+        // Hide all E-Paper related elements
+        displayElements.forEach(el => {
+            el.style.display = 'none';
+            el.setAttribute('data-hidden-by-headless', 'true');
+        });
+        
+        console.log(`[Headless] Hidden ${displayElements.length} E-Paper UI elements`);
+        
+        // If user is currently on E-Paper tab, redirect to dashboard
+        if (currentTab === 'epaper') {
+            console.log('[Headless] Redirecting from E-Paper tab to dashboard');
+            showTab('dashboard');
+        }
+    } else {
+        // Show all E-Paper related elements
+        displayElements.forEach(el => {
+            if (el.getAttribute('data-hidden-by-headless') === 'true') {
+                el.style.display = '';
+                el.removeAttribute('data-hidden-by-headless');
+            }
+        });
+        
+        console.log(`[Headless] Restored ${displayElements.length} E-Paper UI elements`);
     }
 }
 
@@ -4194,7 +4290,7 @@ async function verifyServiceRestart() {
         
         try {
             // Try to fetch the stats endpoint as a health check
-            const response = await fetch('/api/stats', {
+            const response = await networkAwareFetch('/api/stats', {
                 method: 'GET',
                 headers: { 'Content-Type': 'application/json' },
                 timeout: 5000
@@ -4458,11 +4554,23 @@ async function startAPMode() {
 
 async function refreshWifiStatus() {
     try {
-        const data = await fetchAPI('/api/wifi/status');
+        let activeInterface = getActiveWifiInterface();
+        const statusQuery = activeInterface
+            ? `/api/wifi/status?interface=${encodeURIComponent(activeInterface)}`
+            : '/api/wifi/status';
+        const data = await fetchAPI(statusQuery);
         console.log('Wi-Fi status data received:', data);
+        const multiState = data.multi_interface || null;
+        wifiMultiInterfaceState = multiState;
+        if (multiState && Array.isArray(multiState.interfaces)) {
+            setWifiInterfaceMetadata(multiState.interfaces);
+        } else if (Array.isArray(data.interfaces)) {
+            setWifiInterfaceMetadata(data.interfaces);
+        }
         
         const statusIndicator = document.getElementById('wifi-status-indicator');
         const wifiInfo = document.getElementById('wifi-info');
+        const connectedList = document.getElementById('wifi-connected-list');
         
         if (!statusIndicator || !wifiInfo) {
             console.error('Wi-Fi status elements not found in DOM');
@@ -4471,6 +4579,21 @@ async function refreshWifiStatus() {
         }
         
         console.log('Wi-Fi status elements found, updating...');
+
+        if (!activeInterface && data.interface) {
+            activeInterface = setSelectedWifiInterface(data.interface, { skipRefresh: true });
+        }
+        if (Array.isArray(data.interfaces)) {
+            renderWifiInterfaceSwitch(data.interfaces);
+        }
+        const interfaceLabel = data.interface ? data.interface : activeInterface;
+        const ipBadge = data.ip_address ? ` (${data.ip_address})` : '';
+        
+        // Update primary connection state for WiFi
+        primaryConnectionState.wifiConnected = data.wifi_connected || false;
+        primaryConnectionState.wifiSsid = data.current_ssid || null;
+        primaryConnectionState.wifiInterface = interfaceLabel || null;
+        primaryConnectionState.wifiIp = data.ip_address || null;
         
         if (data.ap_mode_active) {
             const apMessage = `AP Mode Active: "${data.ap_ssid || 'Ragnar'}" | Connect to configure Wi-Fi`;
@@ -4479,21 +4602,77 @@ async function refreshWifiStatus() {
             statusIndicator.textContent = 'AP Mode';
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-orange-700 text-orange-300';
             wifiInfo.textContent = apMessage;
+            // In AP mode, WiFi is not really "connected" for scanning purposes
+            primaryConnectionState.wifiConnected = false;
         } else if (data.wifi_connected) {
             const ssid = data.current_ssid || 'Unknown Network';
-            const connectedMessage = `Connected to: ${ssid}`;
+            const connectedMessage = interfaceLabel
+                ? `Connected to: ${ssid} on ${interfaceLabel}${ipBadge}`
+                : `Connected to: ${ssid}`;
             console.log('Setting connected status:', connectedMessage);
             updateWifiStatus(connectedMessage, 'connected');
-            statusIndicator.textContent = 'Connected';
+            statusIndicator.textContent = interfaceLabel ? `${interfaceLabel} • Connected` : 'Connected';
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-300';
             wifiInfo.textContent = connectedMessage;
         } else {
             console.log('Setting disconnected status');
-            updateWifiStatus('Wi-Fi disconnected', 'disconnected');
-            statusIndicator.textContent = 'Disconnected';
+            const disconnectedMessage = interfaceLabel
+                ? `Wi-Fi disconnected on ${interfaceLabel}`
+                : 'Wi-Fi disconnected';
+            updateWifiStatus(disconnectedMessage, 'disconnected');
+            statusIndicator.textContent = interfaceLabel ? `${interfaceLabel} • Disconnected` : 'Disconnected';
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
-            wifiInfo.textContent = 'No Wi-Fi connection';
+            wifiInfo.textContent = disconnectedMessage;
         }
+        
+        // Update primary connection display after WiFi state is set
+        updatePrimaryConnectionDisplay();
+        
+        if (connectedList) {
+            const interfaces = Array.isArray(data.interfaces) ? data.interfaces : [];
+            const connectedAdapters = interfaces.filter(iface => iface && iface.connected);
+            const offlineAdapters = interfaces.filter(iface => iface && !iface.connected);
+
+            const renderRow = (iface, isOnline = false) => {
+                const ssid = iface && (iface.connected_ssid || iface.connection) ? escapeHtml(iface.connected_ssid || iface.connection) : 'No SSID';
+                const ipLabel = iface && iface.ip_address ? `<div class="text-[11px] text-gray-400">${escapeHtml(iface.ip_address)}</div>` : '';
+                const statusClass = isOnline ? 'text-green-400' : 'text-gray-500';
+                const statusLabel = isOnline ? 'Online' : 'Offline';
+                const detailLabel = isOnline
+                    ? `SSID: ${ssid}`
+                    : escapeHtml(iface?.state || 'Unavailable');
+                return `
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">${escapeHtml(iface?.name || 'Unknown')}</div>
+                            <div class="text-xs text-gray-400">${detailLabel}</div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-xs ${statusClass}">${statusLabel}</div>
+                            ${ipLabel}
+                        </div>
+                    </div>
+                `;
+            };
+
+            let listMarkup = '<div class="text-[11px] uppercase tracking-wide text-gray-400">Connected Adapters</div>';
+            if (connectedAdapters.length > 0) {
+                listMarkup += connectedAdapters.map(iface => renderRow(iface, true)).join('');
+            } else {
+                listMarkup += '<div class="text-xs text-gray-500">No active Wi-Fi connections</div>';
+            }
+
+            if (offlineAdapters.length > 0) {
+                listMarkup += '<div class="text-[11px] uppercase tracking-wide text-gray-400 mt-3 border-t border-slate-700 pt-2">Other Adapters</div>';
+                listMarkup += offlineAdapters.map(iface => renderRow(iface, false)).join('');
+            }
+
+            connectedList.innerHTML = listMarkup;
+            connectedList.classList.remove('hidden');
+        }
+
+        renderDashboardMultiInterfaceSummary(multiState, data);
+        renderConnectTabMultiInterface(multiState);
         
         console.log('Wi-Fi status updated successfully');
             
@@ -4511,6 +4690,221 @@ async function refreshWifiStatus() {
         if (wifiInfo) {
             wifiInfo.textContent = 'Error checking Wi-Fi status';
         }
+        const connectedList = document.getElementById('wifi-connected-list');
+        if (connectedList) {
+            connectedList.innerHTML = '<div class="text-xs text-red-300">Unable to load adapter list</div>';
+            connectedList.classList.remove('hidden');
+        }
+        wifiMultiInterfaceState = null;
+    setWifiInterfaceMetadata([]);
+        renderDashboardMultiInterfaceSummary(null);
+        renderConnectTabMultiInterface(null);
+    }
+}
+
+// Track connectivity state for primary connection display
+let primaryConnectionState = {
+    lanConnected: false,
+    lanInterface: null,
+    lanIp: null,
+    wifiConnected: false,
+    wifiSsid: null,
+    wifiInterface: null,
+    wifiIp: null,
+    preferEthernet: true
+};
+
+function updatePrimaryConnectionDisplay() {
+    const iconEl = document.getElementById('primary-connection-icon');
+    const labelEl = document.getElementById('primary-connection-label');
+    const statusEl = document.getElementById('primary-connection-status');
+    const nameEl = document.getElementById('primary-connection-name');
+    const ipEl = document.getElementById('primary-connection-ip');
+    const interfaceSwitch = document.getElementById('wifi-dashboard-interface-switch');
+
+    if (!iconEl || !labelEl || !statusEl || !nameEl) {
+        return;
+    }
+
+    const wifiIcon = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
+    </svg>`;
+    
+    const lanIcon = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path>
+    </svg>`;
+
+    const st = primaryConnectionState;
+
+    // Determine primary connection: LAN if connected and preferred (or WiFi not available), else WiFi
+    const useLanAsPrimary = st.lanConnected && (st.preferEthernet || !st.wifiConnected);
+
+    if (useLanAsPrimary) {
+        // LAN is primary
+        iconEl.innerHTML = lanIcon;
+        iconEl.className = 'text-blue-400';
+        labelEl.textContent = 'LAN Connected';
+        statusEl.className = 'w-3 h-3 bg-green-500 rounded-full';
+        nameEl.textContent = `Connected via ${st.lanInterface || 'eth0'}`;
+        if (ipEl) {
+            ipEl.textContent = st.lanIp ? `IP: ${st.lanIp}` : '';
+        }
+        // Hide WiFi interface switch when LAN is primary
+        if (interfaceSwitch) {
+            interfaceSwitch.classList.add('hidden');
+        }
+    } else if (st.wifiConnected) {
+        // WiFi is primary
+        iconEl.innerHTML = wifiIcon;
+        iconEl.className = 'text-blue-400';
+        labelEl.textContent = 'WiFi Connected';
+        statusEl.className = 'w-3 h-3 bg-green-500 rounded-full';
+        const ifaceLabel = st.wifiInterface ? ` on ${st.wifiInterface}` : '';
+        nameEl.textContent = `${st.wifiSsid || 'Unknown Network'}${ifaceLabel}`;
+        if (ipEl) {
+            ipEl.textContent = st.wifiIp ? `IP: ${st.wifiIp}` : '';
+        }
+    } else {
+        // No connection
+        iconEl.innerHTML = wifiIcon;
+        iconEl.className = 'text-gray-500';
+        labelEl.textContent = 'No Connection';
+        statusEl.className = 'w-3 h-3 bg-red-500 rounded-full';
+        nameEl.textContent = 'No active network connection';
+        if (ipEl) {
+            ipEl.textContent = '';
+        }
+    }
+
+    // Update secondary cards
+    updateSecondaryConnectionCards();
+}
+
+function updateSecondaryConnectionCards() {
+    const st = primaryConnectionState;
+    
+    // Update WiFi secondary card
+    const wifiStatus = document.getElementById('wifi-status');
+    const wifiSsidDisplay = document.getElementById('wifi-ssid-display');
+    
+    if (wifiStatus) {
+        wifiStatus.className = st.wifiConnected 
+            ? 'w-3 h-3 bg-green-500 rounded-full' 
+            : 'w-3 h-3 bg-gray-600 rounded-full';
+    }
+    if (wifiSsidDisplay) {
+        if (st.wifiConnected) {
+            wifiSsidDisplay.textContent = st.wifiSsid || 'Connected';
+            wifiSsidDisplay.className = 'text-xs text-green-400 truncate';
+        } else {
+            wifiSsidDisplay.textContent = 'Not connected';
+            wifiSsidDisplay.className = 'text-xs text-gray-500 truncate';
+        }
+    }
+
+    // Update LAN secondary card
+    const lanStatus = document.getElementById('lan-status');
+    const lanInfoDisplay = document.getElementById('lan-info-display');
+    
+    if (lanStatus) {
+        lanStatus.className = st.lanConnected 
+            ? 'w-3 h-3 bg-green-500 rounded-full' 
+            : 'w-3 h-3 bg-gray-600 rounded-full';
+    }
+    if (lanInfoDisplay) {
+        if (st.lanConnected) {
+            const ifaceLabel = st.lanInterface || 'eth0';
+            lanInfoDisplay.textContent = st.lanIp ? `${ifaceLabel} • ${st.lanIp}` : ifaceLabel;
+            lanInfoDisplay.className = 'text-xs text-green-400 truncate';
+        } else {
+            lanInfoDisplay.textContent = 'Not connected';
+            lanInfoDisplay.className = 'text-xs text-gray-500 truncate';
+        }
+    }
+}
+
+async function refreshEthernetStatus() {
+    const indicator = document.getElementById('lan-status-indicator');
+    const info = document.getElementById('lan-info');
+    const list = document.getElementById('lan-interface-list');
+
+    try {
+        const data = await fetchAPI('/api/ethernet/status');
+        const active = data && data.active_interface ? data.active_interface : null;
+        const interfaces = data && Array.isArray(data.interfaces) ? data.interfaces : [];
+
+        // Update primary connection state for LAN
+        primaryConnectionState.lanConnected = !!active;
+        primaryConnectionState.lanInterface = active ? active.name : null;
+        primaryConnectionState.lanIp = active ? active.ip_address : null;
+        primaryConnectionState.preferEthernet = data && typeof data.prefer_ethernet === 'boolean' 
+            ? data.prefer_ethernet 
+            : true;
+
+        // Update primary connection display
+        updatePrimaryConnectionDisplay();
+
+        // Update Connect tab elements if they exist
+        if (indicator && info) {
+            if (active) {
+                const ipLabel = active.ip_address ? ` • ${escapeHtml(active.ip_address)}` : '';
+                indicator.textContent = 'LAN Connected';
+                indicator.className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-200';
+                info.textContent = `Connected via ${active.name}${ipLabel}`;
+            } else if (data && data.available) {
+                indicator.textContent = 'No Link';
+                indicator.className = 'text-sm px-2 py-1 rounded bg-amber-700 text-amber-200';
+                info.textContent = 'Ethernet detected but no active link or IP address.';
+            } else {
+                indicator.textContent = 'Unavailable';
+                indicator.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-300';
+                info.textContent = 'No Ethernet interfaces detected on this host.';
+            }
+        }
+
+        if (list) {
+            if (interfaces.length === 0) {
+                list.innerHTML = '<div class="text-xs text-gray-500">No Ethernet interfaces found.</div>';
+                list.classList.remove('hidden');
+            } else {
+                const markup = interfaces.map(iface => {
+                    const statusLabel = iface.connected && iface.has_carrier ? 'Online' : 'Offline';
+                    const statusClass = iface.connected && iface.has_carrier ? 'text-green-300' : 'text-gray-400';
+                    const ipLabel = iface.ip_address ? ` • ${escapeHtml(iface.ip_address)}` : '';
+                    const networkLabel = iface.network_cidr ? ` • ${escapeHtml(iface.network_cidr)}` : '';
+                    return `
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <div class="text-sm font-semibold text-white">${escapeHtml(iface.name || 'eth')}</div>
+                                <div class="text-xs text-gray-400">${escapeHtml(iface.state || 'UNKNOWN')}${networkLabel}</div>
+                            </div>
+                            <div class="text-right text-xs ${statusClass}">
+                                <div>${statusLabel}${ipLabel}</div>
+                                ${iface.mac_address ? `<div class="text-[11px] text-gray-500">${escapeHtml(iface.mac_address)}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                list.innerHTML = markup;
+                list.classList.remove('hidden');
+            }
+        }
+    } catch (error) {
+        console.error('Error refreshing Ethernet status:', error);
+        primaryConnectionState.lanConnected = false;
+        primaryConnectionState.lanInterface = null;
+        primaryConnectionState.lanIp = null;
+        updatePrimaryConnectionDisplay();
+        
+        if (indicator && info) {
+            indicator.textContent = 'Error';
+            indicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
+            info.textContent = 'Unable to read LAN status.';
+        }
+        if (list) {
+            list.innerHTML = '<div class="text-xs text-red-300">Failed to load Ethernet details.</div>';
+            list.classList.remove('hidden');
+        }
     }
 }
 
@@ -4526,6 +4920,719 @@ function updateWifiStatus(message, type = '') {
 
 let currentWifiNetworks = [];
 let selectedWifiNetwork = null;
+const WIFI_INTERFACE_STORAGE_KEY = 'wifi-selected-interface';
+let selectedWifiInterface = null;
+let wifiInterfaceMetadata = [];
+const WIFI_NETWORK_CACHE_KEY_DEFAULT = '__default__';
+const wifiNetworkResultCache = new Map();
+let wifiMultiInterfaceState = null;
+const DASHBOARD_STATS_CACHE_TTL = 4000;
+let dashboardStatsCache = { key: null, timestamp: 0, data: null };
+let dashboardStatsRequestState = null;
+
+function slugifyNetworkIdentifier(value) {
+    if (!value) {
+        return null;
+    }
+    let normalized = value;
+    if (typeof normalized.normalize === 'function') {
+        normalized = normalized.normalize('NFKD');
+    }
+    normalized = normalized.replace(/[\u0300-\u036f]/g, '');
+    normalized = normalized.replace(/[^A-Za-z0-9]+/g, '_');
+    normalized = normalized.replace(/^_+|_+$/g, '');
+    normalized = normalized.toLowerCase();
+    return normalized || null;
+}
+
+function normalizeInterfaceMetadata(entries) {
+    if (!Array.isArray(entries)) {
+        return [];
+    }
+    return entries.map(entry => {
+        if (!entry || typeof entry !== 'object') {
+            return entry;
+        }
+        if (entry.network_slug) {
+            return entry;
+        }
+        if (entry.connected_ssid) {
+            return {
+                ...entry,
+                network_slug: slugifyNetworkIdentifier(entry.connected_ssid)
+            };
+        }
+        return entry;
+    });
+}
+
+function setWifiInterfaceMetadata(entries) {
+    const previousList = wifiInterfaceMetadata || [];
+    let previousSlug = null;
+    if (selectedWifiInterface) {
+        const prevMeta = Array.isArray(previousList)
+            ? previousList.find(entry => entry && entry.name === selectedWifiInterface)
+            : null;
+        if (prevMeta) {
+            previousSlug = prevMeta.network_slug || (prevMeta.connected_ssid ? slugifyNetworkIdentifier(prevMeta.connected_ssid) : null);
+        }
+    }
+
+    wifiInterfaceMetadata = entries ? normalizeInterfaceMetadata(entries) : [];
+
+    if (selectedWifiInterface) {
+        const nextMeta = wifiInterfaceMetadata.find(entry => entry && entry.name === selectedWifiInterface);
+        const nextSlug = nextMeta ? (nextMeta.network_slug || (nextMeta.connected_ssid ? slugifyNetworkIdentifier(nextMeta.connected_ssid) : null)) : null;
+        if (previousSlug !== nextSlug) {
+            clearDashboardStatsCache();
+            refreshDashboardStatsForCurrentSelection({ forceRefresh: true }).catch(err => {
+                console.debug('Dashboard stats refresh failed after interface metadata update', err);
+            });
+        }
+    }
+}
+
+function clearDashboardStatsCache() {
+    dashboardStatsCache = { key: null, timestamp: 0, data: null };
+}
+
+async function fetchDashboardStatsForSelection(options = {}) {
+    const { forceRefresh = false } = options;
+    const { network } = getSelectedDashboardNetworkKey();
+    const cacheKey = network ? `network:${network}` : 'network:global';
+    const now = Date.now();
+
+    const cached = dashboardStatsCache;
+    if (!forceRefresh && cached.key === cacheKey && (now - cached.timestamp) < DASHBOARD_STATS_CACHE_TTL && cached.data) {
+        return cached.data;
+    }
+
+    if (!forceRefresh && dashboardStatsRequestState && dashboardStatsRequestState.key === cacheKey) {
+        return dashboardStatsRequestState.promise;
+    }
+
+    const query = network ? `/api/dashboard/stats?network=${encodeURIComponent(network)}` : '/api/dashboard/stats';
+    const requestPromise = (async () => {
+        try {
+            const payload = await fetchAPI(query);
+            dashboardStatsCache = { key: cacheKey, timestamp: Date.now(), data: payload };
+            return payload;
+        } finally {
+            if (dashboardStatsRequestState && dashboardStatsRequestState.key === cacheKey) {
+                dashboardStatsRequestState = null;
+            }
+        }
+    })();
+
+    dashboardStatsRequestState = { key: cacheKey, promise: requestPromise };
+    return requestPromise;
+}
+
+async function refreshDashboardStatsForCurrentSelection(options = {}) {
+    const { forceRefresh = false, fallbackData = null } = options;
+    try {
+        const stats = await fetchDashboardStatsForSelection({ forceRefresh });
+        if (stats) {
+            updateDashboardStats(stats);
+        } else if (fallbackData) {
+            updateDashboardStats(fallbackData);
+        }
+        return stats;
+    } catch (error) {
+        console.warn('Unable to refresh dashboard stats for selection', error);
+        if (fallbackData) {
+            updateDashboardStats(fallbackData);
+        }
+        throw error;
+    }
+}
+
+function formatInterfaceRole(role) {
+    if (!role) {
+        return 'Adapter';
+    }
+    if (role === 'internal') {
+        return 'Internal';
+    }
+    if (role === 'external') {
+        return 'External';
+    }
+    return role.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function formatInterfaceReason(reason) {
+    if (!reason) {
+        return '';
+    }
+    const labels = {
+        global_disabled: 'Multi-scan disabled',
+        user_disabled: 'Paused by user',
+        no_ssid: 'No SSID',
+        disconnected: 'Adapter offline'
+    };
+    return labels[reason] || reason.replace(/_/g, ' ');
+}
+
+function renderDashboardMultiInterfaceSummary(state, statusData = {}) {
+    const container = document.getElementById('wifi-dashboard-interfaces');
+    if (!container) {
+        return;
+    }
+
+    if (!state || !Array.isArray(state.interfaces) || state.interfaces.length === 0) {
+        container.innerHTML = '<div class="text-gray-500 text-[11px]">No additional adapters detected yet.</div>';
+        renderDashboardInterfaceSwitch(null);
+        return;
+    }
+
+    // Determine which interface is selected for dashboard display
+    const activeInterface = getActiveWifiInterface();
+    let selectedEntry = null;
+    if (activeInterface) {
+        selectedEntry = state.interfaces.find(entry => entry.name === activeInterface);
+    }
+    // Fallback: show first connected, else first
+    if (!selectedEntry) {
+        selectedEntry = state.interfaces.find(entry => entry.connected && entry.connected_ssid) || state.interfaces[0];
+    }
+
+    // Show only the selected interface's data
+    let markup = '';
+    if (selectedEntry) {
+        const roleClass = selectedEntry.role === 'external'
+            ? 'bg-indigo-900 text-indigo-100'
+            : 'bg-slate-800 text-slate-100';
+        const scanActive = Boolean(selectedEntry.scan_enabled && selectedEntry.connected && selectedEntry.connected_ssid);
+        const scanLabel = scanActive ? 'Scanning' : 'Paused';
+        const scanClass = scanActive ? 'text-green-300' : 'text-gray-400';
+        const reason = selectedEntry.reason ? ` • ${formatInterfaceReason(selectedEntry.reason)}` : '';
+        const ssidLabel = selectedEntry.connected_ssid ? escapeHtml(selectedEntry.connected_ssid) : 'No SSID';
+        markup = `
+            <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 text-gray-100">
+                    <span class="font-semibold text-xs">${escapeHtml(selectedEntry.name || 'iface')}</span>
+                    <span class="text-[10px] px-2 py-0.5 rounded ${roleClass}">${formatInterfaceRole(selectedEntry.role)}</span>
+                </div>
+                <div class="text-right leading-tight text-[11px] ${scanClass}">
+                    <div>${ssidLabel}</div>
+                    <div class="text-[10px] text-gray-400">${scanLabel}${reason}</div>
+                </div>
+            </div>
+        `;
+    }
+    container.innerHTML = markup;
+
+    // Update connectivity indicator for selected interface
+    const anyConnected = !!selectedEntry && selectedEntry.connected;
+    const fallbackSsid = selectedEntry ? selectedEntry.connected_ssid : (statusData && statusData.current_ssid);
+    const apMode = Boolean(statusData && statusData.ap_mode_active);
+    updateConnectivityIndicator('wifi-status', anyConnected || Boolean(statusData && statusData.wifi_connected), fallbackSsid, apMode);
+    renderDashboardInterfaceSwitch(state);
+}
+
+function renderConnectTabMultiInterface(state) {
+    const summaryEl = document.getElementById('wifi-multi-status-summary');
+    const listEl = document.getElementById('wifi-multi-interface-list');
+    const pillEl = document.getElementById('wifi-multi-global-pill');
+    const noteEl = document.getElementById('wifi-multi-limit-note');
+    if (!summaryEl || !listEl || !pillEl) {
+        return;
+    }
+
+    if (!state) {
+        pillEl.textContent = 'Unavailable';
+        pillEl.className = 'text-xs px-2 py-1 rounded bg-red-700 text-red-200';
+        summaryEl.textContent = 'Multi-interface controller unavailable. Refresh Wi-Fi status to retry.';
+        listEl.innerHTML = '<div class="text-xs text-red-300 bg-red-900/30 border border-red-800 rounded-lg p-3">Unable to load adapter details.</div>';
+        return;
+    }
+
+    const interfaces = Array.isArray(state.interfaces) ? state.interfaces : [];
+    const scanMode = (state.scan_mode || 'single').toLowerCase();
+    const focusInterface = state.focus_interface || '';
+    const focusSsid = state.focus_interface_ssid || '';
+    const globalEnabled = scanMode === 'multi';
+    pillEl.textContent = globalEnabled ? 'All adapters' : 'Single focus';
+    pillEl.className = `text-xs px-2 py-1 rounded ${globalEnabled ? 'bg-green-700 text-green-100' : 'bg-amber-700 text-amber-100'}`;
+    if (noteEl) {
+        const maxAdapters = state.max_interfaces || 1;
+        noteEl.textContent = globalEnabled
+            ? `Monitoring up to ${maxAdapters} adapter${maxAdapters === 1 ? '' : 's'} simultaneously.`
+            : 'Automation locks onto the focused adapter to prevent context drift.';
+    }
+
+    if (interfaces.length === 0) {
+        summaryEl.textContent = 'Waiting for eligible adapters...';
+        listEl.innerHTML = '<div class="text-xs text-gray-400 bg-slate-900/60 border border-dashed border-slate-700 rounded-lg p-3">Connect adapters to begin multi-interface scanning.</div>';
+        updateMultiInterfaceModeControls(state);
+        return;
+    }
+
+    const activeCount = interfaces.filter(entry => entry.scan_enabled && entry.connected && entry.connected_ssid).length;
+    if (scanMode === 'single') {
+        const focusLabel = focusInterface ? escapeHtml(focusInterface) : 'Select an adapter to focus on';
+        const ssidTag = focusSsid ? `<span class="text-emerald-300 ml-2">${escapeHtml(focusSsid)}</span>` : '';
+        summaryEl.innerHTML = `Single-adapter focus: <span class="text-white font-semibold">${focusLabel}</span>${ssidTag}`;
+    } else {
+        summaryEl.textContent = activeCount > 0
+            ? `Actively scanning ${activeCount} adapter${activeCount === 1 ? '' : 's'}.`
+            : 'All adapters are currently paused.';
+    }
+
+    listEl.innerHTML = interfaces.map(entry => {
+        const scanning = Boolean(entry.scan_enabled && entry.connected && entry.connected_ssid);
+        const buttonLabel = scanning ? 'Pause Scans' : 'Resume Scans';
+        const buttonClasses = scanning
+            ? 'text-xs px-3 py-1 rounded bg-yellow-600 hover:bg-yellow-500 text-white transition-colors'
+            : 'text-xs px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white transition-colors';
+        const connectionLabel = entry.connected
+            ? (entry.connected_ssid ? `SSID: ${escapeHtml(entry.connected_ssid)}` : 'Connected')
+            : escapeHtml(entry.state || 'Disconnected');
+        const scanNote = scanning ? 'Scanning' : (entry.reason ? `Paused • ${formatInterfaceReason(entry.reason)}` : 'Paused');
+        const scanClass = scanning ? 'text-green-300' : 'text-gray-400';
+        const ipLabel = entry.ip_address ? ` • ${escapeHtml(entry.ip_address)}` : '';
+        const roleClass = entry.role === 'external' ? 'bg-indigo-900 text-indigo-200' : 'bg-slate-800 text-slate-200';
+        const focusChip = entry.focus_selected
+            ? '<span class="text-[10px] px-2 py-0.5 rounded bg-amber-700/60 text-amber-200">Focus</span>'
+            : '';
+        return `
+            <div class="border border-slate-700 rounded-lg p-3 bg-slate-900/50 flex flex-col gap-3">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="flex items-center gap-2 text-sm font-semibold text-white">
+                            <span>${escapeHtml(entry.name || 'iface')}</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded ${roleClass}">${formatInterfaceRole(entry.role)}</span>
+                            ${focusChip}
+                        </div>
+                        <div class="text-[11px] text-gray-400">${connectionLabel}</div>
+                    </div>
+                    <button type="button" class="${buttonClasses}" data-interface="${escapeHtml(entry.name || '')}" data-scan-state="${scanning ? 'enabled' : 'disabled'}">${buttonLabel}</button>
+                </div>
+                <div class="text-[11px] ${scanClass}">${scanNote}${ipLabel}</div>
+            </div>
+        `;
+    }).join('');
+
+    listEl.querySelectorAll('button[data-interface]').forEach(button => {
+        button.addEventListener('click', handleScanControlToggle);
+    });
+
+    updateMultiInterfaceModeControls(state);
+}
+
+function updateMultiInterfaceModeControls(state) {
+    const buttonsContainer = document.getElementById('wifi-multi-mode-buttons');
+    const focusWrapper = document.getElementById('wifi-multi-focus-controls');
+    const focusSelect = document.getElementById('wifi-multi-focus-select');
+    if (!buttonsContainer || !focusWrapper || !focusSelect) {
+        return;
+    }
+
+    const activeMode = (state && state.scan_mode) ? state.scan_mode.toLowerCase() : 'single';
+    const focusInterface = state && state.focus_interface ? state.focus_interface : '';
+    const interfaces = state && Array.isArray(state.interfaces) ? state.interfaces : [];
+
+    const buttons = buttonsContainer.querySelectorAll('button[data-mode]');
+    buttons.forEach(button => {
+        const mode = button.dataset.mode;
+        if (!mode) {
+            return;
+        }
+        const isActive = mode === activeMode;
+        button.classList.toggle('bg-Ragnar-500', isActive);
+        button.classList.toggle('border-Ragnar-400', isActive);
+        button.classList.toggle('text-white', isActive);
+        button.classList.toggle('shadow-md', isActive);
+        button.classList.toggle('bg-slate-800', !isActive);
+        button.classList.toggle('border-slate-600', !isActive);
+        button.classList.toggle('text-gray-300', !isActive);
+        button.onclick = async () => {
+            if (button.dataset.busy === 'true' || mode === activeMode) {
+                return;
+            }
+            await setMultiInterfaceMode(mode, button);
+        };
+    });
+
+    const shouldShowFocus = activeMode === 'single';
+    focusWrapper.classList.toggle('hidden', !shouldShowFocus);
+
+    const uniqueOptions = interfaces
+        .filter(entry => entry && entry.name)
+        .map(entry => ({
+            name: entry.name,
+            label: `${entry.name}${entry.connected_ssid ? ` • ${entry.connected_ssid}` : ''}`
+        }));
+
+    if (shouldShowFocus) {
+        const options = uniqueOptions.length
+            ? ['<option value="">Select adapter</option>', ...uniqueOptions.map(entry => {
+                const selected = entry.name === focusInterface ? ' selected' : '';
+                return `<option value="${escapeHtml(entry.name)}"${selected}>${escapeHtml(entry.label)}</option>`;
+            })]
+            : ['<option value="">No adapters detected</option>'];
+        focusSelect.innerHTML = options.join('');
+        focusSelect.disabled = uniqueOptions.length === 0;
+        focusSelect.onchange = async () => {
+            const nextValue = focusSelect.value || '';
+            await setMultiInterfaceFocus(nextValue);
+        };
+    } else {
+        focusSelect.onchange = null;
+    }
+}
+
+async function setMultiInterfaceMode(mode, button) {
+    if (!mode) {
+        return;
+    }
+    if (button) {
+        button.dataset.busy = 'true';
+        button.classList.add('opacity-60', 'cursor-not-allowed');
+    }
+    try {
+        await postAPI('/api/wifi/scan-control/mode', { mode });
+        addConsoleMessage(mode === 'multi' ? 'Scanning all eligible adapters' : 'Single-adapter focus enabled', 'info');
+        await refreshWifiStatus();
+    } catch (error) {
+        console.error('Unable to update scan mode:', error);
+        addConsoleMessage('Scan mode update failed', 'error');
+    } finally {
+        if (button) {
+            button.classList.remove('opacity-60', 'cursor-not-allowed');
+            delete button.dataset.busy;
+        }
+    }
+}
+
+async function setMultiInterfaceFocus(interfaceName) {
+    try {
+        await postAPI('/api/wifi/scan-control/mode', { focus_interface: interfaceName || '' });
+        addConsoleMessage(interfaceName ? `Focused on ${interfaceName}` : 'Cleared scan focus', 'info');
+        await refreshWifiStatus();
+    } catch (error) {
+        console.error('Unable to update focused adapter:', error);
+        addConsoleMessage('Focus adapter update failed', 'error');
+    }
+}
+
+function handleScanControlToggle(event) {
+    const button = event.currentTarget;
+    if (!button || button.dataset.busy === 'true') {
+        return;
+    }
+    const interfaceName = button.dataset.interface;
+    const currentlyEnabled = button.dataset.scanState === 'enabled';
+    updateInterfaceScanState(interfaceName, !currentlyEnabled, button);
+}
+
+async function updateInterfaceScanState(interfaceName, enable, button) {
+    if (!interfaceName) {
+        return;
+    }
+    const endpoint = enable ? '/api/wifi/scan-control/start' : '/api/wifi/scan-control/stop';
+    if (button) {
+        button.dataset.busy = 'true';
+        button.disabled = true;
+        button.classList.add('opacity-60', 'cursor-not-allowed');
+        button.textContent = enable ? 'Resuming…' : 'Pausing…';
+    }
+
+    let updated = false;
+    try {
+        const response = await postAPI(endpoint, { interface: interfaceName });
+        if (!response || response.success === false) {
+            throw new Error((response && (response.error || response.message)) || 'Request failed');
+        }
+        addConsoleMessage(`${enable ? 'Resumed' : 'Paused'} scans on ${interfaceName}`, 'info');
+        updated = true;
+    } catch (error) {
+        console.error('Error updating scan interface:', error);
+        addConsoleMessage(`Scan control failed on ${interfaceName}: ${error.message}`, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.classList.remove('opacity-60', 'cursor-not-allowed');
+            delete button.dataset.busy;
+        }
+    }
+
+    if (updated) {
+        try {
+            await refreshWifiStatus();
+        } catch (error) {
+            console.warn('Wi-Fi status refresh failed after scan control change:', error);
+        }
+    }
+}
+
+function cacheWifiNetworkResult(interfaceName, payload) {
+    if (!payload) {
+        return;
+    }
+    const key = interfaceName || WIFI_NETWORK_CACHE_KEY_DEFAULT;
+    wifiNetworkResultCache.set(key, {
+        payload,
+        timestamp: Date.now()
+    });
+}
+
+function getCachedWifiNetworkResult(interfaceName) {
+    const key = interfaceName || WIFI_NETWORK_CACHE_KEY_DEFAULT;
+    const cached = wifiNetworkResultCache.get(key);
+    return cached ? cached.payload : null;
+}
+
+function hasCachedWifiNetworks(interfaceName) {
+    return Boolean(getCachedWifiNetworkResult(interfaceName));
+}
+
+function displayCachedWifiNetworks(interfaceName) {
+    const cached = getCachedWifiNetworkResult(interfaceName);
+    if (!cached) {
+        return false;
+    }
+    displayWifiNetworks(cached, { forceInterface: interfaceName, skipInterfaceCheck: true, fromCache: true });
+    return true;
+}
+
+function handleWifiInterfaceChange(event) {
+    const nextInterface = (event?.target?.value || '').trim() || null;
+    setSelectedWifiInterface(nextInterface);
+}
+
+function getActiveWifiInterface() {
+    if (selectedWifiInterface) {
+        return selectedWifiInterface;
+    }
+    const saved = localStorage.getItem(WIFI_INTERFACE_STORAGE_KEY);
+    if (saved) {
+        selectedWifiInterface = saved;
+        return selectedWifiInterface;
+    }
+    const interfaceSelect = document.getElementById('wifi-interface-select');
+    if (interfaceSelect && interfaceSelect.value) {
+        selectedWifiInterface = interfaceSelect.value;
+        return selectedWifiInterface;
+    }
+    return null;
+}
+
+function getNetworkSlugForInterface(interfaceName) {
+    if (!interfaceName) {
+        return null;
+    }
+    const meta = Array.isArray(wifiInterfaceMetadata)
+        ? wifiInterfaceMetadata.find(entry => entry && entry.name === interfaceName)
+        : null;
+    if (!meta) {
+        return null;
+    }
+    if (meta.network_slug) {
+        return meta.network_slug;
+    }
+    if (meta.connected_ssid) {
+        return slugifyNetworkIdentifier(meta.connected_ssid);
+    }
+    return null;
+}
+
+function getSelectedDashboardNetworkKey() {
+    const iface = getActiveWifiInterface();
+    const slug = getNetworkSlugForInterface(iface);
+    if (slug) {
+        return { interface: iface, network: slug };
+    }
+    return { interface: iface, network: null };
+}
+
+function updateWifiInterfaceSwitchActiveState(activeInterface) {
+    const buttonsContainer = document.getElementById('wifi-interface-switch-buttons');
+    if (!buttonsContainer) return;
+    const buttons = buttonsContainer.querySelectorAll('button[data-interface]');
+    buttons.forEach(button => {
+        const isActive = button.dataset.interface === activeInterface;
+        button.classList.remove('bg-Ragnar-600', 'border-Ragnar-400', 'text-white', 'shadow-lg', 'bg-slate-800', 'border-slate-600', 'text-gray-300');
+        if (isActive) {
+            button.classList.add('bg-Ragnar-600', 'border-Ragnar-400', 'text-white', 'shadow-lg');
+        } else {
+            button.classList.add('bg-slate-800', 'border-slate-600', 'text-gray-300');
+        }
+    });
+}
+
+function updateDashboardInterfaceSwitchActiveState(activeInterface) {
+    const buttonsContainer = document.getElementById('wifi-dashboard-interface-buttons');
+    if (!buttonsContainer) {
+        return;
+    }
+    buttonsContainer.querySelectorAll('button[data-interface]').forEach(button => {
+        const isActive = button.dataset.interface === activeInterface;
+        button.classList.remove('bg-Ragnar-500', 'text-white', 'border-Ragnar-400', 'shadow');
+        button.classList.remove('bg-slate-800', 'text-gray-300', 'border-slate-700');
+        if (isActive) {
+            button.classList.add('bg-Ragnar-500', 'text-white', 'border-Ragnar-400', 'shadow');
+        } else {
+            button.classList.add('bg-slate-800', 'text-gray-300', 'border-slate-700');
+        }
+    });
+}
+
+function renderDashboardInterfaceSwitch(state) {
+    const wrapper = document.getElementById('wifi-dashboard-interface-switch');
+    const buttonsContainer = document.getElementById('wifi-dashboard-interface-buttons');
+    if (!wrapper || !buttonsContainer) {
+        return;
+    }
+
+    const interfaces = state && Array.isArray(state.interfaces)
+        ? state.interfaces.filter(entry => entry && entry.name)
+        : [];
+    const eligible = interfaces.filter(entry => entry.connected && entry.connected_ssid);
+
+    buttonsContainer.innerHTML = '';
+    if (eligible.length <= 1) {
+        wrapper.classList.add('hidden');
+        return;
+    }
+
+    wrapper.classList.remove('hidden');
+    const activeInterface = getActiveWifiInterface();
+
+    eligible.forEach(entry => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.interface = entry.name;
+        button.className = 'px-2 py-1 rounded-full border text-[11px] transition-colors flex items-center gap-1';
+        button.innerHTML = `
+            <span class="font-semibold">${escapeHtml(entry.name)}</span>
+            <span class="text-emerald-300">${escapeHtml(entry.connected_ssid || '')}</span>
+        `;
+        button.addEventListener('click', () => {
+            if (entry.name !== getActiveWifiInterface()) {
+                setSelectedWifiInterface(entry.name);
+            }
+        });
+        buttonsContainer.appendChild(button);
+    });
+
+    updateDashboardInterfaceSwitchActiveState(activeInterface);
+}
+
+function renderWifiInterfaceSwitch(interfaces = []) {
+    setWifiInterfaceMetadata(interfaces);
+    const switchContainer = document.getElementById('wifi-interface-switch');
+    const buttonsContainer = document.getElementById('wifi-interface-switch-buttons');
+    if (!switchContainer || !buttonsContainer) {
+        return;
+    }
+
+    const connectedInterfaces = wifiInterfaceMetadata.filter(iface => iface && iface.connected);
+    const shouldDisplay = connectedInterfaces.length >= 2;
+    buttonsContainer.innerHTML = '';
+    switchContainer.classList.toggle('hidden', !shouldDisplay);
+
+    if (!shouldDisplay) {
+        return;
+    }
+
+    const activeName = getActiveWifiInterface() || (connectedInterfaces[0] ? connectedInterfaces[0].name : null);
+
+    connectedInterfaces.forEach(iface => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.interface = iface.name;
+        button.className = 'wifi-switch-btn flex-1 min-w-[180px] px-3 py-2 rounded-lg border transition-all text-left';
+        const ssidLabel = iface.connected_ssid || iface.connection || 'No SSID';
+        const ipLabel = iface.ip_address || 'No IP';
+        const stateLabel = iface.state || 'UNKNOWN';
+        button.innerHTML = `
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <div class="text-sm font-semibold">${iface.name}</div>
+                    <div class="text-[11px] text-gray-300">${ssidLabel}</div>
+                </div>
+                <div class="text-right text-[11px] leading-tight text-gray-400">
+                    <div>${ipLabel}</div>
+                    <div>${stateLabel}</div>
+                </div>
+            </div>
+        `;
+        button.addEventListener('click', () => {
+            if (iface.name !== getActiveWifiInterface()) {
+                setSelectedWifiInterface(iface.name);
+            }
+        });
+        buttonsContainer.appendChild(button);
+    });
+
+    updateWifiInterfaceSwitchActiveState(activeName);
+}
+
+async function refreshWifiNetworksForInterface(interfaceName) {
+    if (!interfaceName) {
+        return;
+    }
+    const networksList = document.getElementById('wifi-networks-list');
+    if (!networksList) {
+        return;
+    }
+    displayCachedWifiNetworks(interfaceName);
+    try {
+        const query = `/api/wifi/networks?interface=${encodeURIComponent(interfaceName)}`;
+        const data = await fetchAPI(query);
+        if (data) {
+            displayWifiNetworks(data, { forceInterface: interfaceName, skipInterfaceCheck: true });
+        }
+    } catch (error) {
+        console.warn('Unable to refresh Wi-Fi networks for interface', interfaceName, error);
+    }
+}
+
+function setSelectedWifiInterface(interfaceName, options = {}) {
+    const normalized = (interfaceName || '').trim() || null;
+    const hasChanged = normalized !== selectedWifiInterface;
+    selectedWifiInterface = normalized;
+
+    if (selectedWifiInterface) {
+        localStorage.setItem(WIFI_INTERFACE_STORAGE_KEY, selectedWifiInterface);
+    } else {
+        localStorage.removeItem(WIFI_INTERFACE_STORAGE_KEY);
+    }
+
+    const interfaceSelect = document.getElementById('wifi-interface-select');
+    if (interfaceSelect && interfaceSelect.value !== (selectedWifiInterface || '')) {
+        interfaceSelect.value = selectedWifiInterface || '';
+    }
+
+    updateWifiInterfaceSwitchActiveState(selectedWifiInterface);
+    updateDashboardInterfaceSwitchActiveState(selectedWifiInterface);
+
+    if (hasChanged) {
+        clearDashboardStatsCache();
+        refreshDashboardStatsForCurrentSelection({ forceRefresh: true }).catch(err => {
+            console.debug('Dashboard stats refresh failed after interface change', err);
+        });
+    }
+
+    if (!options.skipRefresh && hasChanged) {
+        if (!displayCachedWifiNetworks(selectedWifiInterface)) {
+            const networksList = document.getElementById('wifi-networks-list');
+            if (networksList) {
+                networksList.innerHTML = `
+                    <div class="text-center text-gray-400 py-8">
+                        <p>No cached Wi-Fi data for <span class="font-semibold text-gray-100">${escapeHtml(selectedWifiInterface || 'default')}</span>.</p>
+                        <p class="text-sm mt-2">Fetching fresh scan results...</p>
+                    </div>
+                `;
+            }
+        }
+        refreshWifiStatus().catch(err => console.warn('Wi-Fi status refresh failed for interface change', err));
+        refreshWifiNetworksForInterface(selectedWifiInterface).catch(err => console.warn('Wi-Fi networks refresh failed for interface change', err));
+    }
+
+    return selectedWifiInterface;
+}
 
 async function loadWifiInterfaces() {
     try {
@@ -4533,28 +5640,68 @@ async function loadWifiInterfaces() {
         const interfaceSelect = document.getElementById('wifi-interface-select');
         
         if (!interfaceSelect) return;
+        const savedInterface = localStorage.getItem(WIFI_INTERFACE_STORAGE_KEY);
+        let selectionApplied = false;
+        let firstConnectedInterface = null;
+        let defaultInterface = null;
         
-        if (data.success && data.interfaces && data.interfaces.length > 0) {
+        if (data && Array.isArray(data.interfaces) && data.interfaces.length > 0) {
+            setWifiInterfaceMetadata(data.interfaces);
             interfaceSelect.innerHTML = '';
             data.interfaces.forEach(iface => {
                 const option = document.createElement('option');
                 option.value = iface.name;
                 option.textContent = `${iface.name}${iface.is_default ? ' (default)' : ''} - ${iface.state}`;
+                if (!firstConnectedInterface && iface.connected) {
+                    firstConnectedInterface = iface.name;
+                }
                 if (iface.is_default) {
+                    defaultInterface = iface.name;
+                }
+                if (!selectionApplied && savedInterface && iface.name === savedInterface) {
                     option.selected = true;
+                    selectionApplied = true;
                 }
                 interfaceSelect.appendChild(option);
             });
+            if (!selectionApplied && firstConnectedInterface) {
+                const match = Array.from(interfaceSelect.options).find(opt => opt.value === firstConnectedInterface);
+                if (match) {
+                    match.selected = true;
+                    selectionApplied = true;
+                }
+            }
+            if (!selectionApplied && defaultInterface) {
+                const match = Array.from(interfaceSelect.options).find(opt => opt.value === defaultInterface);
+                if (match) {
+                    match.selected = true;
+                    selectionApplied = true;
+                }
+            }
             console.log('Loaded Wi-Fi interfaces:', data.interfaces);
         } else {
             interfaceSelect.innerHTML = '<option value="wlan0">wlan0 (default)</option>';
+            selectionApplied = true;
         }
+
+        if (!selectionApplied && interfaceSelect.options.length > 0) {
+            interfaceSelect.options[0].selected = true;
+        }
+
+        setSelectedWifiInterface(interfaceSelect.value || null, { skipRefresh: true });
+
+        interfaceSelect.removeEventListener('change', handleWifiInterfaceChange);
+        interfaceSelect.addEventListener('change', handleWifiInterfaceChange);
+
+    renderWifiInterfaceSwitch((data && data.interfaces) || []);
     } catch (error) {
         console.error('Error loading Wi-Fi interfaces:', error);
         const interfaceSelect = document.getElementById('wifi-interface-select');
         if (interfaceSelect) {
             interfaceSelect.innerHTML = '<option value="wlan0">wlan0 (default)</option>';
         }
+        setWifiInterfaceMetadata([]);
+        renderWifiInterfaceSwitch([]);
     }
 }
 
@@ -4563,6 +5710,24 @@ async function scanWifiNetworks() {
     const networksList = document.getElementById('wifi-networks-list');
     
     if (!networksList) return;
+    const interfaceName = getActiveWifiInterface();
+    const hasNetworkEntries = (payload) => {
+        if (!payload) return false;
+        if (Array.isArray(payload.available) && payload.available.length > 0) {
+            return true;
+        }
+        if (Array.isArray(payload.networks) && payload.networks.length > 0) {
+            return true;
+        }
+        return false;
+    };
+    const applyInterfaceContext = (payload) => {
+        if (payload && interfaceName && !payload.interface) {
+            payload.interface = interfaceName;
+        }
+        return payload;
+    };
+    let displayedFromScan = false;
     
     try {
         // Disable button and show scanning message
@@ -4586,18 +5751,31 @@ async function scanWifiNetworks() {
         `;
         
         // Trigger scan
-        await postAPI('/api/wifi/scan', {});
+        const scanPayload = interfaceName ? { interface: interfaceName } : {};
+        let scanResponse = null;
+        try {
+            scanResponse = applyInterfaceContext(await postAPI('/api/wifi/scan', scanPayload));
+        } catch (scanError) {
+            throw scanError;
+        }
+        if (scanResponse && (hasNetworkEntries(scanResponse) || scanResponse.warning || scanResponse.error)) {
+            displayWifiNetworks(scanResponse, { forceInterface: interfaceName, skipInterfaceCheck: true });
+            displayedFromScan = true;
+        }
         
         // Wait a bit for scan to complete
         await new Promise(resolve => setTimeout(resolve, 3000));
         
         // Get networks
-        const data = await fetchAPI('/api/wifi/networks');
+        const query = interfaceName ? `/api/wifi/networks?interface=${encodeURIComponent(interfaceName)}` : '/api/wifi/networks';
+        const data = applyInterfaceContext(await fetchAPI(query));
         
         console.log('Wi-Fi networks data:', data);
         
-        // Display networks
-        displayWifiNetworks(data);
+        if (!displayedFromScan || hasNetworkEntries(data)) {
+            displayWifiNetworks(data, { forceInterface: interfaceName, skipInterfaceCheck: true });
+            displayedFromScan = true;
+        }
         
     } catch (error) {
         console.error('Error scanning Wi-Fi networks:', error);
@@ -4621,46 +5799,90 @@ async function scanWifiNetworks() {
     }
 }
 
-function displayWifiNetworks(data) {
+function displayWifiNetworks(data, options = {}) {
     const networksList = document.getElementById('wifi-networks-list');
     if (!networksList) return;
-    
+
     let networks = [];
     let knownNetworks = [];
-    
+    const activeInterface = options.forceInterface || getActiveWifiInterface();
+    const responseInterface = data.interface || null;
+    const cacheKeyInterface = responseInterface || activeInterface || null;
+
+    if (cacheKeyInterface) {
+        cacheWifiNetworkResult(cacheKeyInterface, data);
+    } else {
+        cacheWifiNetworkResult(null, data);
+    }
+
+    if (!options.skipInterfaceCheck && responseInterface && activeInterface && responseInterface !== activeInterface) {
+        console.info(`Ignoring Wi-Fi scan results for ${responseInterface} because ${activeInterface} is selected`);
+        const cachedActive = getCachedWifiNetworkResult(activeInterface);
+        if (cachedActive && cachedActive !== data) {
+            displayWifiNetworks(cachedActive, { forceInterface: activeInterface, skipInterfaceCheck: true });
+            return;
+        }
+        networksList.innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                <p>Scan results for <span class="font-semibold text-gray-100">${escapeHtml(responseInterface)}</span> are ready.</p>
+                <p class="text-sm mt-2">Switch to that interface or run a new scan for <span class="font-semibold text-gray-100">${escapeHtml(activeInterface)}</span>.</p>
+            </div>
+        `;
+        return;
+    }
+
+    const interfaceName = options.forceInterface || responseInterface || activeInterface;
+    const warningMarkup = data.warning ? `
+        <div class="text-xs text-yellow-300 bg-yellow-900/40 border border-yellow-800 rounded px-3 py-2 mb-3">
+            ${escapeHtml(data.warning)}
+        </div>
+    ` : '';
+    const sectionHeader = interfaceName ? `
+        <div class="text-xs text-gray-400 mb-3">
+            Showing results for interface <span class="font-semibold text-gray-100">${escapeHtml(interfaceName)}</span>
+        </div>
+    ` : '';
+    if (interfaceName) {
+        networksList.dataset.interface = interfaceName;
+    } else {
+        delete networksList.dataset.interface;
+    }
+
     // Extract networks from response
     if (data.available) {
         networks = data.available;
     } else if (data.networks) {
         networks = data.networks;
     }
-    
+
     // Extract known networks
     if (data.known) {
         knownNetworks = data.known.map(n => n.ssid || n);
     }
-    
+
     console.log('Displaying networks:', networks);
     console.log('Known networks:', knownNetworks);
-    
+
     if (!networks || networks.length === 0) {
         networksList.innerHTML = `
+            ${sectionHeader}
+            ${warningMarkup}
             <div class="text-center text-gray-400 py-8">
-                <p>No Wi-Fi networks found</p>
-                <p class="text-sm mt-2">Try scanning again or check your Wi-Fi interface</p>
+                <p>No Wi-Fi networks found${interfaceName ? ` on <span class="font-semibold text-gray-100">${escapeHtml(interfaceName)}</span>` : ''}</p>
+                <p class="text-sm mt-2">Ensure the adapter is active and try scanning again. You can also switch interfaces above.</p>
             </div>
         `;
         return;
     }
-    
+
     // Sort networks by signal strength
     networks.sort((a, b) => (b.signal || 0) - (a.signal || 0));
-    
+
     // Store for later use
     currentWifiNetworks = networks;
-    
+
     // Build network list HTML
-    networksList.innerHTML = networks.map(network => {
+    networksList.innerHTML = sectionHeader + warningMarkup + networks.map(network => {
         const ssid = network.ssid || network.SSID || 'Unknown Network';
         const signal = network.signal || 0;
         const isSecure = network.security !== 'open' && network.security !== 'Open';
@@ -6427,7 +7649,7 @@ async function runManualLynisPentest() {
     }
 
     try {
-        const response = await fetch('/api/manual/pentest/lynis', {
+        const response = await networkAwareFetch('/api/manual/pentest/lynis', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ip, username, password })
@@ -6476,9 +7698,68 @@ async function runManualLynisPentest() {
 // API HELPERS
 // ============================================================================
 
+const NETWORK_CONTEXT_PARAM = 'network';
+
+function resolveNetworkAwareEndpoint(endpoint) {
+    if (!endpoint || typeof endpoint !== 'string') {
+        return endpoint;
+    }
+
+    const trimmed = endpoint.trim();
+    if (!trimmed) {
+        return endpoint;
+    }
+
+    const { network } = getSelectedDashboardNetworkKey() || {};
+    if (!network) {
+        return endpoint;
+    }
+
+    const likelyApiPath = trimmed.startsWith('/api/') || trimmed.startsWith('api/');
+
+    try {
+        const url = new URL(trimmed, window.location.origin);
+        const sameOriginApi = url.origin === window.location.origin && url.pathname.startsWith('/api/');
+
+        if (!sameOriginApi) {
+            return endpoint;
+        }
+
+        if (!url.searchParams.has(NETWORK_CONTEXT_PARAM)) {
+            url.searchParams.set(NETWORK_CONTEXT_PARAM, network);
+        }
+
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+            return url.toString();
+        }
+
+        return `${url.pathname}${url.search}${url.hash}`;
+    } catch (error) {
+        if (!likelyApiPath) {
+            return endpoint;
+        }
+
+        console.warn('Unable to normalize endpoint for network context', endpoint, error);
+        const hasQuery = trimmed.includes('?');
+        const alreadyHasParam = trimmed.includes(`${NETWORK_CONTEXT_PARAM}=`);
+
+        if (alreadyHasParam) {
+            return endpoint;
+        }
+
+        const separator = hasQuery ? '&' : '?';
+        return `${trimmed}${separator}${NETWORK_CONTEXT_PARAM}=${encodeURIComponent(network)}`;
+    }
+}
+
+function networkAwareFetch(endpoint, options = {}) {
+    const resolvedEndpoint = resolveNetworkAwareEndpoint(endpoint);
+    return fetch(resolvedEndpoint, options);
+}
+
 async function fetchAPI(endpoint, options = {}) {
     try {
-        const response = await fetch(endpoint, options);
+        const response = await networkAwareFetch(endpoint, options);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -6491,7 +7772,7 @@ async function fetchAPI(endpoint, options = {}) {
 
 async function postAPI(endpoint, data) {
     try {
-        const response = await fetch(endpoint, {
+        const response = await networkAwareFetch(endpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -6516,29 +7797,16 @@ async function refreshDashboard() {
     try {
         const data = await fetchAPI('/api/status');
         updateDashboardStatus(data);
+        await refreshDashboardStatsForCurrentSelection({ forceRefresh: true, fallbackData: data });
     } catch (error) {
         console.error('Error refreshing dashboard:', error);
     }
 }
 
 function updateDashboardStatus(data) {
-    // If the WebSocket data has zero counts, fetch from our dashboard API instead
-    if ((data.target_count || 0) === 0 && (data.port_count || 0) === 0 &&
-        (data.vulnerability_count || 0) === 0 && (data.credential_count || 0) === 0) {
-
-        // Fetch proper dashboard stats
-        fetchAPI('/api/dashboard/stats')
-            .then(stats => {
-                updateDashboardStats(stats);
-            })
-            .catch(() => {
-                // Fallback to WebSocket data if API fails
-                updateDashboardStats(data);
-            });
-    } else {
-        // Use WebSocket data if it has non-zero values
+    refreshDashboardStatsForCurrentSelection({ fallbackData: data }).catch(() => {
         updateDashboardStats(data);
-    }
+    });
 
     // Update status - use the actual e-paper display text
     updateElement('Ragnar-status', data.ragnar_status || 'IDLE');
@@ -7594,7 +8862,7 @@ function loadFiles(path = '/', highlightFile = null) {
     if (fileOperationInProgress) return;
     const desiredHighlight = highlightFile || (pendingFileHighlight && pendingFileHighlight.directory === path ? pendingFileHighlight.file : null);
     
-    fetch(`/api/files/list?path=${encodeURIComponent(path)}`)
+    networkAwareFetch(`/api/files/list?path=${encodeURIComponent(path)}`)
         .then(response => response.json())
         .then(files => {
             const appliedHighlight = displayFiles(files, path, desiredHighlight);
@@ -7740,7 +9008,7 @@ function updateCurrentPath(path) {
 function downloadFile(filePath) {
     if (fileOperationInProgress) return;
     
-    const downloadUrl = `/api/files/download?path=${encodeURIComponent(filePath)}`;
+    const downloadUrl = resolveNetworkAwareEndpoint(`/api/files/download?path=${encodeURIComponent(filePath)}`);
     
     // Create a temporary link to trigger download
     const link = document.createElement('a');
@@ -7762,7 +9030,7 @@ function deleteFile(filePath) {
         `Are you sure you want to delete "${fileName}"? This action cannot be undone.`,
         () => {
             fileOperationInProgress = true;
-            fetch('/api/files/delete', {
+            networkAwareFetch('/api/files/delete', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -7812,7 +9080,7 @@ function uploadFile() {
         fileOperationInProgress = true;
         showFileLoading('Uploading files...');
         
-        fetch('/api/files/upload', {
+        networkAwareFetch('/api/files/upload', {
             method: 'POST',
             body: formData
         })
@@ -7860,7 +9128,7 @@ function clearFiles() {
             fileOperationInProgress = true;
             showFileLoading('Clearing files...');
             
-            fetch('/api/files/clear', {
+            networkAwareFetch('/api/files/clear', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -7993,7 +9261,7 @@ function loadSystemData() {
 }
 
 function fetchSystemStatus() {
-    fetch('/api/system/status')
+    networkAwareFetch('/api/system/status')
         .then(response => response.json())
         .then(data => {
             if (data.error) {
@@ -8012,7 +9280,7 @@ function fetchSystemStatus() {
 }
 
 function fetchNetworkStats() {
-    fetch('/api/system/network-stats')
+    networkAwareFetch('/api/system/network-stats')
         .then(response => response.json())
         .then(data => {
             if (data.error) {
@@ -8219,7 +9487,7 @@ function sortProcesses(sortBy) {
     });
     
     // Fetch processes with new sort order
-    fetch(`/api/system/processes?sort=${sortBy}`)
+    networkAwareFetch(`/api/system/processes?sort=${sortBy}`)
         .then(response => response.json())
         .then(processes => {
             updateProcessList(processes);
@@ -8255,7 +9523,7 @@ function loadNetkbData() {
 }
 
 function fetchNetkbData() {
-    fetch('/api/netkb/data')
+    networkAwareFetch('/api/netkb/data')
         .then(response => response.json())
         .then(data => {
             if (data.error) {
@@ -8584,6 +9852,7 @@ window.restartService = restartService;
 window.rebootSystem = rebootSystem;
 window.startAPMode = startAPMode;
 window.refreshWifiStatus = refreshWifiStatus;
+window.refreshEthernetStatus = refreshEthernetStatus;
 window.updateManualPorts = updateManualPorts;
 window.executeManualAttack = executeManualAttack;
 window.startOrchestrator = startOrchestrator;
@@ -8591,6 +9860,10 @@ window.stopOrchestrator = stopOrchestrator;
 window.triggerNetworkScan = triggerNetworkScan;
 window.triggerVulnScan = triggerVulnScan;
 window.refreshDashboard = refreshDashboard;
+
+// Headless Mode Functions
+window.handleHeadlessMode = handleHeadlessMode;
+window.applyHeadlessVisibility = applyHeadlessVisibility;
 
 // Wi-Fi Management Functions
 window.loadWifiInterfaces = loadWifiInterfaces;
@@ -8662,22 +9935,58 @@ window.updateThreatIntelStats = updateThreatIntelStats;
 window.toggleHostDetails = toggleHostDetails;
 window.showVulnerabilityDetails = showVulnerabilityDetails;
 window.closeVulnerabilityModal = closeVulnerabilityModal;
+window.setThreatIntelFilter = setThreatIntelFilter;
 
 // ===========================================
 // THREAT INTELLIGENCE FUNCTIONS
 // ===========================================
 
+function setThreatIntelFilter(status, options = {}) {
+    const validStatuses = ['open', 'resolved', 'all'];
+    if (!validStatuses.includes(status)) {
+        return;
+    }
+
+    threatIntelStatusFilter = status;
+
+    const activeClasses = 'threat-intel-filter-btn px-3 py-2 rounded-lg text-sm font-semibold border border-Ragnar-500 bg-Ragnar-600 text-white shadow-md shadow-Ragnar-500/40';
+    const inactiveClasses = 'threat-intel-filter-btn px-3 py-2 rounded-lg text-sm font-semibold border border-slate-700 bg-slate-800 text-slate-300 hover:text-white hover:border-slate-500';
+
+    document.querySelectorAll('.threat-intel-filter-btn').forEach(btn => {
+        const isActive = btn.getAttribute('data-status') === status;
+        btn.className = isActive ? activeClasses : inactiveClasses;
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+
+    if (options.skipReload) {
+        return;
+    }
+
+    const container = document.getElementById('grouped-vulnerabilities-container');
+    if (container) {
+        const label = status.charAt(0).toUpperCase() + status.slice(1);
+        container.innerHTML = `
+            <div class="glass rounded-lg p-6 text-center">
+                <p class="text-slate-300">Loading ${label} vulnerabilities...</p>
+            </div>
+        `;
+    }
+
+    loadThreatIntelData();
+}
+
 // Load threat intelligence data when tab is shown
 async function loadThreatIntelData() {
     try {
+        const statusParam = encodeURIComponent(threatIntelStatusFilter || 'open');
         // Load grouped vulnerabilities
-        const response = await fetch('/api/vulnerabilities/grouped');
+        const response = await networkAwareFetch(`/api/vulnerabilities/grouped?status=${statusParam}`);
         if (response.ok) {
             const data = await response.json();
             displayGroupedVulnerabilities(data);
         } else {
             // Fallback to regular vulnerabilities endpoint
-            const fallbackResponse = await fetch('/api/vulnerabilities');
+            const fallbackResponse = await networkAwareFetch(`/api/vulnerabilities?status=${statusParam}`);
             if (fallbackResponse.ok) {
                 const vulnData = await fallbackResponse.json();
                 displayFallbackVulnerabilities(vulnData);
@@ -9069,7 +10378,7 @@ async function triggerManualVulnScan() {
 function refreshThreatIntel() {
     showNotification('Refreshing threat intelligence...', 'info');
     if (currentTab === 'threat-intel') {
-        loadThreatIntelData();
+        setThreatIntelFilter(threatIntelStatusFilter);
     }
 }
 
@@ -9223,7 +10532,7 @@ async function enrichTarget() {
     try {
         showNotification(`Enriching target: ${target}...`, 'info');
         
-        const response = await fetch('/api/threat-intelligence/enrich-target', {
+        const response = await networkAwareFetch('/api/threat-intelligence/enrich-target', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -9253,7 +10562,7 @@ async function downloadThreatReport(target) {
     try {
         showNotification(`Analyzing ${target} for threat intelligence...`, 'info');
         
-        const response = await fetch('/api/threat-intelligence/download-report', {
+        const response = await networkAwareFetch('/api/threat-intelligence/download-report', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -9421,7 +10730,7 @@ async function loadAIInsights() {
         }
         
         // First check AI status
-        const statusResponse = await fetch('/api/ai/status');
+    const statusResponse = await networkAwareFetch('/api/ai/status');
         const status = await statusResponse.json();
         
         const aiSection = document.getElementById('ai-insights-section');
@@ -9449,7 +10758,7 @@ async function loadAIInsights() {
         
         // Load comprehensive insights
         console.log('Fetching fresh AI insights from server...');
-        const insightsResponse = await fetch('/api/ai/insights');
+    const insightsResponse = await networkAwareFetch('/api/ai/insights');
         const insights = await insightsResponse.json();
         
         // Cache the insights
@@ -9551,7 +10860,7 @@ async function refreshAIInsights() {
         aiInsightsCache.timestamp = null;
         
         // Clear server-side cache
-        await fetch('/api/ai/clear-cache', { method: 'POST' });
+    await networkAwareFetch('/api/ai/clear-cache', { method: 'POST' });
         
         // Show loading state
         const networkSummary = document.getElementById('ai-network-summary');

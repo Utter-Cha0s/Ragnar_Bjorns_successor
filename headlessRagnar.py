@@ -4,7 +4,7 @@ Ragnar main entrypoint (Hackberry / no-EPD version)
 This version removes all e-paper / Display dependencies so Ragnar can run
 cleanly on any Linux box (Pi, Hackberry, etc.) with just the web UI.
 
-hbp0_ragnar by DezusAZ
+hbp0_ragnar by DezusAZ  (DZ_AZ)
 """
 
 import os
@@ -77,16 +77,19 @@ class Ragnar:
     # ---------------------------------------------------------------------
     def check_and_start_orchestrator(self):
         """Check connectivity and start the orchestrator if connected."""
-        wifi_connected = self.wifi_manager.check_wifi_connection()
-        logger.debug(f"WiFi connection check: {wifi_connected}")
+        network_connected = self.wifi_manager.check_network_connectivity()
+        connection_type = getattr(self.wifi_manager, "last_connection_type", None)
+        logger.debug(f"Network connection check: {network_connected} (type={connection_type})")
 
-        if wifi_connected:
-            self.shared_data.wifi_connected = True
+        self.shared_data.network_connected = network_connected
+        self.shared_data.wifi_connected = connection_type == "wifi"
+        self.shared_data.lan_connected = connection_type == "ethernet"
+
+        if network_connected:
             if self.orchestrator_thread is None or not self.orchestrator_thread.is_alive():
                 logger.info("Connectivity detected - attempting to start Orchestrator...")
                 self.start_orchestrator()
         else:
-            self.shared_data.wifi_connected = False
             if not self.wifi_manager.startup_complete:
                 logger.info("Waiting for Wi-Fi management system to complete startup...")
             else:
@@ -94,8 +97,11 @@ class Ragnar:
 
     def start_orchestrator(self):
         """Start the orchestrator thread."""
-        if self.wifi_manager.check_wifi_connection():
-            self.shared_data.wifi_connected = True
+        if self.wifi_manager.check_network_connectivity():
+            connection_type = getattr(self.wifi_manager, "last_connection_type", None)
+            self.shared_data.network_connected = True
+            self.shared_data.wifi_connected = connection_type == "wifi"
+            self.shared_data.lan_connected = connection_type == "ethernet"
             if self.orchestrator_thread is None or not self.orchestrator_thread.is_alive():
                 logger.info("Starting Orchestrator thread...")
                 self.shared_data.orchestrator_should_exit = False

@@ -288,7 +288,7 @@
                     <button onclick="showTab('threat-intel')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="threat-intel">
                         Threat Intel
                     </button>
-                    <button onclick="showTab('epaper')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="epaper">
+                    <button onclick="showTab('epaper')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors requires-display" data-tab="epaper">
                         E-Paper
                     </button>
                     <button onclick="showTab('files')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="files">
@@ -327,7 +327,7 @@
                     Pentest
                 </button>
                 <button onclick="showTab('threat-intel')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Threat Intel</button>
-                <button onclick="showTab('epaper')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">E-Paper</button>
+                <button onclick="showTab('epaper')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 requires-display">E-Paper</button>
                 <button onclick="showTab('files')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Files</button>
                 <button onclick="showTab('system')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">System</button>
                 <button onclick="showTab('connect')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Connect</button>
@@ -523,13 +523,45 @@
                         </svg>
                         Connectivity
                     </h2>
+                    <!-- Primary Connection Display (LAN or WiFi) -->
+                    <div id="primary-connection-card" class="p-4 bg-gradient-to-r from-slate-800/60 to-slate-700/40 rounded-lg border border-slate-600/30 mb-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-2">
+                                <span id="primary-connection-icon" class="text-blue-400">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
+                                    </svg>
+                                </span>
+                                <span id="primary-connection-label" class="text-white font-semibold">Checking...</span>
+                            </div>
+                            <span id="primary-connection-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
+                        </div>
+                        <div id="primary-connection-details" class="text-xs text-gray-400 space-y-1">
+                            <div id="primary-connection-name">Detecting connection type...</div>
+                            <div id="primary-connection-ip" class="text-gray-500"></div>
+                        </div>
+                        <div id="wifi-dashboard-interface-switch" class="mt-2 hidden">
+                            <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Show data for</p>
+                            <div id="wifi-dashboard-interface-buttons" class="flex flex-wrap gap-1"></div>
+                        </div>
+                    </div>
+
                     <div class="grid grid-cols-2 gap-3">
-                        <div class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
+                        <div id="wifi-secondary-card" class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
                             <div class="flex items-center justify-between mb-1">
                                 <span class="text-gray-400 text-sm">WiFi</span>
                                 <span id="wifi-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
                             </div>
                             <div id="wifi-ssid-display" class="text-xs text-gray-500 truncate">Not connected</div>
+                            <div id="wifi-dashboard-interfaces" class="mt-3 space-y-1 text-[11px] text-gray-400 hidden">
+                            </div>
+                        </div>
+                        <div id="lan-secondary-card" class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-gray-400 text-sm">LAN</span>
+                                <span id="lan-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
+                            </div>
+                            <div id="lan-info-display" class="text-xs text-gray-500 truncate">Not connected</div>
                         </div>
                         <div class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
                             <div class="flex items-center justify-between">
@@ -541,12 +573,6 @@
                             <div class="flex items-center justify-between">
                                 <span class="text-gray-400 text-sm">USB</span>
                                 <span id="usb-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
-                            </div>
-                        </div>
-                        <div class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
-                            <div class="flex items-center justify-between">
-                                <span class="text-gray-400 text-sm">PAN</span>
-                                <span id="pan-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
                             </div>
                         </div>
                     </div>
@@ -832,12 +858,32 @@
                             <div id="wifi-info" class="text-sm text-gray-400 mb-3">
                                 Loading Wi-Fi status...
                             </div>
+                            <div id="wifi-connected-list" class="text-xs text-gray-300 space-y-2 bg-slate-900/60 border border-slate-700 rounded-lg p-3 mb-3 hidden"></div>
                             <button onclick="refreshWifiStatus()" 
                                     class="w-full bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-4 rounded transition-colors">
                                 <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                                 </svg>
                                 Refresh Status
+                            </button>
+                        </div>
+
+                        <!-- LAN Status Card -->
+                        <div class="glass rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h4 class="font-medium">LAN Status</h4>
+                                <span id="lan-status-indicator" class="text-sm px-2 py-1 rounded bg-gray-700 text-gray-300">Checking...</span>
+                            </div>
+                            <div id="lan-info" class="text-sm text-gray-400 mb-3">
+                                Detecting Ethernet interfaces...
+                            </div>
+                            <div id="lan-interface-list" class="text-xs text-gray-300 space-y-2 bg-slate-900/60 border border-slate-700 rounded-lg p-3 mb-3 hidden"></div>
+                            <button onclick="refreshEthernetStatus()" 
+                                    class="w-full bg-slate-600 hover:bg-slate-500 text-white py-2 px-4 rounded transition-colors">
+                                <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                </svg>
+                                Refresh LAN
                             </button>
                         </div>
                         
@@ -858,6 +904,47 @@
                                 Start AP Mode
                             </button>
                         </div>
+
+                        <!-- Multi-Interface Scanner Card -->
+                        <div class="glass rounded-lg p-4">
+                            <div class="flex items-start justify-between mb-3">
+                                <div>
+                                    <h4 class="font-medium">Multi-Interface Scanner</h4>
+                                    <p class="text-xs text-gray-400 mt-1">Ragnar can monitor one internal radio and one external 5 GHz adapter.</p>
+                                </div>
+                                <span id="wifi-multi-global-pill" class="text-xs px-2 py-1 rounded bg-gray-700 text-gray-300">Loading…</span>
+                            </div>
+                            <div id="wifi-multi-status-summary" class="text-sm text-gray-400">
+                                Detecting active adapters…
+                            </div>
+                            <div class="mt-3 bg-slate-900/40 border border-slate-800/60 rounded-lg p-3">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-xs uppercase tracking-[0.2em] text-gray-400">Scan Mode</p>
+                                        <p class="text-[11px] text-gray-500">Choose whether Ragnar chases every adapter or locks onto one.</p>
+                                    </div>
+                                    <div id="wifi-multi-mode-buttons" class="flex gap-2">
+                                        <button type="button" data-mode="single" class="text-xs font-semibold px-3 py-1 rounded-full border border-slate-600 bg-slate-800 text-gray-300 transition-all">Single Focus</button>
+                                        <button type="button" data-mode="multi" class="text-xs font-semibold px-3 py-1 rounded-full border border-slate-600 bg-slate-800 text-gray-300 transition-all">All Adapters</button>
+                                    </div>
+                                </div>
+                                <div id="wifi-multi-focus-controls" class="mt-3 hidden">
+                                    <label for="wifi-multi-focus-select" class="text-xs uppercase tracking-wide text-gray-400">Focused Adapter</label>
+                                    <select id="wifi-multi-focus-select" class="mt-2 w-full bg-slate-950/70 border border-slate-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-Ragnar-500">
+                                        <option value="">Loading adapters…</option>
+                                    </select>
+                                    <p class="text-[11px] text-gray-500 mt-2">Only this adapter drives discovery when Single Focus is active.</p>
+                                </div>
+                            </div>
+                            <div id="wifi-multi-interface-list" class="mt-4 space-y-3">
+                                <div class="text-xs text-gray-500 bg-slate-900/60 border border-dashed border-slate-700 rounded-lg p-3">
+                                    Waiting for Wi-Fi status…
+                                </div>
+                            </div>
+                            <div id="wifi-multi-limit-note" class="mt-4 text-[11px] text-gray-500">
+                                Ragnar automatically limits automation to two adapters to preserve stability.
+                            </div>
+                        </div>
                         
                     </div>
                 </div>
@@ -875,6 +962,11 @@
                                 class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-Ragnar-500">
                             <option value="">Loading interfaces...</option>
                         </select>
+                        <div id="wifi-interface-switch" class="hidden mt-4">
+                            <p class="text-xs uppercase tracking-wide text-gray-400 mb-2">Active Connections</p>
+                            <div id="wifi-interface-switch-buttons" class="flex flex-wrap gap-2"></div>
+                            <p class="text-[11px] text-gray-500 mt-2">Switch between simultaneously connected adapters to manage their Wi-Fi networks independently.</p>
+                        </div>
                     </div>
                     
                     <!-- Available Networks -->
@@ -1492,17 +1584,30 @@
 
         <!-- Threat Intelligence Tab -->
         <div id="threat-intel-tab" class="tab-content hidden">
-            <div class="mb-6 flex items-center justify-between">
+            <div class="mb-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                 <div>
                     <h1 class="text-3xl font-bold text-white mb-2">🛡️ Vulnerabilities by Host</h1>
                     <p class="text-slate-400">Grouped vulnerability analysis showing threats organized by IP address</p>
                 </div>
-                <button onclick="refreshThreatIntel()" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
-                    <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                    </svg>
-                    Refresh
-                </button>
+                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                    <div class="flex items-center bg-slate-900/60 border border-slate-800 rounded-xl p-1 gap-1 shadow-inner">
+                        <button data-status="open" onclick="setThreatIntelFilter('open')" class="threat-intel-filter-btn px-3 py-2 rounded-lg text-sm font-semibold border border-Ragnar-500 bg-Ragnar-600 text-white shadow-md shadow-Ragnar-500/40" aria-pressed="true">
+                            Open
+                        </button>
+                        <button data-status="resolved" onclick="setThreatIntelFilter('resolved')" class="threat-intel-filter-btn px-3 py-2 rounded-lg text-sm font-semibold border border-slate-700 bg-slate-800 text-slate-300 hover:text-white hover:border-slate-500" aria-pressed="false">
+                            Resolved
+                        </button>
+                        <button data-status="all" onclick="setThreatIntelFilter('all')" class="threat-intel-filter-btn px-3 py-2 rounded-lg text-sm font-semibold border border-slate-700 bg-slate-800 text-slate-300 hover:text-white hover:border-slate-500" aria-pressed="false">
+                            All
+                        </button>
+                    </div>
+                    <button onclick="refreshThreatIntel()" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                        Refresh
+                    </button>
+                </div>
             </div>
 
             <!-- Summary Overview Cards -->
@@ -2051,7 +2156,7 @@
         </div>
         
         <!-- E-Paper Display Tab -->
-        <div id="epaper-tab" class="tab-content hidden">
+        <div id="epaper-tab" class="tab-content hidden requires-display">
             <div class="glass rounded-xl p-6">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold">E-Paper Display</h2>

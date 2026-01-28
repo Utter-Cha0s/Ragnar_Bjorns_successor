@@ -46,6 +46,12 @@ class NetworkStorageManager:
 
         return self._build_context(self.active_ssid, self.active_slug or '')
 
+    def get_context_snapshot(self, ssid: Optional[str]) -> Dict[str, str]:
+        """Return a storage context for SSID without changing the active network."""
+        slug = self._slugify(ssid)
+        normalized_ssid = ssid.strip() if ssid else None
+        return self._build_context(normalized_ssid, slug)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

@@ -20,6 +20,7 @@ import signal
 from datetime import datetime, timedelta
 from logger import Logger
 from db_manager import get_db
+from wifi_interfaces import gather_wifi_interfaces, get_active_ethernet_interface
 
 
 class WiFiManager:
@@ -82,6 +83,12 @@ class WiFiManager:
         # Network management
         self.known_networks = []
         self.available_networks = []
+        self.default_wifi_interface = shared_data.config.get('wifi_default_interface', 'wlan0')
+        self.interface_scan_cache = {}
+        self.interface_cache_time = {}
+        self.last_scan_interface = None
+        self.last_interface_reenable_time = 0
+        self.interface_reenable_interval = shared_data.config.get('wifi_interface_reenable_interval', 30)
         self.current_ssid = None
         self._pending_ping_sweep_ssid = None
         self._ping_sweep_thread = None
@@ -106,6 +113,10 @@ class WiFiManager:
         self.should_exit = False
         self.monitoring_thread = None
         self.startup_complete = False
+
+        # Connection tracking
+        self.last_connection_type = None  # 'wifi', 'ethernet', or None
+        self.last_ethernet_interface = None
         
         # Load configuration
         self.load_wifi_config()
@@ -128,6 +139,99 @@ class WiFiManager:
             
         except Exception as e:
             self.logger.error(f"Error loading Wi-Fi config: {e}")
+
+    def _resolve_scan_interface(self, interface=None):
+        """Return a safe interface name for scanning commands."""
+        if isinstance(interface, str):
+            candidate = interface.strip()
+            if candidate:
+                return candidate
+        return self.default_wifi_interface
+
+    def _cache_interface_networks(self, interface, networks):
+        """Cache scan results per interface while preserving legacy attributes."""
+        target_iface = self._resolve_scan_interface(interface)
+        normalized = networks or []
+        self.interface_scan_cache[target_iface] = normalized
+        self.interface_cache_time[target_iface] = time.time()
+        self.last_scan_interface = target_iface
+        # Preserve legacy behavior for components that read the flat attribute
+        self.available_networks = normalized
+
+    def _get_cached_interface_networks(self, interface):
+        target_iface = self._resolve_scan_interface(interface)
+        return (
+            self.interface_scan_cache.get(target_iface),
+            self.interface_cache_time.get(target_iface)
+        )
+
+    def _get_known_ssids(self):
+        """Return a deduplicated list of Ragnar-configured SSIDs."""
+        known_ssids = []
+        seen = set()
+        try:
+            for entry in self.known_networks or []:
+                if isinstance(entry, dict):
+                    ssid = entry.get('ssid')
+                else:
+                    ssid = str(entry).strip()
+                if ssid and ssid not in seen:
+                    known_ssids.append(ssid)
+                    seen.add(ssid)
+        except Exception as exc:
+            self.logger.debug(f"Unable to enumerate known SSIDs: {exc}")
+        return known_ssids
+
+    def _run_iwlist_scan(self, interface, *, system_profiles=None, known_ssids=None, log_target=None):
+        """Execute iwlist scan and return normalized network list."""
+        logger_target = log_target or self.logger
+        system_profiles = set(system_profiles or [])
+        known_set = set(known_ssids or self._get_known_ssids())
+        cmd = ['sudo', 'iwlist', interface, 'scan']
+        logger_target.debug(f"Running iwlist scan on {interface}: {' '.join(cmd)}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        except FileNotFoundError:
+            logger_target.warning("iwlist command not available; cannot perform fallback scan")
+            return []
+        except Exception as exc:
+            logger_target.warning(f"iwlist scan execution failed: {exc}")
+            return []
+
+        if result.returncode != 0:
+            stderr_snippet = (result.stderr or '').strip()
+            logger_target.warning(f"iwlist scan returned code {result.returncode} on {interface}: {stderr_snippet}")
+            return []
+
+        parsed_networks = self._parse_iwlist_output(result.stdout or '') or []
+        if not parsed_networks:
+            logger_target.info(f"iwlist scan on {interface} returned no parseable networks")
+            return []
+
+        deduped = {}
+        for network in parsed_networks:
+            ssid = network.get('ssid')
+            if not ssid or ssid == self.ap_ssid:
+                continue
+            try:
+                signal = int(network.get('signal', 0) or 0)
+            except (TypeError, ValueError):
+                signal = 0
+            existing = deduped.get(ssid)
+            if not existing or signal > existing.get('signal', 0):
+                enriched = {
+                    'ssid': ssid,
+                    'signal': signal,
+                    'security': network.get('security', 'Unknown'),
+                    'known': ssid in known_set or ssid in system_profiles,
+                    'has_system_profile': ssid in system_profiles,
+                    'scan_method': 'iwlist'
+                }
+                deduped[ssid] = enriched
+
+        final_networks = sorted(deduped.values(), key=lambda x: x.get('signal', 0), reverse=True)
+        logger_target.info(f"iwlist scan discovered {len(final_networks)} networks on {interface}")
+        return final_networks
 
     def _set_current_ssid(self, ssid):
         """Update current SSID and notify shared storage manager."""
@@ -379,6 +483,8 @@ class WiFiManager:
     def _initial_endless_loop_sequence(self):
         """Handle initial Wi-Fi connection with endless loop behavior"""
         self.logger.info("Starting Endless Loop Wi-Fi management...")
+
+        self._ensure_wifi_interfaces_up()
         
         # Wait 30 seconds after boot before starting the endless loop (reduced from 2 minutes)
         if self.boot_completed_time:
@@ -390,14 +496,19 @@ class WiFiManager:
                 self.logger.info(f"Waiting {remaining_wait:.1f}s more before starting endless loop (30 seconds after boot)")
                 time.sleep(remaining_wait)
         
-        # Check if we're already connected before starting the loop
-        if self.check_wifi_connection():
-            self.wifi_connected = True
-            self.shared_data.wifi_connected = True
-            self._set_current_ssid(self.get_current_ssid())
-            self._trigger_initial_ping_sweep(self.current_ssid)
-            self.logger.info(f"Already connected to Wi-Fi network: {self.current_ssid}")
-            self._save_connection_state(self.current_ssid, True)
+        # Check if we're already connected before starting the loop (Ethernet preferred)
+        if self.check_network_connectivity():
+            if self.last_connection_type == 'wifi':
+                self.wifi_connected = True
+                self.shared_data.wifi_connected = True
+                self._set_current_ssid(self.get_current_ssid())
+                self._trigger_initial_ping_sweep(self.current_ssid)
+                self.logger.info(f"Already connected to Wi-Fi network: {self.current_ssid}")
+                self._save_connection_state(self.current_ssid, True)
+            elif self.last_connection_type == 'ethernet':
+                self.wifi_connected = False
+                self.shared_data.wifi_connected = False
+                self.logger.info("Active Ethernet connection detected; using LAN as default and skipping Wi-Fi search.")
             self.last_wifi_validation = time.time()
             self.startup_complete = True
             self.endless_loop_active = True
@@ -414,6 +525,8 @@ class WiFiManager:
         """Search for and connect to known WiFi networks - simply enable WiFi and let system auto-reconnect"""
         self.logger.info("Endless Loop: Starting WiFi search phase (1 minute)")
         search_start_time = time.time()
+
+        self._ensure_wifi_interfaces_up()
         
         # First check if already connected
         if self.check_wifi_connection():
@@ -895,9 +1008,46 @@ class WiFiManager:
             self.logger.info("Starting AP mode due to connection loss")
             self.start_ap_mode()
     
+    def check_network_connectivity(self):
+        """Check for any usable network link, preferring Ethernet when present."""
+        try:
+            try:
+                ethernet_iface = get_active_ethernet_interface()
+            except Exception as exc:
+                ethernet_iface = None
+                self.logger.debug(f"Ethernet check failed: {exc}")
+
+            self.last_ethernet_interface = ethernet_iface
+            lan_active = bool(ethernet_iface)
+
+            if lan_active:
+                self.last_connection_type = 'ethernet'
+                self.shared_data.lan_connected = True
+                self.shared_data.lan_interface = ethernet_iface.get('name') if ethernet_iface else None
+                self.shared_data.lan_ip = ethernet_iface.get('ip_address') if ethernet_iface else None
+                self.shared_data.network_connected = True
+                self.shared_data.wifi_connected = False
+                return True
+
+            # No LAN; fall back to Wi-Fi detection
+            self.shared_data.lan_connected = False
+            self.shared_data.lan_interface = None
+            self.shared_data.lan_ip = None
+
+            wifi_connected = self.check_wifi_connection()
+            self.last_connection_type = 'wifi' if wifi_connected else None
+            self.shared_data.network_connected = wifi_connected
+            self.shared_data.wifi_connected = wifi_connected
+            return wifi_connected
+        except Exception as exc:
+            self.logger.error(f"Error checking network connectivity: {exc}")
+            self.shared_data.network_connected = False
+            return False
+
     def check_wifi_connection(self):
         """Check if Wi-Fi is connected using multiple methods"""
         try:
+            self._ensure_wifi_interfaces_up()
             # Method 1: Check using nmcli for active wireless connections
             result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,TYPE', 'con', 'show'], 
                                   capture_output=True, text=True, timeout=30)
@@ -933,7 +1083,7 @@ class WiFiManager:
                                                 capture_output=True, text=True, timeout=3)
                     if route_result.returncode == 0 and 'dev wlan0' in route_result.stdout:
                         return True
-            except:
+            except Exception:
                 pass  # Network unreachable, that's fine
             
             return False
@@ -941,6 +1091,48 @@ class WiFiManager:
         except Exception as e:
             self.logger.error(f"Error checking Wi-Fi connection: {e}")
             return False
+
+    def _ensure_wifi_interfaces_up(self):
+        """Bring Wi-Fi interfaces up if they are down or unmanaged."""
+        try:
+            now = time.time()
+            if now - self.last_interface_reenable_time < self.interface_reenable_interval:
+                return
+            self.last_interface_reenable_time = now
+
+            interfaces = gather_wifi_interfaces(self.default_wifi_interface)
+            for iface in interfaces:
+                name = iface.get('name')
+                state = (iface.get('state') or '').strip().upper()
+                if not name or state not in ('DOWN', 'DISCONNECTED', 'UNAVAILABLE', 'UNMANAGED'):
+                    continue
+                self.logger.info(f"Bringing up Wi-Fi interface {name} (state: {state})")
+
+                link_result = subprocess.run(
+                    ['sudo', 'ip', 'link', 'set', name, 'up'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if link_result.returncode != 0:
+                    self.logger.warning(
+                        f"Failed to set interface {name} up: "
+                        f"{(link_result.stderr or link_result.stdout).strip()}"
+                    )
+
+                managed_result = subprocess.run(
+                    ['sudo', 'nmcli', 'dev', 'set', name, 'managed', 'yes'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if managed_result.returncode != 0:
+                    self.logger.warning(
+                        f"Failed to mark interface {name} managed: "
+                        f"{(managed_result.stderr or managed_result.stdout).strip()}"
+                    )
+        except Exception as exc:
+            self.logger.debug(f"Unable to re-enable Wi-Fi interfaces: {exc}")
     
     def get_current_ssid(self):
         """Get the current connected SSID"""
@@ -979,34 +1171,41 @@ class WiFiManager:
             self.logger.error(f"Error getting current SSID: {e}")
             return None
     
-    def scan_networks(self):
+    def scan_networks(self, interface=None):
         """Scan for available Wi-Fi networks and mark those with system profiles"""
         try:
+            target_iface = self._resolve_scan_interface(interface)
             # If we're in AP mode, use special AP scanning method
             if self.ap_mode_active:
-                return self.scan_networks_while_ap()
+                return self.scan_networks_while_ap(interface=target_iface)
             
-            # Try to get cached networks first (within last 2 minutes for better performance)
-            if self.db:
-                cached_networks = self.db.get_cached_wifi_networks(max_age_seconds=120)
-                if cached_networks:
-                    self.logger.info(f"Using {len(cached_networks)} cached WiFi networks (age < 2min)")
-                    self.available_networks = cached_networks
+            # Check per-interface in-memory cache first (more accurate than DB cache)
+            cached_networks, cache_time = self._get_cached_interface_networks(target_iface)
+            if cached_networks is not None and cache_time:
+                cache_age = time.time() - cache_time
+                if cache_age < 120:  # 2 minutes
+                    self.logger.info(f"Using {len(cached_networks)} cached WiFi networks for {target_iface} (age: {cache_age:.0f}s)")
                     return cached_networks
             
-            self.logger.info("Scanning for Wi-Fi networks (cache miss or disabled)...")
+            self.logger.info(f"Scanning for Wi-Fi networks on {target_iface} (cache miss or expired)...")
             
             # Get system WiFi profiles to mark known networks
             system_profiles = self.get_system_wifi_profiles()
-            ragnar_known = [net['ssid'] for net in self.known_networks]
+            ragnar_known = self._get_known_ssids()
             
             # Trigger a new scan
-            subprocess.run(['nmcli', 'dev', 'wifi', 'rescan'], 
-                         capture_output=True, timeout=15)
+            rescan_cmd = ['nmcli', 'dev', 'wifi', 'rescan']
+            if target_iface:
+                rescan_cmd.extend(['ifname', target_iface])
+            subprocess.run(rescan_cmd, capture_output=True, timeout=15)
             
             # Get scan results
-            result = subprocess.run(['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi'], 
-                                  capture_output=True, text=True, timeout=15)
+            list_cmd = ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list']
+            if target_iface:
+                list_cmd.extend(['ifname', target_iface])
+            result = subprocess.run(list_cmd, capture_output=True, text=True, timeout=15)
+            if result.returncode != 0:
+                self.logger.warning(f"nmcli scan command failed on {target_iface} with code {result.returncode}: {result.stderr}")
             
             networks = []
             if result.returncode == 0:
@@ -1033,8 +1232,22 @@ class WiFiManager:
                     seen_ssids.add(network['ssid'])
                     unique_networks.append(network)
             
-            self.available_networks = unique_networks
-            self.logger.info(f"Found {len(unique_networks)} unique networks")
+            if not unique_networks:
+                self.logger.warning(
+                    f"nmcli reported zero networks on {target_iface}; attempting iwlist fallback"
+                )
+                fallback_networks = self._run_iwlist_scan(
+                    target_iface,
+                    system_profiles=system_profiles,
+                    known_ssids=ragnar_known
+                )
+                if fallback_networks:
+                    unique_networks = fallback_networks
+                else:
+                    self.logger.info(f"Fallback iwlist scan also returned zero networks on {target_iface}")
+            
+            self._cache_interface_networks(target_iface, unique_networks)
+            self.logger.info(f"Found {len(unique_networks)} unique networks on {target_iface}")
             
             # Cache the scan results in database
             if self.db and unique_networks:
@@ -1049,102 +1262,46 @@ class WiFiManager:
             self.logger.error(f"Error scanning networks: {e}")
             return []
 
-    def scan_networks_while_ap(self):
+    def scan_networks_while_ap(self, interface=None):
         """Scan for networks while in AP mode using smart caching and fallback strategies"""
         try:
-            self.logger.info("Scanning networks while in AP mode using smart strategies")
-            self.ap_logger.info("Starting network scan while in AP mode (non-disruptive)")
+            scan_iface = interface if interface else self.ap_interface
+            target_iface = self._resolve_scan_interface(scan_iface)
+            self.logger.info(f"Scanning networks while in AP mode using smart strategies on {target_iface}")
+            self.ap_logger.info(f"Starting network scan while in AP mode (non-disruptive) on {target_iface}")
             
             # Get system WiFi profiles to mark known networks
             system_profiles = self.get_system_wifi_profiles()
             ragnar_known = [net['ssid'] for net in self.known_networks]
             
             # Strategy 1: Return cached networks if we have recent data (within 5 minutes for fresher data)
-            if hasattr(self, 'cached_networks') and hasattr(self, 'last_scan_time'):
-                cache_age = time.time() - self.last_scan_time
+            cached_networks, cache_timestamp = self._get_cached_interface_networks(target_iface)
+            if cached_networks is not None and cache_timestamp is not None:
+                cache_age = time.time() - cache_timestamp
                 if cache_age < 300:  # 5 minutes cache for fresher data
-                    self.ap_logger.info(f"Returning cached networks (age: {cache_age:.1f}s, count: {len(self.cached_networks)})")
-                    return self.cached_networks
+                    self.ap_logger.info(
+                        f"Returning cached networks for {target_iface} (age: {cache_age:.1f}s, count: {len(cached_networks)})"
+                    )
+                    return cached_networks
             
             # Strategy 2: Use networks scanned before AP mode started
             if hasattr(self, 'available_networks') and self.available_networks:
                 real_networks = [n for n in self.available_networks if not n.get('instruction')]
                 if real_networks:
                     self.ap_logger.info(f"Using pre-AP scan results ({len(real_networks)} networks)")
-                    # Update cache
-                    self.cached_networks = real_networks
-                    self.last_scan_time = time.time()
+                    self._cache_interface_networks(target_iface, real_networks)
                     return real_networks
             
             # Strategy 3: Try iwlist scan (non-disruptive to AP mode)
-            networks = []
-            try:
-                self.ap_logger.debug("Attempting iwlist scan on AP interface...")
-                result = subprocess.run(['sudo', 'iwlist', self.ap_interface, 'scan'], 
-                                      capture_output=True, text=True, timeout=15)
-                
-                if result.returncode == 0:
-                    self.ap_logger.debug("iwlist scan successful, parsing results...")
-                    lines = result.stdout.split('\n')
-                    current_network = {}
-                    
-                    for line in lines:
-                        line = line.strip()
-                        if 'Cell ' in line and 'Address:' in line:
-                            # Start of new network, save previous if complete
-                            if 'ssid' in current_network and current_network['ssid'] != self.ap_ssid:
-                                networks.append(current_network.copy())
-                            current_network = {}
-                        elif 'ESSID:' in line:
-                            # Extract SSID
-                            essid_part = line.split('ESSID:')[1].strip('"')
-                            if essid_part and essid_part != self.ap_ssid:
-                                current_network['ssid'] = essid_part
-                        elif 'Signal level=' in line:
-                            # Extract signal strength
-                            try:
-                                signal_part = line.split('Signal level=')[1].split()[0]
-                                if 'dBm' in signal_part:
-                                    dbm = int(signal_part.replace('dBm', ''))
-                                    # Convert dBm to percentage (rough approximation)
-                                    signal = max(0, min(100, (dbm + 100) * 2))
-                                else:
-                                    signal = 50  # Default
-                                current_network['signal'] = signal
-                            except:
-                                current_network['signal'] = 50
-                        elif 'Encryption key:on' in line:
-                            current_network['security'] = 'WPA2'
-                        elif 'Encryption key:off' in line:
-                            current_network['security'] = 'Open'
-                    
-                    # Add last network if complete
-                    if 'ssid' in current_network and current_network['ssid'] != self.ap_ssid:
-                        networks.append(current_network.copy())
-                    
-                    if networks:
-                        self.ap_logger.info(f"iwlist scan found {len(networks)} networks")
-                        
-                        # Remove duplicates and sort
-                        seen_ssids = set()
-                        unique_networks = []
-                        for network in sorted(networks, key=lambda x: x.get('signal', 0), reverse=True):
-                            if network['ssid'] not in seen_ssids:
-                                seen_ssids.add(network['ssid'])
-                                # Add known network flag - check BOTH Ragnar and system profiles
-                                ssid = network['ssid']
-                                network['known'] = ssid in ragnar_known or ssid in system_profiles
-                                unique_networks.append(network)
-                        
-                        # Cache the results
-                        self.cached_networks = unique_networks
-                        self.last_scan_time = time.time()
-                        self.available_networks = unique_networks
-                        
-                        return unique_networks
-                    
-            except Exception as iwlist_error:
-                self.ap_logger.debug(f"iwlist scan failed: {iwlist_error}")
+            fallback_networks = self._run_iwlist_scan(
+                target_iface,
+                system_profiles=system_profiles,
+                known_ssids=ragnar_known,
+                log_target=self.ap_logger
+            )
+            if fallback_networks:
+                self._cache_interface_networks(target_iface, fallback_networks)
+                return fallback_networks
             
             # Strategy 4: Return known networks as available options
             if self.known_networks:
@@ -1157,6 +1314,7 @@ class WiFiManager:
                         'security': 'WPA2' if net.get('password') else 'Open',
                         'known': True
                     })
+                self._cache_interface_networks(target_iface, known_as_available)
                 return known_as_available
             
             # Strategy 5: Return helpful message for manual entry
@@ -1185,6 +1343,7 @@ class WiFiManager:
             ]
             
             self.ap_logger.info("Returning instructional networks for manual entry")
+            self._cache_interface_networks(target_iface, help_networks)
             return help_networks
             
         except Exception as e:
@@ -2166,11 +2325,14 @@ port=0
     def get_status(self):
         """Get current Wi-Fi manager status with real-time SSID check"""
         # Always get fresh connection status and SSID
+        network_connected = self.check_network_connectivity()
         wifi_connected = self.check_wifi_connection()
         current_ssid = self.get_current_ssid() if wifi_connected else None
-        
+
         # Update internal state
         self.wifi_connected = wifi_connected
+        self.shared_data.wifi_connected = wifi_connected
+        self.shared_data.network_connected = network_connected
         if current_ssid:
             self._set_current_ssid(current_ssid)
         elif not wifi_connected:
@@ -2178,6 +2340,10 @@ port=0
         
         status = {
             'wifi_connected': wifi_connected,
+            'network_connected': network_connected,
+            'connection_type': self.last_connection_type if self.last_connection_type else ('wifi' if wifi_connected else None),
+            'lan_connected': bool(self.last_ethernet_interface),
+            'lan_interface': self.last_ethernet_interface,
             'ap_mode_active': self.ap_mode_active,
             'current_ssid': current_ssid,
             'known_networks_count': len(self.known_networks),
@@ -2220,8 +2386,15 @@ port=0
             'has_password': bool(net.get('password'))
         } for net in self.known_networks]
     
-    def get_available_networks(self):
+    def get_available_networks(self, interface=None):
         """Get list of available networks from last scan"""
+        explicit_request = isinstance(interface, str) and interface.strip() != ''
+        target_iface = self._resolve_scan_interface(interface)
+        cached_networks, _ = self._get_cached_interface_networks(target_iface)
+        if cached_networks is not None:
+            return cached_networks
+        if explicit_request:
+            return self.scan_networks(interface=target_iface)
         return self.available_networks
     
     def force_reconnect(self):

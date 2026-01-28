@@ -474,6 +474,59 @@ class NetworkIntelligence:
         except Exception as e:
             self.logger.error(f"Error getting active findings: {e}")
             return {'network_id': 'unknown', 'vulnerabilities': {}, 'credentials': {}, 'counts': {'vulnerabilities': 0, 'credentials': 0}}
+
+    def get_vulnerabilities_for_network(self, status_filter: str = "open") -> Dict:
+        """Return vulnerabilities for current network filtered by status.
+
+        status_filter: "open" (default), "resolved", or "all".
+        """
+        network_id = self.get_current_network_id()
+        open_vulns = dict(self.active_vulnerabilities.get(network_id, {}))
+        resolved_vulns = dict(self.resolved_vulnerabilities.get(network_id, {}))
+
+        if status_filter == "resolved":
+            return resolved_vulns
+        if status_filter == "all":
+            combined = {}
+            combined.update(resolved_vulns)
+            combined.update(open_vulns)
+            return combined
+        # default: open
+        return open_vulns
+
+    def resolve_host_findings(self, host: str, reason: str = "host_offline"):
+        """Resolve all active findings for a given host across networks."""
+        try:
+            resolved_any = False
+            for network_id, vulns in list(self.active_vulnerabilities.items()):
+                for vuln_id, vuln_data in list(vulns.items()):
+                    if vuln_data.get('host') == host:
+                        self.active_vulnerabilities[network_id].pop(vuln_id, None)
+                        vuln_data['status'] = 'resolved'
+                        vuln_data['resolved'] = datetime.now().isoformat()
+                        vuln_data['resolution_reason'] = reason
+                        if network_id not in self.resolved_vulnerabilities:
+                            self.resolved_vulnerabilities[network_id] = {}
+                        self.resolved_vulnerabilities[network_id][vuln_id] = vuln_data
+                        resolved_any = True
+
+            for network_id, creds in list(self.active_credentials.items()):
+                for cred_id, cred_data in list(creds.items()):
+                    if cred_data.get('host') == host:
+                        self.active_credentials[network_id].pop(cred_id, None)
+                        cred_data['status'] = 'resolved'
+                        cred_data['resolved'] = datetime.now().isoformat()
+                        cred_data['resolution_reason'] = reason
+                        if network_id not in self.resolved_credentials:
+                            self.resolved_credentials[network_id] = {}
+                        self.resolved_credentials[network_id][cred_id] = cred_data
+                        resolved_any = True
+
+            if resolved_any:
+                self.save_intelligence_data()
+                self.logger.info(f"Resolved findings for host {host} due to {reason}")
+        except Exception as e:
+            self.logger.error(f"Error resolving findings for host {host}: {e}")
     
     def get_all_findings_for_netkb(self) -> Dict:
         """Get all findings (active + resolved) for NetKB view"""

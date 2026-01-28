@@ -11,6 +11,7 @@ NC='\033[0m'
 LOG_DIR="/var/log/ragnar_remove"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/ragnar_remove_$(date +%Y%m%d_%H%M%S).log"
+REPO_DIR="/home/ragnar/Ragnar"
 
 # Logging function
 log() {
@@ -43,14 +44,37 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Ensure we are not inside the Ragnar repo to allow deletion
+ensure_not_inside_repo() {
+    local cwd
+    cwd=$(pwd)
+    case "$cwd" in
+        "$REPO_DIR"|"$REPO_DIR"/*)
+            echo -e "${YELLOW}You are currently inside $REPO_DIR.${NC}"
+            if confirm "cd .. so the folder can be removed"; then
+                cd .. || {
+                    log "ERROR" "Failed to change directory out of $REPO_DIR"
+                    exit 1
+                }
+                log "INFO" "Moved out of $REPO_DIR to $(pwd)"
+            else
+                log "ERROR" "Cannot remove Ragnar directory while inside it. Aborting."
+                exit 1
+            fi
+            ;;
+        *)
+            ;; # already outside
+    esac
+}
+
 # Function to stop services
 stop_services() {
     log "INFO" "Stopping services..."
     
     # Kill any running ragnar processes
-    if pgrep -f "python3 /home/ragnar/ragnar/ragnar.py" > /dev/null; then
+    if pgrep -f "python3 /home/ragnar/Ragnar" > /dev/null; then
         log "INFO" "Killing ragnar Python process..."
-        pkill -f "python3 /home/ragnar/ragnar/ragnar.py"
+        pkill -f "python3 /home/ragnar/Ragnar"
     fi
 
     # Stop and disable ragnar service
@@ -82,7 +106,10 @@ remove_service_files() {
     rm -f /etc/systemd/system/ragnar.service
     rm -f /etc/systemd/system/usb-gadget.service
     rm -f /usr/local/bin/usb-gadget.sh
+    rm -f /etc/NetworkManager/conf.d/99-ragnar-wifi.conf
+    rm -f /etc/sudoers.d/ragnar-wifi /etc/sudoers.d/ragnar-nmap
     systemctl daemon-reload
+    systemctl reset-failed 2>/dev/null || true
     log "SUCCESS" "Service files removed"
 }
 
@@ -117,7 +144,7 @@ reset_system_limits() {
     sed -i '/root hard nofile 65535/d' /etc/security/limits.conf
     
     # Remove limits file
-    rm -f /etc/security/limits.d/90-nofile.conf
+    rm -f /etc/security/limits.d/90-nofile.conf /etc/security/limits.d/90-ragnar-limits.conf
     
     # Reset systemd limits
     sed -i 's/DefaultLimitNOFILE=65535/#DefaultLimitNOFILE=/' /etc/systemd/system.conf
@@ -133,9 +160,15 @@ reset_system_limits() {
 # Function to remove ragnar files
 remove_ragnar_files() {
     log "INFO" "Removing ragnar files..."
-    if [ -d "/home/ragnar/ragnar" ]; then
-        rm -rf /home/ragnar/ragnar
-        log "SUCCESS" "ragnar directory removed"
+    ensure_not_inside_repo
+
+    if [ -d "$REPO_DIR" ]; then
+        if confirm "delete $REPO_DIR"; then
+            rm -rf "$REPO_DIR"
+            log "SUCCESS" "ragnar directory removed"
+        else
+            log "WARNING" "Skipped removal of $REPO_DIR"
+        fi
     else
         log "INFO" "ragnar directory not found"
     fi
