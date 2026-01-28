@@ -982,6 +982,12 @@ EOF
 configure_usb_gadget() {
     log "INFO" "Configuring USB Gadget..."
 
+    # Skip on systems without Pi-style boot firmware layout
+    if [ ! -d "/boot/firmware" ] || [ ! -f "/boot/firmware/cmdline.txt" ]; then
+        log "INFO" "USB Gadget configuration skipped: /boot/firmware not present on this platform"
+        return 0
+    fi
+
     # Modify cmdline.txt
     sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' /boot/firmware/cmdline.txt
 
