@@ -310,9 +310,124 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_wifi_analytics_priority ON wifi_network_analytics(priority_score)
             """)
-            
+
+            # ================================================================
+            # Advanced Vulnerability Scanner Tables (for scan persistence)
+            # ================================================================
+
+            # Create scan_jobs table for persisting scan state
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS scan_jobs (
+                    scan_id TEXT PRIMARY KEY,
+                    scan_type TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    progress_percent INTEGER DEFAULT 0,
+                    findings_count INTEGER DEFAULT 0,
+                    current_check TEXT,
+                    started_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    error_message TEXT,
+                    options TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_jobs_status ON scan_jobs(status)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_jobs_target ON scan_jobs(target)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_jobs_created ON scan_jobs(created_at)
+            """)
+
+            # Create scan_findings table for persisting vulnerability findings
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS scan_findings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    finding_id TEXT UNIQUE NOT NULL,
+                    scan_id TEXT NOT NULL,
+                    scanner TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    port INTEGER,
+                    severity TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    cve_ids TEXT,
+                    cwe_ids TEXT,
+                    cvss_score REAL,
+                    evidence TEXT,
+                    remediation TEXT,
+                    reference_urls TEXT,
+                    tags TEXT,
+                    matched_at TEXT,
+                    template_id TEXT,
+                    raw_output TEXT,
+                    details TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (scan_id) REFERENCES scan_jobs(scan_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_findings_scan_id ON scan_findings(scan_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_findings_host ON scan_findings(host)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_findings_severity ON scan_findings(severity)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_findings_scanner ON scan_findings(scanner)
+            """)
+
+            # ================================================================
+            # ZAP Target Credentials Table (for persistent auth per target)
+            # ================================================================
+
+            # Create zap_target_credentials table for storing auth per target
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS zap_target_credentials (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_host TEXT NOT NULL UNIQUE,
+                    auth_type TEXT NOT NULL,
+                    login_url TEXT,
+                    username TEXT,
+                    password_encrypted TEXT,
+                    login_request_data TEXT,
+                    username_field TEXT DEFAULT 'username',
+                    password_field TEXT DEFAULT 'password',
+                    http_realm TEXT,
+                    notes TEXT,
+                    bearer_token_encrypted TEXT,
+                    api_key_encrypted TEXT,
+                    api_key_header TEXT DEFAULT 'X-API-Key',
+                    cookie_value_encrypted TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_zap_creds_target ON zap_target_credentials(target_host)
+            """)
+
+            # Migrate: Add new auth columns if they don't exist (for existing databases)
+            try:
+                cursor.execute("SELECT bearer_token_encrypted FROM zap_target_credentials LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE zap_target_credentials ADD COLUMN bearer_token_encrypted TEXT")
+                cursor.execute("ALTER TABLE zap_target_credentials ADD COLUMN api_key_encrypted TEXT")
+                cursor.execute("ALTER TABLE zap_target_credentials ADD COLUMN api_key_header TEXT DEFAULT 'X-API-Key'")
+                cursor.execute("ALTER TABLE zap_target_credentials ADD COLUMN cookie_value_encrypted TEXT")
+                logger.info("Migrated zap_target_credentials table with new auth columns")
+
             conn.commit()
-            logger.info("Database schema initialized successfully (includes WiFi tables)")
+            logger.info("Database schema initialized successfully (includes WiFi, Scan, and ZAP Credentials tables)")
         
         # Perform CSV migration if needed
         self._migrate_from_csv()
@@ -1708,6 +1823,808 @@ class DatabaseManager:
                 
         except Exception as e:
             logger.error(f"Error cleaning up WiFi data: {e}")
+
+    # ========================================================================
+    # Advanced Vulnerability Scanner Persistence Methods
+    # ========================================================================
+
+    def save_scan_job(self, scan_id: str, scan_type: str, target: str, status: str = 'pending',
+                      progress_percent: int = 0, findings_count: int = 0, current_check: str = '',
+                      started_at: datetime = None, completed_at: datetime = None,
+                      error_message: str = '', options: dict = None) -> bool:
+        """
+        Save or update a scan job to the database.
+
+        Args:
+            scan_id: Unique scan identifier
+            scan_type: Type of scan (nuclei, nikto, zap_full, etc.)
+            target: Target URL or IP
+            status: pending, running, completed, failed, cancelled
+            progress_percent: 0-100
+            findings_count: Number of findings discovered
+            current_check: Current operation being performed
+            started_at: When scan started
+            completed_at: When scan completed
+            error_message: Error message if failed
+            options: Scan options dict (will be JSON serialized)
+
+        Returns:
+            bool: True if successful
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                options_json = json.dumps(options) if options else None
+
+                cursor.execute("""
+                    INSERT INTO scan_jobs (
+                        scan_id, scan_type, target, status, progress_percent,
+                        findings_count, current_check, started_at, completed_at,
+                        error_message, options, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(scan_id) DO UPDATE SET
+                        status = excluded.status,
+                        progress_percent = excluded.progress_percent,
+                        findings_count = excluded.findings_count,
+                        current_check = excluded.current_check,
+                        started_at = COALESCE(excluded.started_at, scan_jobs.started_at),
+                        completed_at = excluded.completed_at,
+                        error_message = excluded.error_message,
+                        options = COALESCE(excluded.options, scan_jobs.options),
+                        updated_at = CURRENT_TIMESTAMP
+                """, (scan_id, scan_type, target, status, progress_percent,
+                      findings_count, current_check, started_at, completed_at,
+                      error_message, options_json))
+
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save scan job {scan_id}: {e}")
+            return False
+
+    def get_scan_job(self, scan_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a scan job by ID.
+
+        Args:
+            scan_id: Unique scan identifier
+
+        Returns:
+            Dict with scan job data or None if not found
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM scan_jobs WHERE scan_id = ?", (scan_id,))
+                row = cursor.fetchone()
+
+                if row:
+                    result = dict(row)
+                    # Parse options JSON
+                    if result.get('options'):
+                        try:
+                            result['options'] = json.loads(result['options'])
+                        except json.JSONDecodeError:
+                            result['options'] = {}
+                    return result
+                return None
+        except Exception as e:
+            logger.error(f"Failed to get scan job {scan_id}: {e}")
+            return None
+
+    def get_scan_jobs(self, status: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get scan jobs, optionally filtered by status.
+
+        Args:
+            status: Filter by status (pending, running, completed, failed)
+            limit: Maximum number of records
+
+        Returns:
+            List of scan job dicts
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                if status:
+                    cursor.execute("""
+                        SELECT * FROM scan_jobs
+                        WHERE status = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """, (status, limit))
+                else:
+                    cursor.execute("""
+                        SELECT * FROM scan_jobs
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """, (limit,))
+
+                results = []
+                for row in cursor.fetchall():
+                    result = dict(row)
+                    if result.get('options'):
+                        try:
+                            result['options'] = json.loads(result['options'])
+                        except json.JSONDecodeError:
+                            result['options'] = {}
+                    results.append(result)
+
+                return results
+        except Exception as e:
+            logger.error(f"Failed to get scan jobs: {e}")
+            return []
+
+    def get_interrupted_scans(self) -> List[Dict[str, Any]]:
+        """
+        Get scans that were interrupted (status is 'running' or 'pending' with old updated_at).
+        These are scans that need recovery after restart.
+
+        Returns:
+            List of interrupted scan jobs
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                # Scans marked as 'running' are potentially interrupted
+                cursor.execute("""
+                    SELECT * FROM scan_jobs
+                    WHERE status IN ('running', 'pending')
+                    ORDER BY created_at DESC
+                """)
+
+                results = []
+                for row in cursor.fetchall():
+                    result = dict(row)
+                    if result.get('options'):
+                        try:
+                            result['options'] = json.loads(result['options'])
+                        except json.JSONDecodeError:
+                            result['options'] = {}
+                    results.append(result)
+
+                return results
+        except Exception as e:
+            logger.error(f"Failed to get interrupted scans: {e}")
+            return []
+
+    def mark_scan_interrupted(self, scan_id: str) -> bool:
+        """
+        Mark a scan as interrupted (failed due to system restart).
+
+        Args:
+            scan_id: Scan ID to mark as interrupted
+
+        Returns:
+            bool: True if successful
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE scan_jobs
+                    SET status = 'interrupted',
+                        error_message = 'Scan interrupted by system restart',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE scan_id = ?
+                """, (scan_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Failed to mark scan {scan_id} as interrupted: {e}")
+            return False
+
+    def delete_scan_job(self, scan_id: str) -> bool:
+        """
+        Delete a scan job and its findings.
+
+        Args:
+            scan_id: Scan ID to delete
+
+        Returns:
+            bool: True if successful
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM scan_jobs WHERE scan_id = ?", (scan_id,))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to delete scan job {scan_id}: {e}")
+            return False
+
+    def save_scan_finding(self, finding_id: str, scan_id: str, scanner: str, host: str,
+                          port: int = None, severity: str = 'info', title: str = '',
+                          description: str = '', cve_ids: List[str] = None,
+                          cwe_ids: List[str] = None, cvss_score: float = None,
+                          evidence: str = '', remediation: str = '',
+                          references: List[str] = None, tags: List[str] = None,
+                          matched_at: str = '', template_id: str = '',
+                          raw_output: str = '', details: dict = None) -> bool:
+        """
+        Save a vulnerability finding to the database.
+
+        Args:
+            finding_id: Unique finding identifier
+            scan_id: Parent scan ID
+            scanner: Scanner that found it (nuclei, zap, nikto, etc.)
+            host: Target host
+            port: Target port (optional)
+            severity: info, low, medium, high, critical
+            title: Finding title
+            description: Detailed description
+            cve_ids: List of CVE IDs
+            cwe_ids: List of CWE IDs
+            cvss_score: CVSS score if available
+            evidence: Evidence/proof
+            remediation: How to fix
+            references: List of reference URLs
+            tags: List of tags
+            matched_at: URL or location where found
+            template_id: Template ID (for nuclei)
+            raw_output: Raw scanner output
+            details: Additional details dict
+
+        Returns:
+            bool: True if successful
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    INSERT INTO scan_findings (
+                        finding_id, scan_id, scanner, host, port, severity, title,
+                        description, cve_ids, cwe_ids, cvss_score, evidence,
+                        remediation, reference_urls, tags, matched_at, template_id,
+                        raw_output, details
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(finding_id) DO UPDATE SET
+                        severity = excluded.severity,
+                        description = excluded.description,
+                        evidence = excluded.evidence,
+                        remediation = excluded.remediation
+                """, (
+                    finding_id, scan_id, scanner, host, port, severity, title,
+                    description,
+                    json.dumps(cve_ids) if cve_ids else None,
+                    json.dumps(cwe_ids) if cwe_ids else None,
+                    cvss_score, evidence[:5000] if evidence else None,
+                    remediation,
+                    json.dumps(references) if references else None,
+                    json.dumps(tags) if tags else None,
+                    matched_at, template_id,
+                    raw_output[:10000] if raw_output else None,
+                    json.dumps(details) if details else None
+                ))
+
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save finding {finding_id}: {e}")
+            return False
+
+    def get_scan_findings(self, scan_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all findings for a specific scan.
+
+        Args:
+            scan_id: Scan ID to get findings for
+
+        Returns:
+            List of finding dicts
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM scan_findings
+                    WHERE scan_id = ?
+                    ORDER BY
+                        CASE severity
+                            WHEN 'critical' THEN 1
+                            WHEN 'high' THEN 2
+                            WHEN 'medium' THEN 3
+                            WHEN 'low' THEN 4
+                            ELSE 5
+                        END,
+                        timestamp DESC
+                """, (scan_id,))
+
+                results = []
+                for row in cursor.fetchall():
+                    result = dict(row)
+                    # Parse JSON fields
+                    for field in ['cve_ids', 'cwe_ids', 'reference_urls', 'tags', 'details']:
+                        if result.get(field):
+                            try:
+                                result[field] = json.loads(result[field])
+                            except json.JSONDecodeError:
+                                result[field] = []
+                    results.append(result)
+
+                return results
+        except Exception as e:
+            logger.error(f"Failed to get findings for scan {scan_id}: {e}")
+            return []
+
+    def get_all_findings(self, severity: str = None, scanner: str = None,
+                         host: str = None, limit: int = 500) -> List[Dict[str, Any]]:
+        """
+        Get all findings with optional filtering.
+
+        Args:
+            severity: Filter by severity
+            scanner: Filter by scanner
+            host: Filter by host
+            limit: Maximum number of records
+
+        Returns:
+            List of finding dicts
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                query = "SELECT * FROM scan_findings WHERE 1=1"
+                params = []
+
+                if severity:
+                    query += " AND severity = ?"
+                    params.append(severity)
+                if scanner:
+                    query += " AND scanner = ?"
+                    params.append(scanner)
+                if host:
+                    query += " AND host LIKE ?"
+                    params.append(f"%{host}%")
+
+                query += """
+                    ORDER BY
+                        CASE severity
+                            WHEN 'critical' THEN 1
+                            WHEN 'high' THEN 2
+                            WHEN 'medium' THEN 3
+                            WHEN 'low' THEN 4
+                            ELSE 5
+                        END,
+                        timestamp DESC
+                    LIMIT ?
+                """
+                params.append(limit)
+
+                cursor.execute(query, params)
+
+                results = []
+                for row in cursor.fetchall():
+                    result = dict(row)
+                    for field in ['cve_ids', 'cwe_ids', 'reference_urls', 'tags', 'details']:
+                        if result.get(field):
+                            try:
+                                result[field] = json.loads(result[field])
+                            except json.JSONDecodeError:
+                                result[field] = []
+                    results.append(result)
+
+                return results
+        except Exception as e:
+            logger.error(f"Failed to get all findings: {e}")
+            return []
+
+    def get_findings_summary(self) -> Dict[str, Any]:
+        """
+        Get summary statistics for all findings.
+
+        Returns:
+            Dict with summary stats (counts by severity, scanner, etc.)
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                summary = {
+                    'total': 0,
+                    'by_severity': {},
+                    'by_scanner': {},
+                    'unique_hosts': 0
+                }
+
+                # Total count
+                cursor.execute("SELECT COUNT(*) FROM scan_findings")
+                summary['total'] = cursor.fetchone()[0]
+
+                # By severity
+                cursor.execute("""
+                    SELECT severity, COUNT(*) as count
+                    FROM scan_findings
+                    GROUP BY severity
+                """)
+                for row in cursor.fetchall():
+                    summary['by_severity'][row['severity']] = row['count']
+
+                # By scanner
+                cursor.execute("""
+                    SELECT scanner, COUNT(*) as count
+                    FROM scan_findings
+                    GROUP BY scanner
+                """)
+                for row in cursor.fetchall():
+                    summary['by_scanner'][row['scanner']] = row['count']
+
+                # Unique hosts
+                cursor.execute("SELECT COUNT(DISTINCT host) FROM scan_findings")
+                summary['unique_hosts'] = cursor.fetchone()[0]
+
+                return summary
+        except Exception as e:
+            logger.error(f"Failed to get findings summary: {e}")
+            return {'total': 0, 'by_severity': {}, 'by_scanner': {}, 'unique_hosts': 0}
+
+    def cleanup_old_scans(self, days: int = 30) -> int:
+        """
+        Clean up old scan jobs and their findings.
+
+        Args:
+            days: Remove scans older than this many days
+
+        Returns:
+            Number of scans deleted
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cutoff_date = datetime.now() - timedelta(days=days)
+
+                # Get count before deletion
+                cursor.execute("""
+                    SELECT COUNT(*) FROM scan_jobs
+                    WHERE created_at < ? AND status IN ('completed', 'failed', 'cancelled', 'interrupted')
+                """, (cutoff_date,))
+                count = cursor.fetchone()[0]
+
+                # Delete old scans (findings will cascade)
+                cursor.execute("""
+                    DELETE FROM scan_jobs
+                    WHERE created_at < ? AND status IN ('completed', 'failed', 'cancelled', 'interrupted')
+                """, (cutoff_date,))
+
+                conn.commit()
+                logger.info(f"Cleaned up {count} old scan jobs")
+                return count
+        except Exception as e:
+            logger.error(f"Failed to cleanup old scans: {e}")
+            return 0
+
+    # ================================================================
+    # ZAP Target Credentials Methods
+    # ================================================================
+
+    def save_zap_credentials(self, target_host: str, auth_type: str,
+                             login_url: str = None, username: str = None,
+                             password: str = None, login_request_data: str = None,
+                             username_field: str = 'username', password_field: str = 'password',
+                             http_realm: str = None, notes: str = None,
+                             bearer_token: str = None, api_key: str = None,
+                             api_key_header: str = 'X-API-Key', cookie_value: str = None) -> bool:
+        """
+        Save or update ZAP authentication credentials for a target.
+
+        Args:
+            target_host: Target host/IP (e.g., "192.168.1.1" or "example.com")
+            auth_type: Authentication type ('form', 'http_basic', 'bearer_token', 'api_key', 'cookie', 'none')
+            login_url: URL of login page (for form auth)
+            username: Username for authentication
+            password: Password (will be base64 encoded, not truly encrypted)
+            login_request_data: Custom POST data template
+            username_field: Name of username field
+            password_field: Name of password field
+            http_realm: HTTP realm (for basic auth)
+            notes: Optional notes about the credentials
+            bearer_token: Bearer/JWT token for API authentication
+            api_key: API key for header-based authentication
+            api_key_header: Header name for API key (default: X-API-Key)
+            cookie_value: Cookie string for cookie-based authentication
+
+        Returns:
+            True if saved successfully
+        """
+        import base64
+
+        try:
+            # Normalize target host (remove protocol, trailing slashes)
+            target_host = self._normalize_target_host(target_host)
+
+            # Base64 encode sensitive values (basic obfuscation - not secure encryption)
+            password_encoded = None
+            if password:
+                password_encoded = base64.b64encode(password.encode('utf-8')).decode('utf-8')
+
+            bearer_token_encoded = None
+            if bearer_token:
+                bearer_token_encoded = base64.b64encode(bearer_token.encode('utf-8')).decode('utf-8')
+
+            api_key_encoded = None
+            if api_key:
+                api_key_encoded = base64.b64encode(api_key.encode('utf-8')).decode('utf-8')
+
+            cookie_value_encoded = None
+            if cookie_value:
+                cookie_value_encoded = base64.b64encode(cookie_value.encode('utf-8')).decode('utf-8')
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Upsert credentials
+                cursor.execute("""
+                    INSERT INTO zap_target_credentials
+                    (target_host, auth_type, login_url, username, password_encrypted,
+                     login_request_data, username_field, password_field, http_realm, notes,
+                     bearer_token_encrypted, api_key_encrypted, api_key_header, cookie_value_encrypted, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(target_host) DO UPDATE SET
+                        auth_type = excluded.auth_type,
+                        login_url = excluded.login_url,
+                        username = excluded.username,
+                        password_encrypted = excluded.password_encrypted,
+                        login_request_data = excluded.login_request_data,
+                        username_field = excluded.username_field,
+                        password_field = excluded.password_field,
+                        http_realm = excluded.http_realm,
+                        notes = excluded.notes,
+                        bearer_token_encrypted = excluded.bearer_token_encrypted,
+                        api_key_encrypted = excluded.api_key_encrypted,
+                        api_key_header = excluded.api_key_header,
+                        cookie_value_encrypted = excluded.cookie_value_encrypted,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (target_host, auth_type, login_url, username, password_encoded,
+                      login_request_data, username_field, password_field, http_realm, notes,
+                      bearer_token_encoded, api_key_encoded, api_key_header, cookie_value_encoded))
+
+                conn.commit()
+                logger.info(f"Saved ZAP credentials for target: {target_host}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to save ZAP credentials for {target_host}: {e}")
+            return False
+
+    def get_zap_credentials(self, target_host: str) -> Optional[Dict[str, Any]]:
+        """
+        Get ZAP credentials for a specific target.
+
+        Args:
+            target_host: Target host/IP to look up
+
+        Returns:
+            Dict with credentials or None if not found
+        """
+        import base64
+
+        try:
+            # Normalize target host
+            target_host = self._normalize_target_host(target_host)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM zap_target_credentials WHERE target_host = ?
+                """, (target_host,))
+
+                row = cursor.fetchone()
+                if row:
+                    result = dict(row)
+
+                    # Decode password
+                    if result.get('password_encrypted'):
+                        try:
+                            result['password'] = base64.b64decode(
+                                result['password_encrypted'].encode('utf-8')
+                            ).decode('utf-8')
+                        except Exception:
+                            result['password'] = None
+                    else:
+                        result['password'] = None
+                    if 'password_encrypted' in result:
+                        del result['password_encrypted']
+
+                    # Decode bearer token
+                    if result.get('bearer_token_encrypted'):
+                        try:
+                            result['bearer_token'] = base64.b64decode(
+                                result['bearer_token_encrypted'].encode('utf-8')
+                            ).decode('utf-8')
+                        except Exception:
+                            result['bearer_token'] = None
+                    else:
+                        result['bearer_token'] = None
+                    if 'bearer_token_encrypted' in result:
+                        del result['bearer_token_encrypted']
+
+                    # Decode API key
+                    if result.get('api_key_encrypted'):
+                        try:
+                            result['api_key'] = base64.b64decode(
+                                result['api_key_encrypted'].encode('utf-8')
+                            ).decode('utf-8')
+                        except Exception:
+                            result['api_key'] = None
+                    else:
+                        result['api_key'] = None
+                    if 'api_key_encrypted' in result:
+                        del result['api_key_encrypted']
+
+                    # Decode cookie value
+                    if result.get('cookie_value_encrypted'):
+                        try:
+                            result['cookie_value'] = base64.b64decode(
+                                result['cookie_value_encrypted'].encode('utf-8')
+                            ).decode('utf-8')
+                        except Exception:
+                            result['cookie_value'] = None
+                    else:
+                        result['cookie_value'] = None
+                    if 'cookie_value_encrypted' in result:
+                        del result['cookie_value_encrypted']
+
+                    return result
+
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to get ZAP credentials for {target_host}: {e}")
+            return None
+
+    def get_zap_credentials_for_url(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Get ZAP credentials for a URL (extracts host and looks up).
+
+        Args:
+            url: Full URL (e.g., "http://192.168.1.1:8080/app")
+
+        Returns:
+            Dict with credentials or None if not found
+        """
+        import urllib.parse
+
+        try:
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.netloc or url
+
+            # Try with port first, then without
+            result = self.get_zap_credentials(host)
+            if result:
+                return result
+
+            # Try without port
+            host_no_port = host.split(':')[0]
+            if host_no_port != host:
+                return self.get_zap_credentials(host_no_port)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get ZAP credentials for URL {url}: {e}")
+            return None
+
+    def delete_zap_credentials(self, target_host: str) -> bool:
+        """
+        Delete ZAP credentials for a target.
+
+        Args:
+            target_host: Target host/IP to delete credentials for
+
+        Returns:
+            True if deleted (or didn't exist)
+        """
+        try:
+            target_host = self._normalize_target_host(target_host)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    DELETE FROM zap_target_credentials WHERE target_host = ?
+                """, (target_host,))
+                conn.commit()
+
+                if cursor.rowcount > 0:
+                    logger.info(f"Deleted ZAP credentials for target: {target_host}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete ZAP credentials for {target_host}: {e}")
+            return False
+
+    def list_zap_credentials(self) -> List[Dict[str, Any]]:
+        """
+        List all saved ZAP credentials (without passwords).
+
+        Returns:
+            List of credential entries (passwords masked)
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, target_host, auth_type, login_url, username,
+                           username_field, password_field, http_realm, notes,
+                           created_at, updated_at
+                    FROM zap_target_credentials
+                    ORDER BY updated_at DESC
+                """)
+
+                results = []
+                for row in cursor.fetchall():
+                    result = dict(row)
+                    # Indicate if password is set without revealing it
+                    result['has_password'] = True  # If row exists, password was provided
+                    results.append(result)
+
+                return results
+
+        except Exception as e:
+            logger.error(f"Failed to list ZAP credentials: {e}")
+            return []
+
+    def check_zap_credentials_exist(self, target_host: str) -> Dict[str, Any]:
+        """
+        Check if credentials exist for a target (without returning password).
+
+        Args:
+            target_host: Target host/IP to check
+
+        Returns:
+            Dict with exists: bool, auth_type: str, username: str (if exists)
+        """
+        try:
+            target_host = self._normalize_target_host(target_host)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT auth_type, username, login_url, notes
+                    FROM zap_target_credentials WHERE target_host = ?
+                """, (target_host,))
+
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'exists': True,
+                        'auth_type': row['auth_type'],
+                        'username': row['username'],
+                        'login_url': row['login_url'],
+                        'notes': row['notes']
+                    }
+
+                return {'exists': False}
+
+        except Exception as e:
+            logger.error(f"Failed to check ZAP credentials for {target_host}: {e}")
+            return {'exists': False, 'error': str(e)}
+
+    def _normalize_target_host(self, target: str) -> str:
+        """
+        Normalize a target URL/host for consistent storage.
+        Extracts just the host:port portion.
+        """
+        import urllib.parse
+
+        if not target:
+            return ''
+
+        # If it looks like a URL, parse it
+        if '://' in target:
+            parsed = urllib.parse.urlparse(target)
+            host = parsed.netloc or parsed.path
+        else:
+            host = target
+
+        # Remove trailing slashes and paths
+        host = host.split('/')[0]
+
+        # Lowercase for consistency
+        return host.lower().strip()
 
 
 # Singleton instance

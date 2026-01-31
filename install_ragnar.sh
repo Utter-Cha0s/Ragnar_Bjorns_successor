@@ -311,7 +311,6 @@ check_system_compatibility() {
     return 0
 }
 
-# Check internet connectivity
 check_internet() {
     log "INFO" "Checking internet connectivity..."
     
@@ -393,6 +392,10 @@ install_dependencies() {
         "rfkill"
         "sqlite3"
         "arp-scan"
+        "tcpdump"
+        "nikto"
+        "sqlmap"
+        "whatweb"
     )
 
     if [ "$IS_ARM" = true ]; then
@@ -858,6 +861,17 @@ EOF
 ragnar ALL=(ALL) NOPASSWD: /usr/bin/nmap
 EOF
     chmod 440 /etc/sudoers.d/ragnar-nmap
+    
+    # Configure sudo for traffic analysis tools without password
+    log "INFO" "Configuring sudo permissions for traffic analysis..."
+    cat > /etc/sudoers.d/ragnar-traffic << EOF
+# Allow ragnar user to run traffic analysis tools without password
+ragnar ALL=(ALL) NOPASSWD: /usr/bin/tcpdump
+ragnar ALL=(ALL) NOPASSWD: /usr/bin/tshark
+ragnar ALL=(ALL) NOPASSWD: /usr/sbin/iftop
+ragnar ALL=(ALL) NOPASSWD: /usr/sbin/nethogs
+EOF
+    chmod 440 /etc/sudoers.d/ragnar-traffic
     
     check_success "Added ragnar user to required groups and configured sudo permissions"
 }

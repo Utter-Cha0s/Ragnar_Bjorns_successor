@@ -364,6 +364,23 @@ document.addEventListener('DOMContentLoaded', function() {
     initializePwnUI();
     initializePwnagotchiVisibility();
     handleHeadlessMode();
+
+    // Close finding detail modal with Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeFindingDetailModal();
+        }
+    });
+
+    // Close finding detail modal when clicking outside
+    const findingModal = document.getElementById('finding-detail-modal');
+    if (findingModal) {
+        findingModal.addEventListener('click', function(e) {
+            if (e.target === findingModal) {
+                closeFindingDetailModal();
+            }
+        });
+    }
 });
 
 
@@ -609,7 +626,6 @@ function setupAutoRefresh() {
     autoRefreshIntervals.connect = setInterval(() => {
         if (currentTab === 'connect') {
             refreshWifiStatus();
-            refreshEthernetStatus();
         }
         if (currentTab === 'pentest' && manualModeActive) {
             refreshBluetoothStatus();
@@ -700,10 +716,9 @@ async function loadInitialData() {
             updateDashboardStatus(quickData);
         }
         
-        // OPTIMIZATION: Defer WiFi and Ethernet status to after dashboard is visible
+        // OPTIMIZATION: Defer WiFi status to after dashboard is visible
         setTimeout(() => {
             refreshWifiStatus().catch(err => console.warn('WiFi status load failed:', err));
-            refreshEthernetStatus().catch(err => console.warn('Ethernet status load failed:', err));
         }, 200);
         
         // OPTIMIZATION: Defer console logs to much later (lowest priority)
@@ -834,7 +849,6 @@ async function loadTabData(tabName) {
             } else {
                 await refreshWifiStatus().catch(err => console.warn('WiFi refresh failed:', err));
                 await refreshBluetoothStatus().catch(err => console.warn('Bluetooth refresh failed:', err));
-                await refreshEthernetStatus().catch(err => console.warn('Ethernet refresh failed:', err));
             }
             break;
         case 'pentest':
@@ -886,6 +900,12 @@ async function loadTabData(tabName) {
             } else {
                 await refreshPwnagotchiStatus({ silent: true });
             }
+            break;
+        case 'traffic':
+            await loadTrafficAnalysisData();
+            break;
+        case 'adv-vuln':
+            await loadAdvancedVulnData();
             break;
     }
 }
@@ -3591,8 +3611,7 @@ async function loadConnectData() {
         console.log('Loading connect tab, refreshing connectivity status...');
         await Promise.all([
             refreshWifiStatus(),
-            refreshBluetoothStatus(),
-            refreshEthernetStatus()
+            refreshBluetoothStatus()
         ]);
     } catch (error) {
         console.error('Error loading connect data:', error);
@@ -4589,12 +4608,6 @@ async function refreshWifiStatus() {
         const interfaceLabel = data.interface ? data.interface : activeInterface;
         const ipBadge = data.ip_address ? ` (${data.ip_address})` : '';
         
-        // Update primary connection state for WiFi
-        primaryConnectionState.wifiConnected = data.wifi_connected || false;
-        primaryConnectionState.wifiSsid = data.current_ssid || null;
-        primaryConnectionState.wifiInterface = interfaceLabel || null;
-        primaryConnectionState.wifiIp = data.ip_address || null;
-        
         if (data.ap_mode_active) {
             const apMessage = `AP Mode Active: "${data.ap_ssid || 'Ragnar'}" | Connect to configure Wi-Fi`;
             console.log('Setting AP mode status:', apMessage);
@@ -4602,8 +4615,6 @@ async function refreshWifiStatus() {
             statusIndicator.textContent = 'AP Mode';
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-orange-700 text-orange-300';
             wifiInfo.textContent = apMessage;
-            // In AP mode, WiFi is not really "connected" for scanning purposes
-            primaryConnectionState.wifiConnected = false;
         } else if (data.wifi_connected) {
             const ssid = data.current_ssid || 'Unknown Network';
             const connectedMessage = interfaceLabel
@@ -4624,10 +4635,6 @@ async function refreshWifiStatus() {
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
             wifiInfo.textContent = disconnectedMessage;
         }
-        
-        // Update primary connection display after WiFi state is set
-        updatePrimaryConnectionDisplay();
-        
         if (connectedList) {
             const interfaces = Array.isArray(data.interfaces) ? data.interfaces : [];
             const connectedAdapters = interfaces.filter(iface => iface && iface.connected);
@@ -4699,212 +4706,6 @@ async function refreshWifiStatus() {
     setWifiInterfaceMetadata([]);
         renderDashboardMultiInterfaceSummary(null);
         renderConnectTabMultiInterface(null);
-    }
-}
-
-// Track connectivity state for primary connection display
-let primaryConnectionState = {
-    lanConnected: false,
-    lanInterface: null,
-    lanIp: null,
-    wifiConnected: false,
-    wifiSsid: null,
-    wifiInterface: null,
-    wifiIp: null,
-    preferEthernet: true
-};
-
-function updatePrimaryConnectionDisplay() {
-    const iconEl = document.getElementById('primary-connection-icon');
-    const labelEl = document.getElementById('primary-connection-label');
-    const statusEl = document.getElementById('primary-connection-status');
-    const nameEl = document.getElementById('primary-connection-name');
-    const ipEl = document.getElementById('primary-connection-ip');
-    const interfaceSwitch = document.getElementById('wifi-dashboard-interface-switch');
-
-    if (!iconEl || !labelEl || !statusEl || !nameEl) {
-        return;
-    }
-
-    const wifiIcon = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
-    </svg>`;
-    
-    const lanIcon = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path>
-    </svg>`;
-
-    const st = primaryConnectionState;
-
-    // Determine primary connection: LAN if connected and preferred (or WiFi not available), else WiFi
-    const useLanAsPrimary = st.lanConnected && (st.preferEthernet || !st.wifiConnected);
-
-    if (useLanAsPrimary) {
-        // LAN is primary
-        iconEl.innerHTML = lanIcon;
-        iconEl.className = 'text-blue-400';
-        labelEl.textContent = 'LAN Connected';
-        statusEl.className = 'w-3 h-3 bg-green-500 rounded-full';
-        nameEl.textContent = `Connected via ${st.lanInterface || 'eth0'}`;
-        if (ipEl) {
-            ipEl.textContent = st.lanIp ? `IP: ${st.lanIp}` : '';
-        }
-        // Hide WiFi interface switch when LAN is primary
-        if (interfaceSwitch) {
-            interfaceSwitch.classList.add('hidden');
-        }
-    } else if (st.wifiConnected) {
-        // WiFi is primary
-        iconEl.innerHTML = wifiIcon;
-        iconEl.className = 'text-blue-400';
-        labelEl.textContent = 'WiFi Connected';
-        statusEl.className = 'w-3 h-3 bg-green-500 rounded-full';
-        const ifaceLabel = st.wifiInterface ? ` on ${st.wifiInterface}` : '';
-        nameEl.textContent = `${st.wifiSsid || 'Unknown Network'}${ifaceLabel}`;
-        if (ipEl) {
-            ipEl.textContent = st.wifiIp ? `IP: ${st.wifiIp}` : '';
-        }
-    } else {
-        // No connection
-        iconEl.innerHTML = wifiIcon;
-        iconEl.className = 'text-gray-500';
-        labelEl.textContent = 'No Connection';
-        statusEl.className = 'w-3 h-3 bg-red-500 rounded-full';
-        nameEl.textContent = 'No active network connection';
-        if (ipEl) {
-            ipEl.textContent = '';
-        }
-    }
-
-    // Update secondary cards
-    updateSecondaryConnectionCards();
-}
-
-function updateSecondaryConnectionCards() {
-    const st = primaryConnectionState;
-    
-    // Update WiFi secondary card
-    const wifiStatus = document.getElementById('wifi-status');
-    const wifiSsidDisplay = document.getElementById('wifi-ssid-display');
-    
-    if (wifiStatus) {
-        wifiStatus.className = st.wifiConnected 
-            ? 'w-3 h-3 bg-green-500 rounded-full' 
-            : 'w-3 h-3 bg-gray-600 rounded-full';
-    }
-    if (wifiSsidDisplay) {
-        if (st.wifiConnected) {
-            wifiSsidDisplay.textContent = st.wifiSsid || 'Connected';
-            wifiSsidDisplay.className = 'text-xs text-green-400 truncate';
-        } else {
-            wifiSsidDisplay.textContent = 'Not connected';
-            wifiSsidDisplay.className = 'text-xs text-gray-500 truncate';
-        }
-    }
-
-    // Update LAN secondary card
-    const lanStatus = document.getElementById('lan-status');
-    const lanInfoDisplay = document.getElementById('lan-info-display');
-    
-    if (lanStatus) {
-        lanStatus.className = st.lanConnected 
-            ? 'w-3 h-3 bg-green-500 rounded-full' 
-            : 'w-3 h-3 bg-gray-600 rounded-full';
-    }
-    if (lanInfoDisplay) {
-        if (st.lanConnected) {
-            const ifaceLabel = st.lanInterface || 'eth0';
-            lanInfoDisplay.textContent = st.lanIp ? `${ifaceLabel} • ${st.lanIp}` : ifaceLabel;
-            lanInfoDisplay.className = 'text-xs text-green-400 truncate';
-        } else {
-            lanInfoDisplay.textContent = 'Not connected';
-            lanInfoDisplay.className = 'text-xs text-gray-500 truncate';
-        }
-    }
-}
-
-async function refreshEthernetStatus() {
-    const indicator = document.getElementById('lan-status-indicator');
-    const info = document.getElementById('lan-info');
-    const list = document.getElementById('lan-interface-list');
-
-    try {
-        const data = await fetchAPI('/api/ethernet/status');
-        const active = data && data.active_interface ? data.active_interface : null;
-        const interfaces = data && Array.isArray(data.interfaces) ? data.interfaces : [];
-
-        // Update primary connection state for LAN
-        primaryConnectionState.lanConnected = !!active;
-        primaryConnectionState.lanInterface = active ? active.name : null;
-        primaryConnectionState.lanIp = active ? active.ip_address : null;
-        primaryConnectionState.preferEthernet = data && typeof data.prefer_ethernet === 'boolean' 
-            ? data.prefer_ethernet 
-            : true;
-
-        // Update primary connection display
-        updatePrimaryConnectionDisplay();
-
-        // Update Connect tab elements if they exist
-        if (indicator && info) {
-            if (active) {
-                const ipLabel = active.ip_address ? ` • ${escapeHtml(active.ip_address)}` : '';
-                indicator.textContent = 'LAN Connected';
-                indicator.className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-200';
-                info.textContent = `Connected via ${active.name}${ipLabel}`;
-            } else if (data && data.available) {
-                indicator.textContent = 'No Link';
-                indicator.className = 'text-sm px-2 py-1 rounded bg-amber-700 text-amber-200';
-                info.textContent = 'Ethernet detected but no active link or IP address.';
-            } else {
-                indicator.textContent = 'Unavailable';
-                indicator.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-300';
-                info.textContent = 'No Ethernet interfaces detected on this host.';
-            }
-        }
-
-        if (list) {
-            if (interfaces.length === 0) {
-                list.innerHTML = '<div class="text-xs text-gray-500">No Ethernet interfaces found.</div>';
-                list.classList.remove('hidden');
-            } else {
-                const markup = interfaces.map(iface => {
-                    const statusLabel = iface.connected && iface.has_carrier ? 'Online' : 'Offline';
-                    const statusClass = iface.connected && iface.has_carrier ? 'text-green-300' : 'text-gray-400';
-                    const ipLabel = iface.ip_address ? ` • ${escapeHtml(iface.ip_address)}` : '';
-                    const networkLabel = iface.network_cidr ? ` • ${escapeHtml(iface.network_cidr)}` : '';
-                    return `
-                        <div class="flex items-center justify-between gap-3">
-                            <div>
-                                <div class="text-sm font-semibold text-white">${escapeHtml(iface.name || 'eth')}</div>
-                                <div class="text-xs text-gray-400">${escapeHtml(iface.state || 'UNKNOWN')}${networkLabel}</div>
-                            </div>
-                            <div class="text-right text-xs ${statusClass}">
-                                <div>${statusLabel}${ipLabel}</div>
-                                ${iface.mac_address ? `<div class="text-[11px] text-gray-500">${escapeHtml(iface.mac_address)}</div>` : ''}
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-                list.innerHTML = markup;
-                list.classList.remove('hidden');
-            }
-        }
-    } catch (error) {
-        console.error('Error refreshing Ethernet status:', error);
-        primaryConnectionState.lanConnected = false;
-        primaryConnectionState.lanInterface = null;
-        primaryConnectionState.lanIp = null;
-        updatePrimaryConnectionDisplay();
-        
-        if (indicator && info) {
-            indicator.textContent = 'Error';
-            indicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
-            info.textContent = 'Unable to read LAN status.';
-        }
-        if (list) {
-            list.innerHTML = '<div class="text-xs text-red-300">Failed to load Ethernet details.</div>';
-            list.classList.remove('hidden');
-        }
     }
 }
 
@@ -9852,7 +9653,6 @@ window.restartService = restartService;
 window.rebootSystem = rebootSystem;
 window.startAPMode = startAPMode;
 window.refreshWifiStatus = refreshWifiStatus;
-window.refreshEthernetStatus = refreshEthernetStatus;
 window.updateManualPorts = updateManualPorts;
 window.executeManualAttack = executeManualAttack;
 window.startOrchestrator = startOrchestrator;
@@ -10934,3 +10734,3486 @@ function toggleAISection(section) {
         if (toggleIcon) toggleIcon.classList.remove('rotate-180');
     }
 }
+
+// ============================================================================
+// SERVER MODE & ADVANCED FEATURES
+// ============================================================================
+
+let serverModeEnabled = false;
+let trafficCaptureRunning = false;
+let trafficRefreshInterval = null;
+let advVulnRefreshInterval = null;
+
+// Traffic Analysis Chart Data
+let trafficBandwidthHistory = [];
+let trafficBandwidthChart = null;
+let trafficProtocolChart = null;
+const TRAFFIC_HISTORY_SIZE = 60; // 60 seconds of history
+
+// Ragnar's local IPs (to identify self-traffic in UI)
+let ragnarLocalIps = new Set(['127.0.0.1', 'localhost']);
+
+/**
+ * Check server capabilities and enable advanced features if available
+ */
+async function checkServerCapabilities() {
+    try {
+        const response = await fetch('/api/server/capabilities');
+        const data = await response.json();
+        
+        console.log('[ServerMode] Capability check response:', data);
+        
+        if (data.success && data.features) {
+            serverModeEnabled = data.features.server_mode;
+            
+            // Show/hide server mode features in navigation
+            const serverModeElements = document.querySelectorAll('.server-mode-feature');
+            console.log(`[ServerMode] Found ${serverModeElements.length} server-mode UI elements`);
+            
+            serverModeElements.forEach(el => {
+                if (serverModeEnabled) {
+                    el.classList.remove('hidden');
+                } else {
+                    el.classList.add('hidden');
+                }
+            });
+            
+            if (serverModeEnabled) {
+                console.log('[ServerMode] ✅ Server mode enabled - unlocking advanced features');
+                console.log('[ServerMode] Capabilities:', data.capabilities);
+            } else {
+                console.log('[ServerMode] ⚠️ Server mode NOT enabled. Reasons:');
+                console.log('[ServerMode]   - Architecture:', data.capabilities?.architecture);
+                console.log('[ServerMode]   - RAM:', data.capabilities?.total_ram_gb?.toFixed(2), 'GB (need 7.5GB+)');
+                console.log('[ServerMode]   - Cores:', data.capabilities?.cpu_cores, '(need 2+)');
+                console.log('[ServerMode]   - Is Pi Zero:', data.capabilities?.is_pi_zero);
+                console.log('[ServerMode]   - Full capabilities:', data.capabilities);
+            }
+            
+            return data;
+        } else if (!data.success) {
+            console.error('[ServerMode] API error:', data.error);
+        }
+    } catch (error) {
+        console.warn('[ServerMode] Could not check server capabilities:', error);
+    }
+    return null;
+}
+
+// Initialize server mode on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Delay server mode check slightly to not block initial load
+    setTimeout(() => {
+        checkServerCapabilities();
+    }, 2000);
+});
+
+// ============================================================================
+// TRAFFIC ANALYSIS FUNCTIONS
+// ============================================================================
+
+async function loadTrafficAnalysisData() {
+    try {
+        const response = await fetch('/api/traffic/status');
+        const data = await response.json();
+
+        if (!data.success || !data.available) {
+            showTrafficNotAvailable();
+            return;
+        }
+
+        hideTrafficNotAvailable();
+        updateTrafficSummary(data.summary);
+        updateTrafficSecurityMetrics(data.summary);
+        updateTrafficBandwidthChart(data.summary);
+
+        // Load additional data
+        await Promise.all([
+            loadTrafficHosts(),
+            loadTrafficConnections(),
+            loadTrafficAlerts(),
+            loadTrafficProtocols(),
+            loadTrafficDnsAnalysis(),
+            loadTrafficTopTalkers(),
+            loadTrafficPortActivity()
+        ]);
+
+        // Update capture button state
+        trafficCaptureRunning = data.summary?.status === 'running';
+        updateTrafficCaptureButton();
+
+    } catch (error) {
+        console.error('Error loading traffic analysis:', error);
+        showTrafficNotAvailable();
+    }
+}
+
+function showTrafficNotAvailable() {
+    const notice = document.getElementById('traffic-not-available');
+    if (notice) notice.classList.remove('hidden');
+}
+
+function hideTrafficNotAvailable() {
+    const notice = document.getElementById('traffic-not-available');
+    if (notice) notice.classList.add('hidden');
+}
+
+function updateTrafficSummary(summary) {
+    if (!summary) return;
+
+    updateElement('traffic-packets-sec', summary.packets_per_second || 0);
+    updateElement('traffic-mbps', (summary.mbps || 0).toFixed(2));
+    updateElement('traffic-hosts', summary.active_hosts || 0);
+    updateElement('traffic-connections', summary.active_connections || 0);
+    updateElement('traffic-alerts', summary.alert_count || 0);
+
+    // Extended stats
+    updateElement('traffic-packets-total', formatNumber(summary.total_packets || 0) + ' total');
+    updateElement('traffic-bytes-total', formatBytes(summary.total_bytes || 0) + ' total');
+    updateElement('traffic-dns-queries', (summary.dns_queries_logged || 0) + ' DNS');
+
+    // Store local IPs for UI labeling
+    if (summary.local_ips && Array.isArray(summary.local_ips)) {
+        ragnarLocalIps = new Set(summary.local_ips);
+        console.log('[Traffic] Ragnar local IPs:', Array.from(ragnarLocalIps));
+    }
+}
+
+/**
+ * Update security metrics and risk score
+ */
+function updateTrafficSecurityMetrics(summary) {
+    if (!summary) return;
+
+    // Calculate risk score based on alerts and suspicious activity
+    const alertCount = summary.alert_count || 0;
+    const riskScore = Math.min(100, alertCount * 10);
+
+    // Determine risk level
+    let riskColor, riskLabel, riskIcon;
+    if (riskScore === 0) {
+        riskColor = '#22c55e'; // green
+        riskLabel = 'No threats detected';
+        riskIcon = 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z';
+    } else if (riskScore < 30) {
+        riskColor = '#eab308'; // yellow
+        riskLabel = 'Low risk activity';
+        riskIcon = 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z';
+    } else if (riskScore < 60) {
+        riskColor = '#f97316'; // orange
+        riskLabel = 'Moderate risk detected';
+        riskIcon = 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z';
+    } else {
+        riskColor = '#ef4444'; // red
+        riskLabel = 'High risk - investigate';
+        riskIcon = 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z';
+    }
+
+    // Update risk score display
+    const scoreEl = document.getElementById('traffic-risk-score');
+    const labelEl = document.getElementById('traffic-risk-label');
+    const circleEl = document.getElementById('traffic-risk-circle');
+    const iconEl = document.getElementById('traffic-risk-icon');
+    const cardEl = document.getElementById('traffic-risk-card');
+
+    if (scoreEl) {
+        scoreEl.textContent = riskScore;
+        scoreEl.style.color = riskColor;
+    }
+    if (labelEl) labelEl.textContent = riskLabel;
+    if (circleEl) {
+        circleEl.setAttribute('stroke', riskColor);
+        circleEl.setAttribute('stroke-dasharray', `${riskScore}, 100`);
+    }
+    if (iconEl) {
+        iconEl.setAttribute('stroke', riskColor);
+        iconEl.querySelector('path').setAttribute('d', riskIcon);
+    }
+    if (cardEl) cardEl.style.borderColor = riskColor;
+}
+
+/**
+ * Update bandwidth timeline chart
+ */
+function updateTrafficBandwidthChart(summary) {
+    if (!summary) return;
+
+    // Add current data point
+    trafficBandwidthHistory.push({
+        timestamp: Date.now(),
+        mbps: summary.mbps || 0,
+        packetsPerSec: summary.packets_per_second || 0
+    });
+
+    // Keep only last 60 data points
+    while (trafficBandwidthHistory.length > TRAFFIC_HISTORY_SIZE) {
+        trafficBandwidthHistory.shift();
+    }
+
+    // Draw chart
+    const canvas = document.getElementById('traffic-bandwidth-chart');
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const width = canvas.parentElement.offsetWidth;
+    const height = 128;
+
+    canvas.width = width;
+    canvas.height = height;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    if (trafficBandwidthHistory.length < 2) return;
+
+    // Find max value for scaling
+    const maxMbps = Math.max(...trafficBandwidthHistory.map(d => d.mbps), 0.1);
+    const chartMaxEl = document.getElementById('traffic-chart-max');
+    if (chartMaxEl) chartMaxEl.textContent = maxMbps.toFixed(2) + ' Mbps';
+
+    // Draw grid lines
+    ctx.strokeStyle = 'rgba(100, 116, 139, 0.2)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+        const y = (height / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+    }
+
+    // Draw bandwidth line
+    const stepX = width / (TRAFFIC_HISTORY_SIZE - 1);
+
+    // Gradient fill
+    const gradient = ctx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.3)');
+    gradient.addColorStop(1, 'rgba(34, 211, 238, 0)');
+
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+
+    trafficBandwidthHistory.forEach((data, index) => {
+        const x = index * stepX;
+        const y = height - (data.mbps / maxMbps) * (height - 10);
+        if (index === 0) {
+            ctx.lineTo(x, y);
+        } else {
+            ctx.lineTo(x, y);
+        }
+    });
+
+    ctx.lineTo((trafficBandwidthHistory.length - 1) * stepX, height);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // Draw line on top
+    ctx.beginPath();
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 2;
+
+    trafficBandwidthHistory.forEach((data, index) => {
+        const x = index * stepX;
+        const y = height - (data.mbps / maxMbps) * (height - 10);
+        if (index === 0) {
+            ctx.moveTo(x, y);
+        } else {
+            ctx.lineTo(x, y);
+        }
+    });
+    ctx.stroke();
+
+    // Draw current value dot
+    if (trafficBandwidthHistory.length > 0) {
+        const lastData = trafficBandwidthHistory[trafficBandwidthHistory.length - 1];
+        const lastX = (trafficBandwidthHistory.length - 1) * stepX;
+        const lastY = height - (lastData.mbps / maxMbps) * (height - 10);
+
+        ctx.beginPath();
+        ctx.fillStyle = '#22d3ee';
+        ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+/**
+ * Format large numbers with K, M, B suffixes
+ */
+function formatNumber(num) {
+    if (num >= 1000000000) return (num / 1000000000).toFixed(1) + 'B';
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toString();
+}
+
+async function loadTrafficHosts() {
+    try {
+        const response = await fetch('/api/traffic/hosts?limit=15&sort=bytes');
+        const data = await response.json();
+
+        const container = document.getElementById('traffic-top-hosts');
+        if (!container) return;
+
+        if (!data.success || !data.hosts?.length) {
+            container.innerHTML = '<p class="text-gray-400 text-center py-8">No host data available</p>';
+            updateTrafficDirectionChart(0, 0);
+            return;
+        }
+
+        // Calculate total inbound/outbound for traffic direction chart
+        let totalBytesIn = 0;
+        let totalBytesOut = 0;
+
+        data.hosts.forEach(host => {
+            totalBytesIn += host.bytes_in || 0;
+            totalBytesOut += host.bytes_out || 0;
+        });
+
+        // Update traffic direction chart
+        updateTrafficDirectionChart(totalBytesIn, totalBytesOut);
+
+        container.innerHTML = data.hosts.map(host => {
+            const isLocalIp = ragnarLocalIps.has(host.ip);
+            const localBadge = isLocalIp ? '<span class="ml-1 px-1 py-0.5 text-xs bg-purple-600 text-purple-100 rounded">RAGNAR</span>' : '';
+            const bgClass = isLocalIp ? 'bg-purple-900 bg-opacity-30 border border-purple-600 border-opacity-30' : 'bg-slate-700 bg-opacity-50 hover:bg-slate-600 hover:bg-opacity-50';
+            const portsCount = host.ports_contacted?.length || 0;
+            const protocolsCount = Object.keys(host.protocols || {}).length;
+
+            return `
+                <div class="flex items-center justify-between p-2 ${bgClass} rounded-lg cursor-pointer transition-colors"
+                     onclick="showTrafficHostDetail('${escapeHtml(host.ip)}')" title="Click for details">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-2 h-2 rounded-full ${host.packets_in > host.packets_out ? 'bg-green-400' : 'bg-blue-400'}"></div>
+                        <div>
+                            <div class="font-mono text-sm flex items-center">${escapeHtml(host.ip)}${localBadge}</div>
+                            <div class="text-xs text-gray-400">
+                                ${formatBytes(host.total_bytes)} | ${portsCount} ports | ${protocolsCount} protocols
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-right flex items-center gap-2">
+                        <div>
+                            <div class="text-xs text-green-400">↓ ${formatBytes(host.bytes_in)}</div>
+                            <div class="text-xs text-blue-400">↑ ${formatBytes(host.bytes_out)}</div>
+                        </div>
+                        <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+    } catch (error) {
+        console.error('Error loading traffic hosts:', error);
+    }
+}
+
+/**
+ * Update the traffic direction mini chart
+ */
+function updateTrafficDirectionChart(bytesIn, bytesOut) {
+    const total = bytesIn + bytesOut;
+    let inPercent = 50;
+    let outPercent = 50;
+
+    if (total > 0) {
+        inPercent = Math.round((bytesIn / total) * 100);
+        outPercent = 100 - inPercent;
+    }
+
+    // Update the bar widths
+    const inBar = document.getElementById('traffic-direction-in');
+    const outBar = document.getElementById('traffic-direction-out');
+    const inPercentEl = document.getElementById('traffic-in-percent');
+    const outPercentEl = document.getElementById('traffic-out-percent');
+
+    if (inBar) inBar.style.width = `${inPercent}%`;
+    if (outBar) outBar.style.width = `${outPercent}%`;
+    if (inPercentEl) inPercentEl.textContent = inPercent;
+    if (outPercentEl) outPercentEl.textContent = outPercent;
+}
+
+async function loadTrafficConnections() {
+    try {
+        const response = await fetch('/api/traffic/connections?limit=20');
+        const data = await response.json();
+        
+        const container = document.getElementById('traffic-connections-list');
+        if (!container) return;
+        
+        if (!data.success || !data.connections?.length) {
+            container.innerHTML = '<p class="text-gray-400 text-center py-8">No active connections</p>';
+            return;
+        }
+        
+        container.innerHTML = data.connections.map((conn, index) => {
+            const duration = conn.duration_seconds ? formatDuration(conn.duration_seconds) : 'N/A';
+            const connData = encodeURIComponent(JSON.stringify(conn));
+            return `
+                <div class="p-2 bg-slate-700 bg-opacity-50 hover:bg-slate-600 hover:bg-opacity-50 rounded-lg text-xs font-mono cursor-pointer transition-colors"
+                     onclick="showTrafficConnectionDetail(decodeURIComponent('${connData}'))" title="Click for details">
+                    <div class="flex items-center justify-between">
+                        <span class="text-cyan-400">${escapeHtml(conn.src_ip)}:${conn.src_port}</span>
+                        <span class="text-gray-500 mx-1">→</span>
+                        <span class="text-green-400">${escapeHtml(conn.dst_ip)}:${conn.dst_port}</span>
+                        <svg class="w-3 h-3 text-gray-500 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </div>
+                    <div class="text-gray-400 mt-1 flex justify-between">
+                        <span>${conn.protocol.toUpperCase()} | ${conn.packets_sent} pkts | ${formatBytes(conn.bytes_sent)}</span>
+                        <span class="text-gray-500">${duration}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+    } catch (error) {
+        console.error('Error loading traffic connections:', error);
+    }
+}
+
+async function loadTrafficAlerts() {
+    try {
+        const response = await fetch('/api/traffic/alerts?limit=20');
+        const data = await response.json();
+
+        const container = document.getElementById('traffic-alerts-list');
+        if (!container) return;
+
+        if (!data.success || !data.alerts?.length) {
+            container.innerHTML = '<p class="text-gray-400 text-center py-8">No alerts - network appears clean</p>';
+            return;
+        }
+
+        // Count alerts by category for threat indicators
+        const alertCategories = {};
+        data.alerts.forEach(alert => {
+            alertCategories[alert.category] = (alertCategories[alert.category] || 0) + 1;
+        });
+
+        container.innerHTML = data.alerts.map(alert => {
+            const levelColors = {
+                'critical': 'border-red-600 bg-red-900',
+                'high': 'border-orange-500 bg-orange-900',
+                'medium': 'border-yellow-500 bg-yellow-900',
+                'low': 'border-blue-500 bg-blue-900',
+                'info': 'border-gray-500 bg-gray-800'
+            };
+            const levelBadges = {
+                'critical': 'bg-red-600 text-white',
+                'high': 'bg-orange-600 text-white',
+                'medium': 'bg-yellow-600 text-black',
+                'low': 'bg-blue-600 text-white',
+                'info': 'bg-gray-600 text-white'
+            };
+            const colorClass = levelColors[alert.level] || levelColors.info;
+            const badgeClass = levelBadges[alert.level] || levelBadges.info;
+
+            // Format timestamp
+            const timestamp = alert.timestamp ? new Date(alert.timestamp).toLocaleTimeString() : '';
+
+            return `
+                <div class="p-2 ${colorClass} bg-opacity-30 border-l-4 rounded-lg hover:bg-opacity-50 transition-colors">
+                    <div class="flex items-center justify-between mb-1">
+                        <div class="flex items-center space-x-2">
+                            <span class="px-1.5 py-0.5 ${badgeClass} text-xs rounded uppercase font-semibold">${alert.level}</span>
+                            <span class="font-medium text-sm">${escapeHtml(formatAlertCategory(alert.category))}</span>
+                        </div>
+                        <span class="text-xs text-gray-500">${timestamp}</span>
+                    </div>
+                    <div class="text-xs text-gray-300">${escapeHtml(alert.message)}</div>
+                    ${alert.src_ip ? `
+                        <div class="text-xs text-gray-400 mt-1 font-mono flex items-center justify-between">
+                            <span>Source: ${escapeHtml(alert.src_ip)}${alert.dst_ip ? ' → ' + escapeHtml(alert.dst_ip) : ''}</span>
+                            <button onclick="event.stopPropagation(); showTrafficHostDetail('${escapeHtml(alert.src_ip)}')"
+                                    class="px-2 py-0.5 bg-slate-600 hover:bg-slate-500 text-gray-200 rounded text-xs transition-colors"
+                                    title="View source host details">
+                                Investigate
+                            </button>
+                        </div>
+                    ` : ''}
+                    ${alert.details ? `<div class="text-xs text-gray-500 mt-1">${formatAlertDetails(alert.details)}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+
+    } catch (error) {
+        console.error('Error loading traffic alerts:', error);
+    }
+}
+
+/**
+ * Format alert category for display
+ */
+function formatAlertCategory(category) {
+    const categoryLabels = {
+        'suspicious_port': 'Suspicious Port',
+        'port_scan': 'Port Scan Detected',
+        'c2_beacon': 'C2 Beacon Pattern',
+        'dns_tunnel': 'DNS Tunneling Suspect',
+        'high_traffic': 'High Traffic Volume',
+        'unknown_protocol': 'Unknown Protocol'
+    };
+    return categoryLabels[category] || category.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/**
+ * Format alert details for display
+ */
+function formatAlertDetails(details) {
+    if (!details || typeof details !== 'object') return '';
+    return Object.entries(details)
+        .map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`)
+        .join(' | ');
+}
+
+async function loadTrafficProtocols() {
+    try {
+        const response = await fetch('/api/traffic/summary');
+        const data = await response.json();
+
+        const container = document.getElementById('traffic-protocols');
+        const totalEl = document.getElementById('traffic-protocol-total');
+        if (!container) return;
+
+        if (!data.success || !data.protocols || Object.keys(data.protocols).length === 0) {
+            container.innerHTML = '<p class="text-gray-400 text-center py-4 text-xs">No protocol data</p>';
+            drawProtocolDonutChart({});
+            return;
+        }
+
+        const protocols = data.protocols;
+        const total = Object.values(protocols).reduce((a, b) => a + b, 0);
+
+        if (totalEl) totalEl.textContent = formatNumber(total);
+
+        // Protocol colors
+        const protoColors = {
+            'tcp': '#22d3ee',    // cyan
+            'udp': '#a855f7',    // purple
+            'icmp': '#f97316',   // orange
+            'ip': '#3b82f6',     // blue
+            'arp': '#eab308',    // yellow
+            'other': '#6b7280'   // gray
+        };
+
+        // Draw donut chart
+        drawProtocolDonutChart(protocols, protoColors);
+
+        // Update list
+        container.innerHTML = Object.entries(protocols)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 6)
+            .map(([proto, count]) => {
+                const percent = total > 0 ? (count / total * 100).toFixed(1) : 0;
+                const color = protoColors[proto.toLowerCase()] || protoColors.other;
+                return `
+                    <div class="flex items-center justify-between text-xs">
+                        <div class="flex items-center space-x-2">
+                            <span class="w-2 h-2 rounded-full" style="background-color: ${color}"></span>
+                            <span class="uppercase font-mono text-gray-300">${escapeHtml(proto)}</span>
+                        </div>
+                        <span class="text-gray-400">${percent}%</span>
+                    </div>
+                `;
+            }).join('');
+
+    } catch (error) {
+        console.error('Error loading traffic protocols:', error);
+    }
+}
+
+/**
+ * Draw protocol distribution donut chart
+ */
+function drawProtocolDonutChart(protocols, colors = {}) {
+    const canvas = document.getElementById('traffic-protocol-chart');
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const width = 128;
+    const height = 128;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const outerRadius = 55;
+    const innerRadius = 35;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const entries = Object.entries(protocols).sort((a, b) => b[1] - a[1]);
+    const total = Object.values(protocols).reduce((a, b) => a + b, 0);
+
+    if (total === 0) {
+        // Draw empty ring
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2, true);
+        ctx.fillStyle = 'rgba(100, 116, 139, 0.3)';
+        ctx.fill();
+        return;
+    }
+
+    const defaultColors = ['#22d3ee', '#a855f7', '#f97316', '#3b82f6', '#eab308', '#6b7280'];
+    let startAngle = -Math.PI / 2;
+
+    entries.forEach(([proto, count], index) => {
+        const sliceAngle = (count / total) * Math.PI * 2;
+        const color = colors[proto.toLowerCase()] || defaultColors[index % defaultColors.length];
+
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, outerRadius, startAngle, startAngle + sliceAngle);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        startAngle += sliceAngle;
+    });
+
+    // Draw inner circle (donut hole)
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
+    ctx.fillStyle = '#1e293b';
+    ctx.fill();
+}
+
+/**
+ * Load DNS query analysis data
+ */
+async function loadTrafficDnsAnalysis() {
+    try {
+        const response = await fetch('/api/traffic/summary');
+        const data = await response.json();
+
+        const listContainer = document.getElementById('traffic-dns-list');
+        const totalEl = document.getElementById('traffic-dns-total');
+        const uniqueEl = document.getElementById('traffic-dns-unique');
+        const suspiciousEl = document.getElementById('traffic-dns-suspicious');
+
+        if (!data.success) {
+            if (listContainer) listContainer.innerHTML = '<p class="text-gray-400 text-center py-4">No DNS data</p>';
+            return;
+        }
+
+        // Update stats
+        const dnsCount = data.dns_queries_logged || 0;
+        if (totalEl) totalEl.textContent = dnsCount;
+
+        // Try to get DNS details from hosts
+        const hostsResponse = await fetch('/api/traffic/hosts?limit=50&sort=bytes');
+        const hostsData = await hostsResponse.json();
+
+        if (!hostsData.success || !hostsData.hosts) {
+            if (listContainer) listContainer.innerHTML = '<p class="text-gray-400 text-center py-4">No DNS queries logged</p>';
+            return;
+        }
+
+        // Collect all DNS queries from hosts
+        const allDnsQueries = [];
+        const uniqueDomains = new Set();
+        let suspiciousCount = 0;
+
+        hostsData.hosts.forEach(host => {
+            if (host.dns_queries && host.dns_queries.length > 0) {
+                host.dns_queries.forEach(query => {
+                    allDnsQueries.push({ ip: host.ip, query: query });
+                    // Extract domain from query if possible
+                    const domainMatch = query.match(/([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}/);
+                    if (domainMatch) {
+                        uniqueDomains.add(domainMatch[0].toLowerCase());
+                        // Check for suspicious patterns (long subdomains, hex-like, high entropy)
+                        if (domainMatch[0].length > 50 || /^[a-f0-9]{16,}\./.test(domainMatch[0].toLowerCase())) {
+                            suspiciousCount++;
+                        }
+                    }
+                });
+            }
+        });
+
+        if (uniqueEl) uniqueEl.textContent = uniqueDomains.size;
+        if (suspiciousEl) suspiciousEl.textContent = suspiciousCount;
+
+        // Update threat indicators
+        updateElement('traffic-threat-c2', suspiciousCount > 0 ? suspiciousCount : 0);
+
+        if (allDnsQueries.length === 0) {
+            if (listContainer) listContainer.innerHTML = '<p class="text-gray-400 text-center py-4">No DNS queries logged</p>';
+            return;
+        }
+
+        // Display recent DNS queries
+        if (listContainer) {
+            listContainer.innerHTML = allDnsQueries.slice(-20).reverse().map(item => {
+                const isSuspicious = item.query.length > 100 || /[a-f0-9]{16,}/.test(item.query);
+                return `
+                    <div class="flex items-center justify-between p-1 ${isSuspicious ? 'bg-red-900 bg-opacity-20 border-l-2 border-red-500' : 'bg-slate-700 bg-opacity-30'} rounded hover:bg-slate-600 hover:bg-opacity-50 transition-colors cursor-pointer" onclick="showTrafficHostDetail('${escapeHtml(item.ip)}')" title="Click to view host details">
+                        <span class="text-gray-300 truncate flex-1" title="${escapeHtml(item.query)}">${escapeHtml(item.query.substring(0, 60))}${item.query.length > 60 ? '...' : ''}</span>
+                        <span class="text-cyan-400 ml-2 font-mono hover:underline">${escapeHtml(item.ip)}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+    } catch (error) {
+        console.error('Error loading DNS analysis:', error);
+    }
+}
+
+/**
+ * Load top talkers / connection matrix
+ */
+async function loadTrafficTopTalkers() {
+    try {
+        const response = await fetch('/api/traffic/connections?limit=50');
+        const data = await response.json();
+
+        const container = document.getElementById('traffic-top-talkers');
+        if (!container) return;
+
+        if (!data.success || !data.connections?.length) {
+            container.innerHTML = '<p class="text-gray-400 text-center py-4">No connection data</p>';
+            return;
+        }
+
+        // Aggregate connections by src-dst pair
+        const pairs = {};
+        data.connections.forEach(conn => {
+            const key = `${conn.src_ip}→${conn.dst_ip}`;
+            if (!pairs[key]) {
+                pairs[key] = {
+                    src: conn.src_ip,
+                    dst: conn.dst_ip,
+                    bytes: 0,
+                    packets: 0,
+                    connections: 0,
+                    protocols: new Set()
+                };
+            }
+            pairs[key].bytes += conn.bytes_sent || 0;
+            pairs[key].packets += conn.packets_sent || 0;
+            pairs[key].connections++;
+            pairs[key].protocols.add(conn.protocol);
+        });
+
+        // Sort by bytes
+        const sortedPairs = Object.values(pairs).sort((a, b) => b.bytes - a.bytes).slice(0, 10);
+        const maxBytes = sortedPairs[0]?.bytes || 1;
+
+        container.innerHTML = sortedPairs.map(pair => {
+            const percent = (pair.bytes / maxBytes) * 100;
+            const protocols = Array.from(pair.protocols).join(', ').toUpperCase();
+            return `
+                <div class="relative p-2 bg-slate-700 bg-opacity-30 rounded overflow-hidden hover:bg-slate-600 hover:bg-opacity-40 transition-colors">
+                    <div class="absolute inset-0 bg-gradient-to-r from-cyan-600 to-transparent opacity-20" style="width: ${percent}%"></div>
+                    <div class="relative flex items-center justify-between">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center space-x-2 text-xs">
+                                <span class="text-cyan-400 font-mono truncate cursor-pointer hover:underline" onclick="showTrafficHostDetail('${escapeHtml(pair.src)}')" title="View source host details">${escapeHtml(pair.src)}</span>
+                                <span class="text-gray-500">→</span>
+                                <span class="text-green-400 font-mono truncate cursor-pointer hover:underline" onclick="showTrafficHostDetail('${escapeHtml(pair.dst)}')" title="View destination host details">${escapeHtml(pair.dst)}</span>
+                            </div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                ${protocols} | ${pair.connections} conn | ${pair.packets} pkts
+                            </div>
+                        </div>
+                        <div class="text-right text-xs ml-2">
+                            <div class="text-white font-semibold">${formatBytes(pair.bytes)}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+    } catch (error) {
+        console.error('Error loading top talkers:', error);
+    }
+}
+
+/**
+ * Load port activity analysis
+ */
+/**
+ * Suspicious port definitions with security context
+ */
+const SUSPICIOUS_PORT_INFO = {
+    4444: { name: 'Metasploit Default', reason: 'Default Metasploit reverse shell listener port', severity: 'critical', category: 'Exploit Framework' },
+    5555: { name: 'Android ADB', reason: 'Android Debug Bridge - often exploited for unauthorized device access', severity: 'high', category: 'Remote Access' },
+    6666: { name: 'IRC/Backdoor', reason: 'Commonly used by IRC botnets and backdoor trojans', severity: 'high', category: 'Botnet/C2' },
+    1234: { name: 'Common Backdoor', reason: 'Frequently used by malware for reverse shells', severity: 'medium', category: 'Backdoor' },
+    31337: { name: 'Elite/Back Orifice', reason: 'Historic "elite" port used by Back Orifice and many trojans', severity: 'critical', category: 'Trojan' },
+    12345: { name: 'NetBus Trojan', reason: 'Default port for NetBus remote administration trojan', severity: 'critical', category: 'Trojan' },
+    65535: { name: 'Max Port Backdoor', reason: 'Maximum port number - often used by malware to avoid detection', severity: 'medium', category: 'Evasion' },
+    1337: { name: 'Leet Port', reason: 'Common hacker culture port used by various malware', severity: 'medium', category: 'Backdoor' },
+    9001: { name: 'Tor/Hidden Service', reason: 'Default Tor ORPort - may indicate anonymization or C2', severity: 'medium', category: 'Anonymization' },
+    6667: { name: 'IRC Default', reason: 'IRC server port - commonly used for botnet C2 communication', severity: 'high', category: 'Botnet/C2' },
+    6697: { name: 'IRC SSL', reason: 'IRC over SSL - used by botnets for encrypted C2', severity: 'high', category: 'Botnet/C2' },
+    8080: { name: 'Alt HTTP/Proxy', reason: 'Alternative HTTP port - check for unauthorized web services', severity: 'low', category: 'Web Service' },
+    3128: { name: 'Squid Proxy', reason: 'Default Squid proxy port - may indicate data exfiltration', severity: 'medium', category: 'Proxy' },
+    1080: { name: 'SOCKS Proxy', reason: 'SOCKS proxy port - often used for tunneling and evasion', severity: 'medium', category: 'Proxy' },
+    7777: { name: 'Game/Backdoor', reason: 'Used by various trojans and game servers', severity: 'medium', category: 'Backdoor' },
+    5900: { name: 'VNC', reason: 'VNC remote desktop - verify if authorized', severity: 'medium', category: 'Remote Access' },
+    5901: { name: 'VNC Display 1', reason: 'VNC remote desktop display 1', severity: 'medium', category: 'Remote Access' },
+    27374: { name: 'Sub7 Trojan', reason: 'Default port for Sub7 remote access trojan', severity: 'critical', category: 'Trojan' },
+    20: { name: 'FTP Data', reason: 'FTP data transfer - unencrypted, credentials may leak', severity: 'low', category: 'Legacy Protocol' },
+    23: { name: 'Telnet', reason: 'Unencrypted remote access - credentials sent in plaintext', severity: 'high', category: 'Legacy Protocol' },
+    69: { name: 'TFTP', reason: 'Trivial FTP - no authentication, often used in attacks', severity: 'medium', category: 'Legacy Protocol' },
+    111: { name: 'RPCBind', reason: 'RPC portmapper - can expose internal services', severity: 'medium', category: 'Service Exposure' },
+    135: { name: 'MS-RPC', reason: 'Microsoft RPC endpoint mapper - common attack vector', severity: 'medium', category: 'Windows Service' },
+    137: { name: 'NetBIOS-NS', reason: 'NetBIOS Name Service - information disclosure risk', severity: 'low', category: 'Windows Service' },
+    138: { name: 'NetBIOS-DGM', reason: 'NetBIOS Datagram - legacy Windows networking', severity: 'low', category: 'Windows Service' },
+    139: { name: 'NetBIOS-SSN', reason: 'NetBIOS Session - SMB over NetBIOS', severity: 'medium', category: 'Windows Service' },
+    445: { name: 'SMB', reason: 'Server Message Block - common ransomware propagation vector', severity: 'high', category: 'Windows Service' },
+    512: { name: 'rexec', reason: 'Remote execution - no encryption, easily exploited', severity: 'high', category: 'Legacy Protocol' },
+    513: { name: 'rlogin', reason: 'Remote login - no encryption, trust-based auth', severity: 'high', category: 'Legacy Protocol' },
+    514: { name: 'rsh/syslog', reason: 'Remote shell or syslog - no encryption', severity: 'high', category: 'Legacy Protocol' },
+    2049: { name: 'NFS', reason: 'Network File System - verify authorization', severity: 'medium', category: 'File Sharing' }
+};
+
+async function loadTrafficPortActivity() {
+    try {
+        const response = await fetch('/api/traffic/hosts?limit=100&sort=bytes');
+        const data = await response.json();
+
+        if (!data.success || !data.hosts) return;
+
+        // Aggregate port activity with host tracking
+        const portCounts = {};
+        const portHosts = {}; // Track which hosts contacted each port
+        const suspiciousPortsSet = new Set(Object.keys(SUSPICIOUS_PORT_INFO).map(p => parseInt(p)));
+        const detectedSuspiciousPorts = {}; // port -> {count, hosts, info}
+        let portScanCount = 0;
+
+        data.hosts.forEach(host => {
+            if (host.ports_contacted) {
+                host.ports_contacted.forEach(port => {
+                    portCounts[port] = (portCounts[port] || 0) + 1;
+
+                    // Track hosts per port
+                    if (!portHosts[port]) portHosts[port] = new Set();
+                    portHosts[port].add(host.ip);
+
+                    // Track suspicious ports with details
+                    if (suspiciousPortsSet.has(port)) {
+                        if (!detectedSuspiciousPorts[port]) {
+                            detectedSuspiciousPorts[port] = {
+                                count: 0,
+                                hosts: new Set(),
+                                info: SUSPICIOUS_PORT_INFO[port]
+                            };
+                        }
+                        detectedSuspiciousPorts[port].count++;
+                        detectedSuspiciousPorts[port].hosts.add(host.ip);
+                    }
+                });
+
+                // Check for port scan behavior (many ports from single host)
+                if (host.ports_contacted.length > 50) {
+                    portScanCount++;
+                }
+            }
+        });
+
+        const suspiciousCount = Object.keys(detectedSuspiciousPorts).length;
+
+        // Update common port counts
+        updateElement('port-80-count', portCounts[80] || 0);
+        updateElement('port-443-count', portCounts[443] || 0);
+        updateElement('port-53-count', portCounts[53] || 0);
+        updateElement('port-22-count', portCounts[22] || 0);
+        updateElement('port-3389-count', portCounts[3389] || 0);
+        updateElement('port-suspicious-count', suspiciousCount);
+
+        // Update threat indicators
+        updateElement('traffic-threat-port-scans', portScanCount);
+        updateElement('traffic-threat-suspicious', suspiciousCount);
+
+        // Update unique ports count
+        updateElement('traffic-unique-ports', Object.keys(portCounts).length + ' ports');
+
+        // Display suspicious ports detail section
+        const suspiciousSection = document.getElementById('suspicious-ports-section');
+        const suspiciousList = document.getElementById('suspicious-ports-list');
+
+        if (suspiciousSection && suspiciousList) {
+            if (suspiciousCount > 0) {
+                suspiciousSection.style.display = 'block';
+
+                // Sort by severity (critical > high > medium > low)
+                const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+                const sortedSuspicious = Object.entries(detectedSuspiciousPorts)
+                    .sort((a, b) => severityOrder[a[1].info.severity] - severityOrder[b[1].info.severity]);
+
+                suspiciousList.innerHTML = sortedSuspicious.map(([port, data]) => {
+                    const info = data.info;
+                    const hosts = Array.from(data.hosts).slice(0, 3);
+                    const moreHosts = data.hosts.size > 3 ? ` +${data.hosts.size - 3} more` : '';
+
+                    const severityColors = {
+                        critical: 'bg-red-600 text-white',
+                        high: 'bg-orange-600 text-white',
+                        medium: 'bg-yellow-600 text-black',
+                        low: 'bg-blue-600 text-white'
+                    };
+                    const severityClass = severityColors[info.severity] || severityColors.medium;
+
+                    // Make hosts clickable
+                    const clickableHosts = hosts.map(h => `<span class="cursor-pointer hover:underline" onclick="event.stopPropagation(); showTrafficHostDetail('${escapeHtml(h)}')">${escapeHtml(h)}</span>`).join(', ');
+
+                    return `
+                        <div class="p-2 bg-slate-800 bg-opacity-50 rounded border-l-4 ${info.severity === 'critical' ? 'border-red-500' : info.severity === 'high' ? 'border-orange-500' : info.severity === 'medium' ? 'border-yellow-500' : 'border-blue-500'} hover:bg-slate-700 hover:bg-opacity-50 transition-colors">
+                            <div class="flex items-center justify-between mb-1">
+                                <div class="flex items-center space-x-2">
+                                    <span class="font-mono font-bold text-red-400 cursor-pointer hover:underline" onclick="showTrafficPortDetail(${port})" title="View port details">${port}</span>
+                                    <span class="text-xs px-1.5 py-0.5 ${severityClass} rounded uppercase font-semibold">${info.severity}</span>
+                                    <span class="text-xs text-gray-400">${escapeHtml(info.name)}</span>
+                                </div>
+                                <span class="text-xs px-2 py-0.5 bg-slate-700 rounded text-gray-300">${escapeHtml(info.category)}</span>
+                            </div>
+                            <div class="text-xs text-gray-400 mb-1">${escapeHtml(info.reason)}</div>
+                            <div class="text-xs text-gray-500">
+                                <span class="text-yellow-400">${data.count}</span> connections from
+                                <span class="font-mono text-cyan-400">${clickableHosts}${moreHosts}</span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                suspiciousSection.style.display = 'none';
+                suspiciousList.innerHTML = '';
+            }
+        }
+
+        // Display all active ports
+        const allPortsContainer = document.getElementById('traffic-all-ports');
+        if (allPortsContainer) {
+            const sortedPorts = Object.entries(portCounts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 50);
+
+            if (sortedPorts.length === 0) {
+                allPortsContainer.innerHTML = '<span class="text-xs text-gray-500 px-2 py-1 bg-slate-700 rounded">No port data</span>';
+            } else {
+                allPortsContainer.innerHTML = sortedPorts.map(([port, count]) => {
+                    const portNum = parseInt(port);
+                    const isSuspicious = suspiciousPortsSet.has(portNum);
+                    const isCommon = [80, 443, 22, 53, 25, 21, 3389, 8443].includes(portNum);
+                    let colorClass = 'bg-slate-600 text-gray-300 hover:bg-slate-500';
+                    let tooltip = `${count} connections - Click for details`;
+
+                    if (isSuspicious) {
+                        colorClass = 'bg-red-900 text-red-400 border border-red-600 hover:bg-red-800';
+                        const info = SUSPICIOUS_PORT_INFO[portNum];
+                        tooltip = `${info.name}: ${info.reason} (${count} connections) - Click for details`;
+                    } else if (isCommon) {
+                        colorClass = 'bg-cyan-900 text-cyan-400 hover:bg-cyan-800';
+                    }
+
+                    return `<span class="text-xs px-2 py-1 ${colorClass} rounded font-mono cursor-pointer transition-colors" title="${escapeHtml(tooltip)}" onclick="showTrafficPortDetail(${port})">${port}</span>`;
+                }).join('');
+            }
+        }
+
+    } catch (error) {
+        console.error('Error loading port activity:', error);
+    }
+}
+
+async function toggleTrafficCapture() {
+    try {
+        const endpoint = trafficCaptureRunning ? '/api/traffic/stop' : '/api/traffic/start';
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            trafficCaptureRunning = !trafficCaptureRunning;
+            updateTrafficCaptureButton();
+            
+            if (trafficCaptureRunning) {
+                // Start refresh interval
+                trafficRefreshInterval = setInterval(refreshTrafficData, 3000);
+                showNotification('Traffic capture started', 'success');
+            } else {
+                // Stop refresh interval
+                if (trafficRefreshInterval) {
+                    clearInterval(trafficRefreshInterval);
+                    trafficRefreshInterval = null;
+                }
+                showNotification('Traffic capture stopped', 'info');
+            }
+        } else {
+            showNotification(data.error || 'Failed to toggle capture', 'error');
+        }
+    } catch (error) {
+        console.error('Error toggling traffic capture:', error);
+        showNotification('Failed to toggle traffic capture', 'error');
+    }
+}
+
+function updateTrafficCaptureButton() {
+    const btn = document.getElementById('traffic-toggle-btn');
+    if (!btn) return;
+    
+    if (trafficCaptureRunning) {
+        btn.innerHTML = `
+            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path>
+            </svg>
+            Stop Capture
+        `;
+        btn.classList.remove('bg-green-600', 'hover:bg-green-700');
+        btn.classList.add('bg-red-600', 'hover:bg-red-700');
+    } else {
+        btn.innerHTML = `
+            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            Start Capture
+        `;
+        btn.classList.remove('bg-red-600', 'hover:bg-red-700');
+        btn.classList.add('bg-green-600', 'hover:bg-green-700');
+    }
+}
+
+async function refreshTrafficData() {
+    if (currentTab !== 'traffic') return;
+    await loadTrafficAnalysisData();
+}
+
+/**
+ * Show traffic host detail modal
+ */
+async function showTrafficHostDetail(ip) {
+    const modal = document.getElementById('traffic-host-modal');
+    const ipTitle = document.getElementById('traffic-host-modal-ip');
+    const content = document.getElementById('traffic-host-modal-content');
+
+    if (!modal || !content) return;
+
+    ipTitle.textContent = ip;
+    content.innerHTML = '<div class="text-center py-8"><div class="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full mx-auto"></div><p class="text-gray-400 mt-2">Loading host details...</p></div>';
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    try {
+        const response = await fetch(`/api/traffic/host/${encodeURIComponent(ip)}`);
+        const data = await response.json();
+
+        if (!data.success || !data.host) {
+            content.innerHTML = '<p class="text-red-400 text-center py-8">Failed to load host details</p>';
+            return;
+        }
+
+        const host = data.host;
+        const isLocal = ragnarLocalIps.has(host.ip);
+        const protocols = Object.entries(host.protocols || {});
+        const ports = host.ports_contacted || [];
+        const dnsQueries = host.dns_queries || [];
+
+        // Format timestamps
+        const firstSeen = host.first_seen ? new Date(host.first_seen).toLocaleString() : 'N/A';
+        const lastSeen = host.last_seen ? new Date(host.last_seen).toLocaleString() : 'N/A';
+
+        // Get service names for common ports
+        const getServiceName = (port) => {
+            const services = {
+                21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS', 67: 'DHCP', 68: 'DHCP',
+                80: 'HTTP', 110: 'POP3', 123: 'NTP', 135: 'RPC', 137: 'NetBIOS', 138: 'NetBIOS',
+                139: 'NetBIOS', 143: 'IMAP', 161: 'SNMP', 162: 'SNMP', 389: 'LDAP', 443: 'HTTPS',
+                445: 'SMB', 465: 'SMTPS', 514: 'Syslog', 587: 'SMTP', 631: 'IPP', 636: 'LDAPS',
+                993: 'IMAPS', 995: 'POP3S', 1433: 'MSSQL', 1521: 'Oracle', 1883: 'MQTT',
+                1900: 'UPnP', 2049: 'NFS', 2181: 'ZooKeeper', 2375: 'Docker', 3005: 'Services',
+                3306: 'MySQL', 3389: 'RDP', 5000: 'Services', 5060: 'SIP', 5061: 'SIPS',
+                5353: 'mDNS', 5432: 'PostgreSQL', 5631: 'pcAnywhere', 5632: 'pcAnywhere',
+                5672: 'AMQP', 5900: 'VNC', 6379: 'Redis', 6667: 'IRC', 6881: 'BitTorrent',
+                7844: 'Services', 8080: 'HTTP-Alt', 8081: 'HTTP-Alt', 8086: 'InfluxDB',
+                8181: 'HTTP-Alt', 8443: 'HTTPS-Alt', 9000: 'Services', 9090: 'Prometheus',
+                9100: 'Printing', 9418: 'Git', 9999: 'Services', 25565: 'Minecraft', 27017: 'MongoDB'
+            };
+            return services[port] || '';
+        };
+
+        content.innerHTML = `
+            <!-- Host Header -->
+            <div class="p-4 bg-slate-800 rounded-lg">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="font-mono text-lg text-white">${escapeHtml(host.ip)}</span>
+                        ${isLocal ? '<span class="px-2 py-0.5 text-xs bg-purple-600 text-purple-100 rounded">RAGNAR</span>' : ''}
+                        ${host.hostname ? `<span class="text-gray-400">(${escapeHtml(host.hostname)})</span>` : ''}
+                    </div>
+                    ${host.mac ? `<span class="font-mono text-xs text-gray-500">${escapeHtml(host.mac)}</span>` : ''}
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center text-sm">
+                    <div class="bg-slate-700 rounded p-2">
+                        <div class="text-cyan-400 font-bold">${formatBytes(host.total_bytes)}</div>
+                        <div class="text-xs text-gray-500">Total Traffic</div>
+                    </div>
+                    <div class="bg-slate-700 rounded p-2">
+                        <div class="text-green-400 font-bold">${host.total_packets || 0}</div>
+                        <div class="text-xs text-gray-500">Packets</div>
+                    </div>
+                    <div class="bg-slate-700 rounded p-2">
+                        <div class="text-blue-400 font-bold">${ports.length}</div>
+                        <div class="text-xs text-gray-500">Ports</div>
+                    </div>
+                    <div class="bg-slate-700 rounded p-2">
+                        <div class="text-purple-400 font-bold">${host.connections_active || 0}</div>
+                        <div class="text-xs text-gray-500">Active Conns</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Traffic Direction -->
+            <div class="p-4 bg-slate-800 rounded-lg">
+                <h4 class="text-sm font-semibold text-gray-300 mb-3">Traffic Direction</h4>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="text-center">
+                        <div class="text-2xl font-bold text-green-400">↓ ${formatBytes(host.bytes_in || 0)}</div>
+                        <div class="text-xs text-gray-500">${host.packets_in || 0} packets inbound</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-2xl font-bold text-blue-400">↑ ${formatBytes(host.bytes_out || 0)}</div>
+                        <div class="text-xs text-gray-500">${host.packets_out || 0} packets outbound</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Protocols -->
+            <div class="p-4 bg-slate-800 rounded-lg">
+                <h4 class="text-sm font-semibold text-gray-300 mb-3">Protocols (${protocols.length})</h4>
+                <div class="flex flex-wrap gap-2">
+                    ${protocols.length > 0 ? protocols.map(([proto, count]) => `
+                        <span class="px-3 py-1 bg-slate-700 rounded-full text-sm">
+                            <span class="text-purple-400 font-semibold">${escapeHtml(proto.toUpperCase())}</span>
+                            <span class="text-gray-400 ml-1">${count}</span>
+                        </span>
+                    `).join('') : '<span class="text-gray-500">No protocol data</span>'}
+                </div>
+            </div>
+
+            <!-- Ports Contacted -->
+            <div class="p-4 bg-slate-800 rounded-lg">
+                <h4 class="text-sm font-semibold text-gray-300 mb-3">Ports Contacted (${ports.length})</h4>
+                <div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+                    ${ports.length > 0 ? ports.sort((a, b) => a - b).map(port => {
+                        const service = getServiceName(port);
+                        const isSuspicious = [4444, 5555, 6666, 31337, 12345, 54321].includes(port);
+                        const colorClass = isSuspicious ? 'bg-red-900 text-red-300 border border-red-600' :
+                                          service ? 'bg-cyan-900 bg-opacity-50 text-cyan-300' : 'bg-slate-700 text-gray-300';
+                        return `<span class="px-2 py-1 ${colorClass} rounded text-xs font-mono" title="${service || 'Unknown'}">${port}${service ? ` (${service})` : ''}</span>`;
+                    }).join('') : '<span class="text-gray-500">No port data</span>'}
+                </div>
+            </div>
+
+            <!-- DNS Queries -->
+            ${dnsQueries.length > 0 ? `
+            <div class="p-4 bg-slate-800 rounded-lg">
+                <h4 class="text-sm font-semibold text-gray-300 mb-3">DNS Queries (${dnsQueries.length})</h4>
+                <div class="space-y-1 max-h-32 overflow-y-auto text-xs font-mono">
+                    ${dnsQueries.map(query => `
+                        <div class="p-2 bg-slate-700 rounded text-yellow-300 break-all">${escapeHtml(query)}</div>
+                    `).join('')}
+                </div>
+            </div>
+            ` : ''}
+
+            <!-- Timestamps -->
+            <div class="p-4 bg-slate-800 rounded-lg">
+                <h4 class="text-sm font-semibold text-gray-300 mb-3">Timeline</h4>
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                        <div class="text-gray-500">First Seen</div>
+                        <div class="text-white">${firstSeen}</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-500">Last Seen</div>
+                        <div class="text-white">${lastSeen}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+    } catch (error) {
+        console.error('Error loading host details:', error);
+        content.innerHTML = '<p class="text-red-400 text-center py-8">Error loading host details</p>';
+    }
+}
+
+/**
+ * Close traffic host detail modal
+ */
+function closeTrafficHostModal() {
+    const modal = document.getElementById('traffic-host-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+/**
+ * Show traffic connection detail modal
+ */
+function showTrafficConnectionDetail(connDataStr) {
+    const modal = document.getElementById('traffic-connection-modal');
+    const content = document.getElementById('traffic-connection-modal-content');
+
+    if (!modal || !content) return;
+
+    let conn;
+    try {
+        conn = typeof connDataStr === 'string' ? JSON.parse(connDataStr) : connDataStr;
+    } catch (e) {
+        console.error('Error parsing connection data:', e);
+        return;
+    }
+
+    const duration = conn.duration_seconds ? formatDuration(conn.duration_seconds) : 'N/A';
+    const firstSeen = conn.first_seen ? new Date(conn.first_seen).toLocaleString() : 'N/A';
+    const lastSeen = conn.last_seen ? new Date(conn.last_seen).toLocaleString() : 'N/A';
+
+    content.innerHTML = `
+        <!-- Connection Header -->
+        <div class="p-4 bg-slate-800 rounded-lg">
+            <div class="flex items-center justify-center gap-3 text-lg font-mono mb-4">
+                <span class="text-cyan-400">${escapeHtml(conn.src_ip)}:${conn.src_port}</span>
+                <span class="text-gray-500">→</span>
+                <span class="text-green-400">${escapeHtml(conn.dst_ip)}:${conn.dst_port}</span>
+            </div>
+            <div class="flex justify-center">
+                <span class="px-3 py-1 bg-blue-900 text-blue-300 rounded-full text-sm font-semibold">
+                    ${escapeHtml(conn.protocol?.toUpperCase() || 'UNKNOWN')}
+                </span>
+            </div>
+        </div>
+
+        <!-- Statistics -->
+        <div class="p-4 bg-slate-800 rounded-lg">
+            <h4 class="text-sm font-semibold text-gray-300 mb-3">Statistics</h4>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center text-sm">
+                <div class="bg-slate-700 rounded p-2">
+                    <div class="text-cyan-400 font-bold">${formatBytes(conn.bytes_sent || 0)}</div>
+                    <div class="text-xs text-gray-500">Bytes Sent</div>
+                </div>
+                <div class="bg-slate-700 rounded p-2">
+                    <div class="text-green-400 font-bold">${formatBytes(conn.bytes_recv || 0)}</div>
+                    <div class="text-xs text-gray-500">Bytes Received</div>
+                </div>
+                <div class="bg-slate-700 rounded p-2">
+                    <div class="text-blue-400 font-bold">${conn.packets_sent || 0}</div>
+                    <div class="text-xs text-gray-500">Packets Sent</div>
+                </div>
+                <div class="bg-slate-700 rounded p-2">
+                    <div class="text-purple-400 font-bold">${conn.packets_recv || 0}</div>
+                    <div class="text-xs text-gray-500">Packets Received</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Duration -->
+        <div class="p-4 bg-slate-800 rounded-lg">
+            <h4 class="text-sm font-semibold text-gray-300 mb-3">Duration</h4>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-yellow-400">${duration}</div>
+                <div class="text-xs text-gray-500 mt-1">Connection duration</div>
+            </div>
+        </div>
+
+        <!-- Flags -->
+        ${conn.flags && conn.flags.length > 0 ? `
+        <div class="p-4 bg-slate-800 rounded-lg">
+            <h4 class="text-sm font-semibold text-gray-300 mb-3">TCP Flags</h4>
+            <div class="flex flex-wrap gap-2">
+                ${conn.flags.map(flag => `
+                    <span class="px-2 py-1 bg-orange-900 text-orange-300 rounded text-xs font-mono">${escapeHtml(flag)}</span>
+                `).join('')}
+            </div>
+        </div>
+        ` : ''}
+
+        <!-- Timeline -->
+        <div class="p-4 bg-slate-800 rounded-lg">
+            <h4 class="text-sm font-semibold text-gray-300 mb-3">Timeline</h4>
+            <div class="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                    <div class="text-gray-500">First Seen</div>
+                    <div class="text-white">${firstSeen}</div>
+                </div>
+                <div>
+                    <div class="text-gray-500">Last Seen</div>
+                    <div class="text-white">${lastSeen}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="flex gap-2">
+            <button onclick="showTrafficHostDetail('${escapeHtml(conn.src_ip)}')"
+                    class="flex-1 px-3 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-sm transition-colors">
+                View Source Host
+            </button>
+            <button onclick="showTrafficHostDetail('${escapeHtml(conn.dst_ip)}')"
+                    class="flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm transition-colors">
+                View Dest Host
+            </button>
+        </div>
+    `;
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+/**
+ * Close traffic connection detail modal
+ */
+function closeTrafficConnectionModal() {
+    const modal = document.getElementById('traffic-connection-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+/**
+ * Show traffic port detail modal
+ */
+async function showTrafficPortDetail(port, portHosts) {
+    const modal = document.getElementById('traffic-port-modal');
+    const portTitle = document.getElementById('traffic-port-modal-port');
+    const serviceTitle = document.getElementById('traffic-port-modal-service');
+    const content = document.getElementById('traffic-port-modal-content');
+
+    if (!modal || !content) return;
+
+    const portNum = parseInt(port);
+    portTitle.textContent = port;
+
+    // Get service name
+    const commonPorts = {
+        20: 'FTP Data', 21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP',
+        53: 'DNS', 67: 'DHCP Server', 68: 'DHCP Client', 69: 'TFTP',
+        80: 'HTTP', 110: 'POP3', 119: 'NNTP', 123: 'NTP', 135: 'MS-RPC',
+        137: 'NetBIOS-NS', 138: 'NetBIOS-DGM', 139: 'NetBIOS-SSN',
+        143: 'IMAP', 161: 'SNMP', 162: 'SNMP Trap', 389: 'LDAP',
+        443: 'HTTPS', 445: 'SMB', 465: 'SMTPS', 514: 'Syslog',
+        587: 'SMTP Submission', 636: 'LDAPS', 993: 'IMAPS', 995: 'POP3S',
+        1080: 'SOCKS', 1433: 'MSSQL', 1521: 'Oracle', 3306: 'MySQL',
+        3389: 'RDP', 5432: 'PostgreSQL', 5900: 'VNC', 6379: 'Redis',
+        8080: 'HTTP Proxy', 8443: 'HTTPS Alt', 27017: 'MongoDB'
+    };
+
+    const suspiciousInfo = SUSPICIOUS_PORT_INFO[portNum];
+    const serviceName = suspiciousInfo ? suspiciousInfo.name : (commonPorts[portNum] || 'Unknown Service');
+    serviceTitle.textContent = serviceName;
+
+    content.innerHTML = '<div class="text-center py-8"><div class="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full mx-auto"></div><p class="text-gray-400 mt-2">Loading port details...</p></div>';
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    try {
+        // Fetch hosts data to get more info about connections on this port
+        const response = await fetch('/api/traffic/hosts?limit=100&sort=bytes');
+        const data = await response.json();
+
+        if (!data.success || !data.hosts) {
+            content.innerHTML = '<p class="text-red-400 text-center py-8">Failed to load port details</p>';
+            return;
+        }
+
+        // Find hosts using this port
+        const hostsUsingPort = data.hosts.filter(h => h.ports_contacted && h.ports_contacted.includes(portNum));
+
+        let html = '';
+
+        // Security warning if suspicious
+        if (suspiciousInfo) {
+            const severityColors = {
+                critical: 'bg-red-900 border-red-500 text-red-300',
+                high: 'bg-orange-900 border-orange-500 text-orange-300',
+                medium: 'bg-yellow-900 border-yellow-500 text-yellow-300',
+                low: 'bg-blue-900 border-blue-500 text-blue-300'
+            };
+            html += `
+                <div class="p-3 ${severityColors[suspiciousInfo.severity]} border-l-4 rounded">
+                    <div class="flex items-center space-x-2 mb-1">
+                        <span class="text-lg">⚠️</span>
+                        <span class="font-semibold uppercase text-xs">${suspiciousInfo.severity} Severity</span>
+                        <span class="text-xs px-2 py-0.5 bg-black bg-opacity-30 rounded">${escapeHtml(suspiciousInfo.category)}</span>
+                    </div>
+                    <p class="text-sm">${escapeHtml(suspiciousInfo.reason)}</p>
+                </div>
+            `;
+        }
+
+        // Port statistics
+        html += `
+            <div class="grid grid-cols-2 gap-3">
+                <div class="bg-slate-800 bg-opacity-50 p-3 rounded">
+                    <div class="text-xs text-gray-400 uppercase">Total Hosts</div>
+                    <div class="text-2xl font-bold text-cyan-400">${hostsUsingPort.length}</div>
+                </div>
+                <div class="bg-slate-800 bg-opacity-50 p-3 rounded">
+                    <div class="text-xs text-gray-400 uppercase">Service</div>
+                    <div class="text-lg font-semibold text-white">${escapeHtml(serviceName)}</div>
+                </div>
+            </div>
+        `;
+
+        // Hosts using this port
+        if (hostsUsingPort.length > 0) {
+            html += `
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-300 mb-2">Hosts Using This Port</h4>
+                    <div class="space-y-1 max-h-60 overflow-y-auto">
+                        ${hostsUsingPort.map(host => {
+                            const totalBytes = host.total_bytes || 0;
+                            return `
+                                <div class="flex items-center justify-between p-2 bg-slate-700 bg-opacity-30 rounded hover:bg-slate-600 hover:bg-opacity-50 transition-colors cursor-pointer" onclick="closeTrafficPortModal(); showTrafficHostDetail('${escapeHtml(host.ip)}')">
+                                    <div class="flex items-center space-x-2">
+                                        <span class="font-mono text-cyan-400">${escapeHtml(host.ip)}</span>
+                                        ${host.hostname ? `<span class="text-gray-500 text-xs">(${escapeHtml(host.hostname)})</span>` : ''}
+                                    </div>
+                                    <div class="text-xs text-gray-400">
+                                        ${formatBytes(totalBytes)}
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        } else {
+            html += '<p class="text-gray-400 text-center py-4">No active hosts on this port</p>';
+        }
+
+        content.innerHTML = html;
+
+    } catch (error) {
+        console.error('Error loading port details:', error);
+        content.innerHTML = '<p class="text-red-400 text-center py-8">Error loading port details</p>';
+    }
+}
+
+/**
+ * Close traffic port detail modal
+ */
+function closeTrafficPortModal() {
+    const modal = document.getElementById('traffic-port-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+// ============================================================================
+// ADVANCED VULNERABILITY SCANNING FUNCTIONS
+// ============================================================================
+
+async function loadAdvancedVulnData() {
+    try {
+        const response = await fetch('/api/vuln-advanced/status');
+        const data = await response.json();
+
+        if (!data.success || !data.available) {
+            showAdvVulnNotAvailable();
+            return;
+        }
+
+        hideAdvVulnNotAvailable();
+        updateScannerStatus(data.scanners);
+        updateVulnSummary(data.summary);
+        updateActiveScans(data.active_scans);
+
+        // Load findings
+        await loadAdvVulnFindings();
+
+        // Update stats after findings are loaded
+        updateVulnStats(data.active_scans, advVulnFindingsCache);
+
+    } catch (error) {
+        console.error('Error loading advanced vuln data:', error);
+        showAdvVulnNotAvailable();
+    }
+}
+
+function updateActiveScans(scans) {
+    const container = document.getElementById('adv-vuln-active-scans');
+    if (!container) return;
+
+    // Control the spinner animation based on running scans
+    const spinner = document.getElementById('adv-vuln-scans-spinner');
+    const hasRunningScans = scans && scans.some(scan => scan.status === 'running');
+    if (spinner) {
+        if (hasRunningScans) {
+            spinner.classList.add('animate-spin');
+        } else {
+            spinner.classList.remove('animate-spin');
+        }
+    }
+
+    if (!scans || scans.length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-4 text-sm">No active scans</p>';
+        return;
+    }
+
+    const statusColors = {
+        'running': 'border-blue-500 bg-blue-900',
+        'completed': 'border-green-500 bg-green-900',
+        'failed': 'border-red-500 bg-red-900',
+        'cancelled': 'border-gray-500 bg-gray-800'
+    };
+
+    const statusIcons = {
+        'running': '<div class="animate-spin h-4 w-4 border-2 border-blue-400 border-t-transparent rounded-full"></div>',
+        'completed': '<svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>',
+        'failed': '<svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>',
+        'cancelled': '<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg>'
+    };
+
+    // Check if ZAP auth is configured for failed scan warnings
+    const hasZapAuth = window._zapAuthConfigured || false;
+    const isZapScan = (scanType) => ['zap_spider', 'zap_active', 'zap_full'].includes(scanType);
+
+    container.innerHTML = scans.map(scan => {
+        const colorClass = statusColors[scan.status] || 'border-gray-500 bg-gray-800';
+        const icon = statusIcons[scan.status] || '';
+        // Fix: backend sends progress_percent and current_check, not progress and current_phase
+        const progress = scan.progress_percent || scan.progress || 0;
+        const currentPhase = scan.current_check || scan.current_phase || 'Processing...';
+        const errorMessage = scan.error_message || '';
+
+        // Check if this is a failed ZAP scan with auth configured
+        const showAuthWarning = scan.status === 'failed' && isZapScan(scan.scan_type) && hasZapAuth;
+
+        return `
+            <div class="p-3 ${colorClass} bg-opacity-30 border-l-4 rounded-lg">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        ${icon}
+                        <span class="font-medium text-sm">${escapeHtml(scan.scan_type || 'Unknown')}</span>
+                    </div>
+                    <span class="text-xs text-gray-400 uppercase">${escapeHtml(scan.status)}</span>
+                </div>
+                <div class="flex items-center justify-between text-xs text-gray-300 mt-1">
+                    <span class="truncate">${escapeHtml(scan.target)}</span>
+                    ${scan.duration_seconds ? `<span class="text-gray-500 ml-2">${formatDuration(scan.duration_seconds)}</span>` : ''}
+                </div>
+                ${scan.status === 'running' ? `
+                    <div class="mt-2">
+                        <div class="flex justify-between text-xs text-gray-400 mb-1">
+                            <span>${escapeHtml(currentPhase)}</span>
+                            <span>${progress}%</span>
+                        </div>
+                        <div class="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                            <div class="h-full bg-blue-500 transition-all duration-500" style="width: ${progress}%"></div>
+                        </div>
+                    </div>
+                ` : ''}
+                ${errorMessage ? `<div class="text-xs text-red-400 mt-1">${escapeHtml(errorMessage)}</div>` : ''}
+                ${showAuthWarning ? `
+                    <div class="text-xs text-yellow-400 mt-1 p-2 bg-yellow-900 bg-opacity-30 rounded">
+                        ⚠️ Authentication is configured. If target doesn't require auth,
+                        <button onclick="zapClearAuthentication()" class="underline hover:text-yellow-300">clear auth settings</button>.
+                    </div>
+                ` : ''}
+                ${scan.findings_count > 0 ? `<div class="text-xs text-cyan-400 mt-1">${scan.findings_count} findings</div>` : ''}
+                <div class="mt-2 flex gap-2 flex-wrap">
+                    ${scan.status === 'running' ? `
+                        <button onclick="cancelAdvScan('${scan.scan_id}')" class="text-xs text-red-400 hover:text-red-300 flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            Cancel
+                        </button>
+                    ` : `
+                        <button onclick="downloadScanReport('${scan.scan_id}')" class="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            Report
+                        </button>
+                        <button onclick="deleteAdvScan('${scan.scan_id}')" class="text-xs text-gray-400 hover:text-red-400 flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            Delete
+                        </button>
+                    `}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function deleteAdvScan(scanId) {
+    if (!confirm('Delete this scan and its findings?')) return;
+
+    try {
+        const response = await fetch(`/api/vuln-advanced/scan/${scanId}`, {
+            method: 'DELETE'
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('Scan deleted', 'info');
+            await refreshAdvVulnData();
+        } else {
+            showNotification(data.error || 'Failed to delete scan', 'error');
+        }
+    } catch (error) {
+        console.error('Error deleting scan:', error);
+        showNotification('Failed to delete scan', 'error');
+    }
+}
+
+async function deleteAllAdvScans() {
+    if (!confirm('Delete ALL scans and findings? This cannot be undone.')) return;
+
+    try {
+        const response = await fetch('/api/vuln-advanced/scans', {
+            method: 'DELETE'
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification(data.message, 'info');
+            await refreshAdvVulnData();
+        } else {
+            showNotification(data.error || 'Failed to delete scans', 'error');
+        }
+    } catch (error) {
+        console.error('Error deleting all scans:', error);
+        showNotification('Failed to delete scans', 'error');
+    }
+}
+
+function downloadZapReport(format = 'html') {
+    window.open(`/api/zap/report?format=${format}`, '_blank');
+}
+
+function downloadScanReport(scanId) {
+    window.open(`/api/vuln-advanced/scan/${scanId}/report?format=html`, '_blank');
+}
+
+async function cancelAdvScan(scanId) {
+    try {
+        const response = await fetch(`/api/vuln-advanced/scan/${scanId}/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('Scan cancelled', 'info');
+            await refreshAdvVulnData();
+        } else {
+            showNotification(data.error || 'Failed to cancel scan', 'error');
+        }
+    } catch (error) {
+        console.error('Error cancelling scan:', error);
+        showNotification('Failed to cancel scan', 'error');
+    }
+}
+
+function showAdvVulnNotAvailable() {
+    const notice = document.getElementById('adv-vuln-not-available');
+    if (notice) notice.classList.remove('hidden');
+}
+
+function hideAdvVulnNotAvailable() {
+    const notice = document.getElementById('adv-vuln-not-available');
+    if (notice) notice.classList.add('hidden');
+}
+
+function updateScannerStatus(scanners) {
+    if (!scanners) return;
+
+    const scannerIds = ['nuclei', 'nikto', 'sqlmap', 'nmap_vuln', 'whatweb', 'zap'];
+
+    scannerIds.forEach(id => {
+        const statusEl = document.getElementById(`scanner-${id.replace('_', '-')}-status`);
+        const cardEl = document.getElementById(`scanner-${id.replace('_', '-')}`);
+
+        if (statusEl) {
+            const available = scanners[id];
+            if (id === 'zap') {
+                // ZAP has special status (installed vs running)
+                if (scanners.zap_running) {
+                    statusEl.textContent = 'Running';
+                    statusEl.classList.remove('text-gray-400', 'text-green-400');
+                    statusEl.classList.add('text-cyan-400');
+                } else if (available) {
+                    statusEl.textContent = 'Installed';
+                    statusEl.classList.remove('text-gray-400', 'text-cyan-400');
+                    statusEl.classList.add('text-green-400');
+                } else {
+                    statusEl.textContent = 'Not installed';
+                    statusEl.classList.remove('text-green-400', 'text-cyan-400');
+                    statusEl.classList.add('text-gray-400');
+                }
+            } else {
+                statusEl.textContent = available ? 'Available' : 'Not installed';
+                statusEl.classList.toggle('text-green-400', available);
+                statusEl.classList.toggle('text-gray-400', !available);
+            }
+        }
+
+        if (cardEl) {
+            cardEl.classList.toggle('opacity-50', !scanners[id]);
+        }
+    });
+
+    // Update ZAP control panel visibility and status
+    updateZapControlPanel(scanners);
+}
+
+function updateVulnSummary(summary) {
+    if (!summary?.severity_counts) return;
+
+    const counts = summary.severity_counts;
+    updateElement('vuln-critical-count', counts.critical || 0);
+    updateElement('vuln-high-count', counts.high || 0);
+    updateElement('vuln-medium-count', counts.medium || 0);
+    updateElement('vuln-low-count', counts.low || 0);
+    updateElement('vuln-info-count', counts.info || 0);
+
+    // Calculate and update risk score (weighted by severity)
+    const riskScore = (counts.critical || 0) * 10 + (counts.high || 0) * 7 +
+                      (counts.medium || 0) * 4 + (counts.low || 0) * 1;
+    const maxRisk = 100; // Normalize to percentage for display
+    const riskPercent = Math.min(riskScore, maxRisk);
+
+    updateElement('vuln-risk-score', riskScore);
+    const riskBar = document.getElementById('vuln-risk-bar');
+    const riskScoreEl = document.getElementById('vuln-risk-score');
+    if (riskBar) {
+        riskBar.style.width = `${riskPercent}%`;
+        // Color based on risk level
+        riskBar.className = 'h-full transition-all duration-500 ' + (
+            riskScore >= 50 ? 'bg-red-500' :
+            riskScore >= 30 ? 'bg-orange-500' :
+            riskScore >= 15 ? 'bg-yellow-500' : 'bg-green-500'
+        );
+    }
+    if (riskScoreEl) {
+        riskScoreEl.className = 'text-2xl sm:text-3xl font-bold ' + (
+            riskScore >= 50 ? 'text-red-400' :
+            riskScore >= 30 ? 'text-orange-400' :
+            riskScore >= 15 ? 'text-yellow-400' : 'text-green-400'
+        );
+    }
+
+    // Update total findings and scans
+    updateElement('vuln-total-findings', summary.total_findings || 0);
+    updateElement('vuln-total-scans', summary.total_scans || 0);
+}
+
+function updateVulnStats(scans, findings) {
+    // Count unique hosts
+    const hosts = new Set();
+    if (scans) {
+        scans.forEach(s => hosts.add(s.target));
+    }
+    if (findings) {
+        findings.forEach(f => hosts.add(f.host));
+    }
+    updateElement('vuln-hosts-count', hosts.size);
+
+    // Find last scan time
+    if (scans?.length) {
+        const completedScans = scans.filter(s => s.completed_at);
+        if (completedScans.length) {
+            const lastScan = completedScans.reduce((a, b) => {
+                const timeA = new Date(a.completed_at).getTime();
+                const timeB = new Date(b.completed_at).getTime();
+                return timeA > timeB ? a : b;
+            });
+            const lastTime = new Date(lastScan.completed_at);
+            const now = new Date();
+            const diffMins = Math.floor((now - lastTime) / 60000);
+            let timeText;
+            if (diffMins < 1) timeText = 'Just now';
+            else if (diffMins < 60) timeText = `${diffMins}m ago`;
+            else if (diffMins < 1440) timeText = `${Math.floor(diffMins / 60)}h ago`;
+            else timeText = lastTime.toLocaleDateString();
+            updateElement('vuln-last-scan-time', timeText);
+        }
+    }
+}
+
+// Store findings globally for detail view
+let advVulnFindingsCache = [];
+let advVulnFindingsFiltered = [];
+let advVulnCurrentFilter = 'all';
+let advVulnCurrentHostFilter = 'all';
+let advVulnCurrentScannerFilter = 'all';
+let advVulnDedupeEnabled = false;
+let advVulnCurrentSort = { column: 'severity', ascending: false };
+let advVulnCurrentView = 'table';
+
+async function loadAdvVulnFindings() {
+    try {
+        const response = await fetch('/api/vuln-advanced/findings?limit=200');
+        const data = await response.json();
+
+        if (!data.success) return;
+
+        // Cache findings for detail view
+        advVulnFindingsCache = data.findings || [];
+        advVulnFindingsFiltered = [...advVulnFindingsCache];
+
+        // Update filter dropdowns
+        updateHostFilterOptions();
+        updateScannerFilterOptions();
+
+        applyFindingsFilterAndSort();
+        updateAdvVulnRecentFindings(data.findings?.slice(0, 10));
+
+    } catch (error) {
+        console.error('Error loading vuln findings:', error);
+    }
+}
+
+function filterFindingsBySeverity(severity) {
+    advVulnCurrentFilter = severity;
+
+    // Update button states
+    document.querySelectorAll('.vuln-filter-btn').forEach(btn => {
+        btn.classList.remove('active', 'ring-2', 'ring-white');
+        if (btn.dataset.severity === severity) {
+            btn.classList.add('active', 'ring-2', 'ring-white');
+        }
+    });
+
+    applyFindingsFilterAndSort();
+}
+
+function filterFindingsByHost(host) {
+    advVulnCurrentHostFilter = host;
+    applyFindingsFilterAndSort();
+}
+
+function updateHostFilterOptions() {
+    const select = document.getElementById('host-filter-select');
+    if (!select) return;
+
+    // Get unique hosts
+    const hosts = [...new Set(advVulnFindingsCache.map(f => f.host).filter(Boolean))].sort();
+
+    // Build options
+    let html = '<option value="all">All Hosts (' + advVulnFindingsCache.length + ')</option>';
+    hosts.forEach(host => {
+        const count = advVulnFindingsCache.filter(f => f.host === host).length;
+        const selected = advVulnCurrentHostFilter === host ? ' selected' : '';
+        html += `<option value="${escapeHtml(host)}"${selected}>${escapeHtml(host)} (${count})</option>`;
+    });
+
+    select.innerHTML = html;
+}
+
+function updateScannerFilterOptions() {
+    const select = document.getElementById('scanner-filter-select');
+    if (!select) return;
+
+    // Get unique scanners
+    const scanners = [...new Set(advVulnFindingsCache.map(f => f.scanner).filter(Boolean))].sort();
+
+    // Build options
+    let html = '<option value="all">All Scanners</option>';
+    scanners.forEach(scanner => {
+        const count = advVulnFindingsCache.filter(f => f.scanner === scanner).length;
+        const selected = advVulnCurrentScannerFilter === scanner ? ' selected' : '';
+        html += `<option value="${escapeHtml(scanner)}"${selected}>${escapeHtml(scanner)} (${count})</option>`;
+    });
+
+    select.innerHTML = html;
+}
+
+function filterFindingsByScanner(scanner) {
+    advVulnCurrentScannerFilter = scanner;
+    applyFindingsFilterAndSort();
+}
+
+function sortFindings(column) {
+    if (advVulnCurrentSort.column === column) {
+        advVulnCurrentSort.ascending = !advVulnCurrentSort.ascending;
+    } else {
+        advVulnCurrentSort.column = column;
+        advVulnCurrentSort.ascending = column === 'title' || column === 'host';
+    }
+
+    // Update sort indicators
+    document.querySelectorAll('.sort-indicator').forEach(el => {
+        el.textContent = '';
+    });
+    const indicator = document.querySelector(`.sort-indicator[data-col="${column}"]`);
+    if (indicator) {
+        indicator.textContent = advVulnCurrentSort.ascending ? ' ▲' : ' ▼';
+    }
+
+    applyFindingsFilterAndSort();
+}
+
+function clearAllFilters() {
+    advVulnCurrentFilter = 'all';
+    advVulnCurrentHostFilter = 'all';
+    advVulnCurrentScannerFilter = 'all';
+    advVulnDedupeEnabled = false;
+    advVulnCurrentSort = { column: 'severity', ascending: false };
+
+    // Reset UI elements
+    document.querySelectorAll('.vuln-filter-btn').forEach(btn => {
+        btn.classList.remove('active', 'ring-2', 'ring-white');
+        if (btn.dataset.severity === 'all') {
+            btn.classList.add('active', 'ring-2', 'ring-white');
+        }
+    });
+
+    const hostSelect = document.getElementById('host-filter-select');
+    if (hostSelect) hostSelect.value = 'all';
+
+    const scannerSelect = document.getElementById('scanner-filter-select');
+    if (scannerSelect) scannerSelect.value = 'all';
+
+    const dedupeToggle = document.getElementById('dedupe-findings-toggle');
+    if (dedupeToggle) dedupeToggle.checked = false;
+
+    document.querySelectorAll('.sort-indicator').forEach(el => {
+        el.textContent = '';
+    });
+
+    applyFindingsFilterAndSort();
+    showNotification('Filters cleared', 'info');
+}
+
+function toggleDeduplication(enabled) {
+    advVulnDedupeEnabled = enabled;
+    applyFindingsFilterAndSort();
+}
+
+function applyFindingsFilterAndSort() {
+    // Start with all findings
+    advVulnFindingsFiltered = [...advVulnFindingsCache];
+
+    // Filter by severity
+    if (advVulnCurrentFilter !== 'all') {
+        advVulnFindingsFiltered = advVulnFindingsFiltered.filter(f => f.severity === advVulnCurrentFilter);
+    }
+
+    // Filter by host
+    if (advVulnCurrentHostFilter !== 'all') {
+        advVulnFindingsFiltered = advVulnFindingsFiltered.filter(f => f.host === advVulnCurrentHostFilter);
+    }
+
+    // Filter by scanner
+    if (advVulnCurrentScannerFilter !== 'all') {
+        advVulnFindingsFiltered = advVulnFindingsFiltered.filter(f => f.scanner === advVulnCurrentScannerFilter);
+    }
+
+    // Deduplicate by host + title + port (keep most recent)
+    if (advVulnDedupeEnabled) {
+        const seen = new Map();
+        advVulnFindingsFiltered.forEach(f => {
+            const key = `${f.host}|${f.title}|${f.port || ''}`;
+            const existing = seen.get(key);
+            if (!existing || new Date(f.timestamp) > new Date(existing.timestamp)) {
+                seen.set(key, f);
+            }
+        });
+        advVulnFindingsFiltered = Array.from(seen.values());
+    }
+
+    // Sort
+    const severityOrder = { 'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4 };
+    advVulnFindingsFiltered.sort((a, b) => {
+        let cmp = 0;
+        switch (advVulnCurrentSort.column) {
+            case 'severity':
+                cmp = (severityOrder[a.severity] || 5) - (severityOrder[b.severity] || 5);
+                break;
+            case 'title':
+                cmp = (a.title || '').localeCompare(b.title || '');
+                break;
+            case 'host':
+                cmp = (a.host || '').localeCompare(b.host || '');
+                break;
+            case 'scanner':
+                cmp = (a.scanner || '').localeCompare(b.scanner || '');
+                break;
+        }
+        return advVulnCurrentSort.ascending ? cmp : -cmp;
+    });
+
+    // Update view
+    if (advVulnCurrentView === 'table') {
+        updateAdvVulnFindingsTable(advVulnFindingsFiltered);
+    } else {
+        updateAdvVulnGroupedView(advVulnFindingsFiltered);
+    }
+
+    // Update count text
+    const countText = document.getElementById('findings-count-text');
+    const filterText = document.getElementById('findings-filter-text');
+    if (countText) {
+        const dedupeText = advVulnDedupeEnabled ? ' (unique)' : '';
+        countText.textContent = `Showing ${advVulnFindingsFiltered.length} of ${advVulnFindingsCache.length} findings${dedupeText}`;
+    }
+    if (filterText) {
+        const hasFilters = advVulnCurrentFilter !== 'all' || advVulnCurrentHostFilter !== 'all' ||
+                          advVulnCurrentScannerFilter !== 'all' || advVulnDedupeEnabled;
+        filterText.classList.toggle('hidden', !hasFilters);
+    }
+
+    // Recalculate severity counts and risk score based on filtered findings
+    if (advVulnDedupeEnabled || advVulnCurrentFilter !== 'all' || advVulnCurrentHostFilter !== 'all' || advVulnCurrentScannerFilter !== 'all') {
+        updateFilteredSeverityCounts(advVulnFindingsFiltered);
+    }
+}
+
+function updateFilteredSeverityCounts(findings) {
+    const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+    findings.forEach(f => {
+        if (counts.hasOwnProperty(f.severity)) {
+            counts[f.severity]++;
+        }
+    });
+
+    // Update UI with filtered counts (with indicator)
+    updateElement('vuln-critical-count', counts.critical);
+    updateElement('vuln-high-count', counts.high);
+    updateElement('vuln-medium-count', counts.medium);
+    updateElement('vuln-low-count', counts.low);
+    updateElement('vuln-info-count', counts.info);
+
+    // Recalculate risk score
+    const riskScore = counts.critical * 10 + counts.high * 7 + counts.medium * 4 + counts.low * 1;
+    const maxRisk = 100;
+    const riskPercent = Math.min(riskScore, maxRisk);
+
+    updateElement('vuln-risk-score', riskScore);
+    const riskBar = document.getElementById('vuln-risk-bar');
+    const riskScoreEl = document.getElementById('vuln-risk-score');
+    if (riskBar) {
+        riskBar.style.width = `${riskPercent}%`;
+        riskBar.className = 'h-full transition-all duration-500 ' + (
+            riskScore >= 50 ? 'bg-red-500' :
+            riskScore >= 30 ? 'bg-orange-500' :
+            riskScore >= 15 ? 'bg-yellow-500' : 'bg-green-500'
+        );
+    }
+    if (riskScoreEl) {
+        riskScoreEl.className = 'text-2xl sm:text-3xl font-bold ' + (
+            riskScore >= 50 ? 'text-red-400' :
+            riskScore >= 30 ? 'text-orange-400' :
+            riskScore >= 15 ? 'text-yellow-400' : 'text-green-400'
+        );
+    }
+}
+
+function setFindingsView(view) {
+    advVulnCurrentView = view;
+
+    const tableView = document.getElementById('findings-table-view');
+    const groupedView = document.getElementById('findings-grouped-view');
+    const tableBtn = document.getElementById('view-table-btn');
+    const groupedBtn = document.getElementById('view-grouped-btn');
+
+    if (view === 'table') {
+        tableView?.classList.remove('hidden');
+        groupedView?.classList.add('hidden');
+        tableBtn?.classList.add('bg-slate-600');
+        groupedBtn?.classList.remove('bg-slate-600');
+        updateAdvVulnFindingsTable(advVulnFindingsFiltered);
+    } else {
+        tableView?.classList.add('hidden');
+        groupedView?.classList.remove('hidden');
+        tableBtn?.classList.remove('bg-slate-600');
+        groupedBtn?.classList.add('bg-slate-600');
+        updateAdvVulnGroupedView(advVulnFindingsFiltered);
+    }
+}
+
+function updateAdvVulnGroupedView(findings) {
+    const container = document.getElementById('findings-grouped-view');
+    if (!container) return;
+
+    if (!findings?.length) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-8">No findings to display</p>';
+        return;
+    }
+
+    // Group by host
+    const grouped = {};
+    findings.forEach(f => {
+        const host = f.host || 'Unknown';
+        if (!grouped[host]) {
+            grouped[host] = { findings: [], severityCounts: { critical: 0, high: 0, medium: 0, low: 0, info: 0 } };
+        }
+        grouped[host].findings.push(f);
+        grouped[host].severityCounts[f.severity] = (grouped[host].severityCounts[f.severity] || 0) + 1;
+    });
+
+    const severityColors = {
+        'critical': 'bg-red-600',
+        'high': 'bg-orange-500',
+        'medium': 'bg-yellow-500',
+        'low': 'bg-blue-500',
+        'info': 'bg-gray-500'
+    };
+
+    container.innerHTML = Object.entries(grouped).map(([host, data]) => {
+        const riskScore = (data.severityCounts.critical * 10 + data.severityCounts.high * 7 +
+                          data.severityCounts.medium * 4 + data.severityCounts.low * 1);
+        const riskColor = riskScore >= 20 ? 'text-red-400' : riskScore >= 10 ? 'text-orange-400' :
+                          riskScore >= 5 ? 'text-yellow-400' : 'text-green-400';
+
+        return `
+            <div class="bg-slate-800 rounded-lg overflow-hidden">
+                <div class="p-3 bg-slate-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div class="flex items-center gap-3">
+                        <span class="font-mono font-semibold">${escapeHtml(host)}</span>
+                        <span class="text-xs text-gray-400">${data.findings.length} finding${data.findings.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="flex gap-1">
+                            ${Object.entries(data.severityCounts).filter(([,c]) => c > 0).map(([sev, count]) =>
+                                `<span class="px-2 py-0.5 ${severityColors[sev]} text-white text-xs rounded">${count} ${sev}</span>`
+                            ).join('')}
+                        </div>
+                        <span class="text-xs ${riskColor} font-semibold">Risk: ${riskScore}</span>
+                        <button onclick="quickRescanHost('${escapeHtml(host)}')"
+                                class="ml-2 px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded flex items-center gap-1 transition-colors"
+                                title="Quick rescan this host">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            Rescan
+                        </button>
+                    </div>
+                </div>
+                <div class="p-3 space-y-2 max-h-60 overflow-y-auto scrollbar-thin">
+                    ${data.findings.map((f, idx) => {
+                        const globalIdx = advVulnFindingsFiltered.indexOf(f);
+                        return `
+                            <div class="flex items-start gap-2 p-2 bg-slate-700 bg-opacity-50 rounded hover:bg-slate-600 cursor-pointer"
+                                 onclick="showFindingDetail(${globalIdx})">
+                                <span class="px-2 py-0.5 ${severityColors[f.severity]} text-white text-xs rounded uppercase shrink-0">${f.severity}</span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-sm font-medium truncate">${escapeHtml(f.title)}</div>
+                                    <div class="text-xs text-gray-400">${escapeHtml(f.scanner)}${f.port ? ' | Port ' + f.port : ''}</div>
+                                </div>
+                                ${f.cve_ids?.length ? `<span class="text-xs text-cyan-400 shrink-0">${f.cve_ids.length} CVE${f.cve_ids.length !== 1 ? 's' : ''}</span>` : ''}
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function quickRescanHost(host) {
+    const scannerSelect = document.getElementById('adv-vuln-scanner');
+    const scanType = scannerSelect ? scannerSelect.value : 'nmap_vuln';
+
+    try {
+        const response = await fetch('/api/vuln-advanced/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target: host, scan_type: scanType })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification(`Started ${scanType} rescan of ${host}`, 'success');
+            startAdvVulnPolling();
+        } else {
+            showNotification(data.error || 'Failed to start rescan', 'error');
+        }
+    } catch (error) {
+        console.error('Error starting rescan:', error);
+        showNotification('Failed to start rescan', 'error');
+    }
+}
+
+function exportFindingsCSV() {
+    const findings = advVulnFindingsFiltered.length ? advVulnFindingsFiltered : advVulnFindingsCache;
+    if (!findings?.length) {
+        showNotification('No findings to export', 'warning');
+        return;
+    }
+
+    const headers = ['Severity', 'Title', 'Host', 'Port', 'Scanner', 'CVE IDs', 'CVSS Score', 'Description', 'Remediation', 'Timestamp'];
+    const rows = findings.map(f => [
+        f.severity || '',
+        `"${(f.title || '').replace(/"/g, '""')}"`,
+        f.host || '',
+        f.port || '',
+        f.scanner || '',
+        `"${(f.cve_ids || []).join(', ')}"`,
+        f.cvss_score || '',
+        `"${(f.description || '').replace(/"/g, '""').substring(0, 500)}"`,
+        `"${(f.remediation || '').replace(/"/g, '""').substring(0, 500)}"`,
+        f.timestamp || ''
+    ]);
+
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ragnar_findings_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showNotification(`Exported ${findings.length} findings to CSV`, 'success');
+}
+
+function updateAdvVulnFindingsTable(findings) {
+    const tbody = document.getElementById('adv-vuln-table-body');
+    if (!tbody) return;
+    
+    if (!findings?.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-gray-400">No findings to display</td></tr>';
+        return;
+    }
+    
+    const severityColors = {
+        'critical': 'bg-red-600',
+        'high': 'bg-orange-500',
+        'medium': 'bg-yellow-500',
+        'low': 'bg-blue-500',
+        'info': 'bg-gray-500'
+    };
+    
+    tbody.innerHTML = findings.map((f, idx) => {
+        // Dedupe CVE IDs and filter only real CVEs
+        const uniqueCves = [...new Set((f.cve_ids || []).filter(cve => cve && cve.startsWith('CVE-')))];
+        return `
+            <tr class="border-b border-slate-700 hover:bg-slate-600 cursor-pointer" onclick="showFindingDetail(${idx})">
+                <td class="py-2">
+                    <span class="px-2 py-1 ${severityColors[f.severity] || 'bg-gray-500'} text-white text-xs rounded uppercase">
+                        ${escapeHtml(f.severity)}
+                    </span>
+                </td>
+                <td class="py-2 max-w-xs truncate" title="${escapeHtml(f.title)}">${escapeHtml(f.title)}</td>
+                <td class="py-2 font-mono text-sm">${escapeHtml(f.host)}${f.port ? ':' + f.port : ''}</td>
+                <td class="py-2 text-gray-400">${escapeHtml(f.scanner)}</td>
+                <td class="py-2 text-xs">
+                    ${uniqueCves.length ? uniqueCves.slice(0, 3).map(cve =>
+                        `<a href="https://nvd.nist.gov/vuln/detail/${cve}" target="_blank" class="text-cyan-400 hover:underline mr-1" onclick="event.stopPropagation()">${cve}</a>`
+                    ).join('') + (uniqueCves.length > 3 ? `<span class="text-gray-500">+${uniqueCves.length - 3}</span>` : '') : '-'}
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function updateAdvVulnRecentFindings(findings) {
+    const container = document.getElementById('adv-vuln-findings');
+    if (!container) return;
+
+    if (!findings?.length) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-4">No findings yet</p>';
+        return;
+    }
+
+    const severityColors = {
+        'critical': 'border-red-600',
+        'high': 'border-orange-500',
+        'medium': 'border-yellow-500',
+        'low': 'border-blue-500',
+        'info': 'border-gray-500'
+    };
+
+    const severityBgColors = {
+        'critical': 'bg-red-900',
+        'high': 'bg-orange-900',
+        'medium': 'bg-yellow-900',
+        'low': 'bg-blue-900',
+        'info': 'bg-gray-800'
+    };
+
+    container.innerHTML = findings.map((f, idx) => {
+        // Format time ago
+        let timeAgo = '';
+        if (f.timestamp) {
+            const then = new Date(f.timestamp);
+            const now = new Date();
+            const diffMins = Math.floor((now - then) / 60000);
+            if (diffMins < 1) timeAgo = 'just now';
+            else if (diffMins < 60) timeAgo = `${diffMins}m ago`;
+            else if (diffMins < 1440) timeAgo = `${Math.floor(diffMins / 60)}h ago`;
+            else timeAgo = `${Math.floor(diffMins / 1440)}d ago`;
+        }
+
+        return `
+            <div class="p-2 ${severityBgColors[f.severity] || 'bg-slate-800'} bg-opacity-50 rounded-lg border-l-4 ${severityColors[f.severity] || 'border-gray-500'} cursor-pointer hover:bg-opacity-70 transition-colors"
+                 onclick="showFindingDetail(${idx})">
+                <div class="flex items-start justify-between gap-2">
+                    <div class="flex-1 min-w-0">
+                        <div class="font-medium text-sm truncate">${escapeHtml(f.title)}</div>
+                        <div class="text-xs text-gray-400">${escapeHtml(f.host)} | ${escapeHtml(f.scanner)}</div>
+                    </div>
+                    ${timeAgo ? `<span class="text-xs text-gray-500 shrink-0">${timeAgo}</span>` : ''}
+                </div>
+                ${f.cve_ids?.length ? `
+                    <div class="mt-1 flex flex-wrap gap-1">
+                        ${f.cve_ids.slice(0, 3).map(cve => `<span class="text-xs text-cyan-400">${cve}</span>`).join('')}
+                        ${f.cve_ids.length > 3 ? `<span class="text-xs text-gray-500">+${f.cve_ids.length - 3}</span>` : ''}
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+function showFindingDetail(index) {
+    // Use filtered array for detail view to match displayed order
+    const finding = advVulnFindingsFiltered[index] || advVulnFindingsCache[index];
+    if (!finding) return;
+
+    // Store for copy function
+    currentDisplayedFinding = finding;
+
+    const modal = document.getElementById('finding-detail-modal');
+    const titleEl = document.getElementById('finding-modal-title');
+    const contentEl = document.getElementById('finding-modal-content');
+
+    if (!modal || !contentEl) return;
+
+    titleEl.textContent = finding.title;
+
+    const severityColors = {
+        'critical': 'bg-red-600',
+        'high': 'bg-orange-500',
+        'medium': 'bg-yellow-500',
+        'low': 'bg-blue-500',
+        'info': 'bg-gray-500'
+    };
+
+    // Format evidence (URLs from spider, etc.)
+    let evidenceHtml = '';
+    if (finding.evidence) {
+        const lines = finding.evidence.split('\n').filter(l => l.trim());
+        if (lines.length > 0) {
+            evidenceHtml = `
+                <div class="mt-4">
+                    <h4 class="font-semibold text-cyan-400 mb-2">Evidence / Discovered URLs</h4>
+                    <div class="bg-slate-800 rounded-lg p-3 max-h-60 overflow-y-auto scrollbar-thin">
+                        <ul class="space-y-1 text-sm font-mono">
+                            ${lines.map(url => `<li class="text-green-400 break-all">${escapeHtml(url)}</li>`).join('')}
+                        </ul>
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+    // Format references
+    let refsHtml = '';
+    if (finding.references?.length) {
+        refsHtml = `
+            <div class="mt-4">
+                <h4 class="font-semibold text-cyan-400 mb-2">References</h4>
+                <ul class="space-y-1 text-sm">
+                    ${finding.references.map(ref => `<li><a href="${escapeHtml(ref)}" target="_blank" class="text-blue-400 hover:underline break-all">${escapeHtml(ref)}</a></li>`).join('')}
+                </ul>
+            </div>
+        `;
+    }
+
+    contentEl.innerHTML = `
+        <div class="space-y-3">
+            <div class="flex items-center gap-3">
+                <span class="px-3 py-1 ${severityColors[finding.severity] || 'bg-gray-500'} text-white text-sm rounded uppercase font-semibold">
+                    ${escapeHtml(finding.severity)}
+                </span>
+                <span class="text-gray-400">|</span>
+                <span class="text-gray-300">${escapeHtml(finding.scanner)}</span>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                    <span class="text-gray-400">Host:</span>
+                    <span class="font-mono ml-2">${escapeHtml(finding.host)}${finding.port ? ':' + finding.port : ''}</span>
+                </div>
+                ${finding.matched_at ? `
+                <div>
+                    <span class="text-gray-400">URL:</span>
+                    <span class="font-mono ml-2 break-all">${escapeHtml(finding.matched_at)}</span>
+                </div>
+                ` : ''}
+            </div>
+
+            ${(() => {
+                const uniqueCves = [...new Set((finding.cve_ids || []).filter(cve => cve && cve.startsWith('CVE-')))];
+                return uniqueCves.length ? `
+                    <div class="flex items-center flex-wrap gap-2">
+                        <span class="text-gray-400">CVEs (${uniqueCves.length}):</span>
+                        ${uniqueCves.map(cve => `<a href="https://nvd.nist.gov/vuln/detail/${cve}" target="_blank" class="text-cyan-400 hover:underline">${cve}</a>`).join('')}
+                        <button onclick="copyToClipboard('${uniqueCves.join(', ')}')" class="ml-2 px-2 py-0.5 bg-slate-600 hover:bg-slate-500 text-xs rounded transition-colors" title="Copy CVEs">
+                            Copy
+                        </button>
+                    </div>
+                ` : '';
+            })()}
+
+            ${finding.cwe_ids?.length ? `
+            <div>
+                <span class="text-gray-400">CWEs:</span>
+                ${finding.cwe_ids.map(cwe => `<span class="text-orange-400 ml-2">${escapeHtml(cwe)}</span>`).join('')}
+            </div>
+            ` : ''}
+
+            ${finding.cvss_score ? `
+            <div>
+                <span class="text-gray-400">CVSS Score:</span>
+                <span class="text-yellow-400 ml-2 font-semibold">${finding.cvss_score}</span>
+            </div>
+            ` : ''}
+
+            <div class="mt-4">
+                <h4 class="font-semibold text-cyan-400 mb-2">Description</h4>
+                <p class="text-gray-300 text-sm">${escapeHtml(finding.description || 'No description available')}</p>
+            </div>
+
+            ${evidenceHtml}
+
+            ${finding.remediation ? `
+            <div class="mt-4">
+                <h4 class="font-semibold text-cyan-400 mb-2">Remediation</h4>
+                <p class="text-gray-300 text-sm">${escapeHtml(finding.remediation)}</p>
+            </div>
+            ` : ''}
+
+            ${refsHtml}
+
+            ${finding.tags?.length ? `
+            <div class="mt-4">
+                <h4 class="font-semibold text-cyan-400 mb-2">Tags</h4>
+                <div class="flex flex-wrap gap-2">
+                    ${finding.tags.map(tag => `<span class="px-2 py-1 bg-slate-600 text-xs rounded">${escapeHtml(tag)}</span>`).join('')}
+                </div>
+            </div>
+            ` : ''}
+
+            <div class="mt-4 text-xs text-gray-500">
+                Finding ID: ${escapeHtml(finding.finding_id)} | Timestamp: ${finding.timestamp || 'N/A'}
+            </div>
+        </div>
+    `;
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeFindingDetailModal() {
+    const modal = document.getElementById('finding-detail-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+function formatDuration(seconds) {
+    if (!seconds || seconds < 1) return '<1s';
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.round(seconds % 60);
+        return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+    }
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+async function copyToClipboard(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        showNotification('Copied to clipboard', 'success');
+    } catch (err) {
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showNotification('Copied to clipboard', 'success');
+    }
+}
+
+// Store current finding for copy
+let currentDisplayedFinding = null;
+
+function copyCurrentFinding() {
+    if (!currentDisplayedFinding) {
+        showNotification('No finding to copy', 'warning');
+        return;
+    }
+
+    const f = currentDisplayedFinding;
+    const uniqueCves = [...new Set((f.cve_ids || []).filter(cve => cve && cve.startsWith('CVE-')))];
+
+    const text = `VULNERABILITY FINDING
+=====================
+Title: ${f.title}
+Severity: ${f.severity?.toUpperCase() || 'UNKNOWN'}
+Host: ${f.host}${f.port ? ':' + f.port : ''}
+Scanner: ${f.scanner}
+${uniqueCves.length ? 'CVEs: ' + uniqueCves.join(', ') : ''}
+${f.cvss_score ? 'CVSS: ' + f.cvss_score : ''}
+
+DESCRIPTION
+-----------
+${f.description || 'No description available'}
+
+${f.remediation ? 'REMEDIATION\n-----------\n' + f.remediation : ''}
+
+${f.evidence ? 'EVIDENCE\n--------\n' + f.evidence : ''}
+
+Finding ID: ${f.finding_id}
+Timestamp: ${f.timestamp || 'N/A'}
+`;
+
+    copyToClipboard(text);
+}
+
+async function startAdvancedScan() {
+    const targetInput = document.getElementById('adv-vuln-target');
+    const scannerSelect = document.getElementById('adv-vuln-scanner');
+    
+    if (!targetInput || !scannerSelect) return;
+    
+    const target = targetInput.value.trim();
+    const scanType = scannerSelect.value;
+    
+    if (!target) {
+        showNotification('Please enter a target IP or URL', 'warning');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/vuln-advanced/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target, scan_type: scanType })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification(`Started ${scanType} scan: ${data.scan_id}`, 'success');
+            targetInput.value = '';
+            
+            // Start polling for updates
+            startAdvVulnPolling();
+            
+        } else {
+            showNotification(data.error || 'Failed to start scan', 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error starting advanced scan:', error);
+        showNotification('Failed to start scan', 'error');
+    }
+}
+
+function startAdvVulnPolling() {
+    if (advVulnRefreshInterval) {
+        clearInterval(advVulnRefreshInterval);
+    }
+
+    // Poll every 2 seconds for better real-time feedback during scans
+    advVulnRefreshInterval = setInterval(async () => {
+        if (currentTab !== 'adv-vuln') {
+            clearInterval(advVulnRefreshInterval);
+            advVulnRefreshInterval = null;
+            return;
+        }
+        await refreshAdvVulnData();
+    }, 2000);
+}
+
+async function refreshAdvVulnData() {
+    await loadAdvancedVulnData();
+}
+
+// ============================================================================
+// OWASP ZAP CONTROL FUNCTIONS
+// ============================================================================
+
+function updateZapControlPanel(scanners) {
+    const panel = document.getElementById('zap-control-panel');
+    const daemonStatus = document.getElementById('zap-daemon-status');
+    const startBtn = document.getElementById('zap-start-btn');
+    const stopBtn = document.getElementById('zap-stop-btn');
+
+    if (!panel) return;
+
+    // Show/hide panel based on ZAP availability
+    if (!scanners.zap) {
+        panel.classList.add('opacity-50');
+        if (daemonStatus) {
+            daemonStatus.textContent = 'Not Installed';
+            daemonStatus.className = 'text-xs px-2 py-1 rounded-full bg-gray-700 text-gray-400';
+        }
+        return;
+    }
+
+    panel.classList.remove('opacity-50');
+
+    if (scanners.zap_running) {
+        if (daemonStatus) {
+            daemonStatus.textContent = 'Running';
+            daemonStatus.className = 'text-xs px-2 py-1 rounded-full bg-green-900 text-green-400';
+        }
+        if (startBtn) startBtn.disabled = true;
+        if (stopBtn) stopBtn.disabled = false;
+    } else {
+        if (daemonStatus) {
+            daemonStatus.textContent = 'Stopped';
+            daemonStatus.className = 'text-xs px-2 py-1 rounded-full bg-slate-700 text-gray-400';
+        }
+        if (startBtn) startBtn.disabled = false;
+        if (stopBtn) stopBtn.disabled = true;
+    }
+
+    // Fetch detailed ZAP status if running
+    if (scanners.zap_running) {
+        fetchZapStatus();
+    }
+}
+
+async function fetchZapStatus() {
+    try {
+        const response = await fetch('/api/zap/status');
+        const data = await response.json();
+
+        if (data.success && data.status) {
+            updateElement('zap-hosts-count', data.status.hosts_accessed || 0);
+            updateElement('zap-alerts-count', data.status.alerts_count || 0);
+
+            // Also check auth status when ZAP is running
+            if (data.status.running) {
+                zapCheckAuthStatus();
+            }
+        }
+    } catch (error) {
+        console.error('Error fetching ZAP status:', error);
+    }
+}
+
+async function startZapDaemon() {
+    try {
+        showNotification('Starting ZAP daemon...', 'info');
+
+        const response = await fetch('/api/zap/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('ZAP daemon started successfully', 'success');
+            await refreshAdvVulnData();
+        } else {
+            showNotification(data.error || 'Failed to start ZAP daemon', 'error');
+        }
+    } catch (error) {
+        console.error('Error starting ZAP daemon:', error);
+        showNotification('Failed to start ZAP daemon', 'error');
+    }
+}
+
+async function stopZapDaemon() {
+    try {
+        showNotification('Stopping ZAP daemon...', 'info');
+
+        const response = await fetch('/api/zap/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('ZAP daemon stopped', 'success');
+            await refreshAdvVulnData();
+        } else {
+            showNotification(data.error || 'Failed to stop ZAP daemon', 'error');
+        }
+    } catch (error) {
+        console.error('Error stopping ZAP daemon:', error);
+        showNotification('Failed to stop ZAP daemon', 'error');
+    }
+}
+
+async function zapClearSession() {
+    try {
+        const response = await fetch('/api/zap/clear-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('ZAP session cleared', 'success');
+            await fetchZapStatus();
+        } else {
+            showNotification(data.error || 'Failed to clear ZAP session', 'error');
+        }
+    } catch (error) {
+        console.error('Error clearing ZAP session:', error);
+        showNotification('Failed to clear ZAP session', 'error');
+    }
+}
+
+async function zapImportOpenAPI() {
+    const urlInput = document.getElementById('zap-openapi-url');
+    if (!urlInput) return;
+
+    const specUrl = urlInput.value.trim();
+    if (!specUrl) {
+        showNotification('Please enter an OpenAPI/Swagger URL', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/zap/import-openapi', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spec_url: specUrl })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('OpenAPI spec imported successfully', 'success');
+            urlInput.value = '';
+        } else {
+            showNotification(data.error || 'Failed to import OpenAPI spec', 'error');
+        }
+    } catch (error) {
+        console.error('Error importing OpenAPI spec:', error);
+        showNotification('Failed to import OpenAPI spec', 'error');
+    }
+}
+
+async function zapSetAuthentication() {
+    const authType = document.getElementById('zap-auth-type')?.value;
+    const loginUrl = document.getElementById('zap-login-url')?.value.trim();
+    const username = document.getElementById('zap-username')?.value.trim();
+    const password = document.getElementById('zap-password')?.value;
+    const loginData = document.getElementById('zap-login-data')?.value.trim();
+    const bearerToken = document.getElementById('zap-bearer-token')?.value.trim();
+    const apiKey = document.getElementById('zap-api-key')?.value.trim();
+    const apiKeyHeader = document.getElementById('zap-api-key-header')?.value.trim() || 'X-API-Key';
+    const cookieValue = document.getElementById('zap-cookie-value')?.value.trim();
+
+    if (!authType) {
+        showNotification('Please select an authentication type', 'warning');
+        return;
+    }
+
+    const authParams = {};
+
+    // Validate and collect fields based on auth type
+    if (authType === 'form') {
+        if (!username || !password) {
+            showNotification('Please enter username and password', 'warning');
+            return;
+        }
+        if (!loginUrl) {
+            showNotification('Login URL is required for form authentication', 'warning');
+            return;
+        }
+        authParams.username = username;
+        authParams.password = password;
+        authParams.login_url = loginUrl;
+        authParams.login_request_data = loginData || `username={%username%}&password={%password%}`;
+    } else if (authType === 'http_basic') {
+        if (!username || !password) {
+            showNotification('Please enter username and password', 'warning');
+            return;
+        }
+        authParams.username = username;
+        authParams.password = password;
+        if (loginUrl) {
+            try {
+                const url = new URL(loginUrl);
+                authParams.hostname = url.hostname;
+            } catch (e) {
+                authParams.hostname = loginUrl;
+            }
+        }
+    } else if (authType === 'bearer_token') {
+        if (!bearerToken) {
+            showNotification('Please enter a bearer token', 'warning');
+            return;
+        }
+        authParams.bearer_token = bearerToken;
+    } else if (authType === 'api_key') {
+        if (!apiKey) {
+            showNotification('Please enter an API key', 'warning');
+            return;
+        }
+        authParams.api_key = apiKey;
+        authParams.api_key_header = apiKeyHeader;
+    } else if (authType === 'cookie') {
+        if (!cookieValue) {
+            showNotification('Please enter a cookie string', 'warning');
+            return;
+        }
+        authParams.cookie_value = cookieValue;
+    }
+
+    try {
+        const response = await fetch('/api/zap/set-auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                auth_type: authType,
+                auth_params: authParams
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('Authentication configured successfully', 'success');
+            // Refresh auth status to show the new configuration
+            zapCheckAuthStatus();
+        } else {
+            showNotification(data.error || 'Failed to configure authentication', 'error');
+        }
+    } catch (error) {
+        console.error('Error setting ZAP authentication:', error);
+        showNotification('Failed to configure authentication', 'error');
+    }
+}
+
+/**
+ * Check ZAP authentication status and update the status banner
+ */
+async function zapCheckAuthStatus() {
+    const banner = document.getElementById('zap-auth-status-banner');
+    const icon = document.getElementById('zap-auth-status-icon');
+    const text = document.getElementById('zap-auth-status-text');
+    const clearBtn = document.getElementById('zap-clear-auth-btn');
+
+    if (!banner) return;
+
+    try {
+        const response = await fetch('/api/zap/auth-status');
+        const data = await response.json();
+
+        // Set global flag for use by scan status display
+        window._zapAuthConfigured = data.has_auth || false;
+
+        banner.classList.remove('hidden');
+
+        if (data.has_auth) {
+            // Auth is configured - show warning banner
+            banner.className = 'mt-4 p-3 rounded-lg border border-yellow-500 bg-yellow-900 bg-opacity-30';
+            icon.textContent = '⚠️';
+
+            const authType = data.auth_type || 'Unknown';
+            const contextCount = data.contexts ? data.contexts.filter(c => c.auth_method && c.auth_method.toLowerCase() !== 'manual').length : 0;
+
+            text.textContent = `Authentication configured: ${authType} (${contextCount} context${contextCount !== 1 ? 's' : ''})`;
+            text.className = 'text-sm text-yellow-300';
+
+            clearBtn.classList.remove('hidden');
+        } else {
+            // No auth - show info banner
+            banner.className = 'mt-4 p-3 rounded-lg border border-slate-600 bg-slate-700 bg-opacity-30';
+            icon.textContent = '🔓';
+            text.textContent = 'No authentication configured (unauthenticated scanning)';
+            text.className = 'text-sm text-gray-400';
+
+            clearBtn.classList.add('hidden');
+        }
+
+        if (data.error) {
+            banner.className = 'mt-4 p-3 rounded-lg border border-red-500 bg-red-900 bg-opacity-30';
+            icon.textContent = '❌';
+            text.textContent = `Auth status error: ${data.error}`;
+            text.className = 'text-sm text-red-300';
+            window._zapAuthConfigured = false;
+        }
+
+    } catch (error) {
+        console.error('Error checking ZAP auth status:', error);
+        // Hide banner on error
+        banner.classList.add('hidden');
+        window._zapAuthConfigured = false;
+    }
+}
+
+/**
+ * Clear ZAP authentication configuration
+ */
+async function zapClearAuthentication() {
+    if (!confirm('Clear all saved authentication configurations? This will affect future scans.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/zap/clear-auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification(data.message || 'Authentication cleared successfully', 'success');
+
+            // Clear the form fields
+            const authType = document.getElementById('zap-auth-type');
+            const loginUrl = document.getElementById('zap-login-url');
+            const username = document.getElementById('zap-username');
+            const password = document.getElementById('zap-password');
+            const loginData = document.getElementById('zap-login-data');
+
+            if (authType) authType.value = '';
+            if (loginUrl) loginUrl.value = '';
+            if (username) username.value = '';
+            if (password) password.value = '';
+            if (loginData) loginData.value = '';
+
+            // Refresh auth status
+            zapCheckAuthStatus();
+        } else {
+            showNotification(data.error || 'Failed to clear authentication', 'error');
+        }
+    } catch (error) {
+        console.error('Error clearing ZAP authentication:', error);
+        showNotification('Failed to clear authentication', 'error');
+    }
+}
+
+// ============================================================================
+// TARGET CREDENTIAL MANAGEMENT FUNCTIONS
+// ============================================================================
+
+// Cache for credential check results (to avoid excessive API calls)
+let _credentialCheckCache = {};
+let _credentialCheckTimeout = null;
+
+/**
+ * Check if credentials exist for a target (debounced)
+ */
+function checkTargetCredentials(target) {
+    if (!target || target.length < 3) {
+        hideCredentialBadge();
+        return;
+    }
+
+    // Debounce the check
+    if (_credentialCheckTimeout) {
+        clearTimeout(_credentialCheckTimeout);
+    }
+
+    _credentialCheckTimeout = setTimeout(async () => {
+        await _doCredentialCheck(target);
+    }, 500);
+}
+
+async function _doCredentialCheck(target) {
+    // Check cache first
+    const cacheKey = target.toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+    if (_credentialCheckCache[cacheKey] !== undefined) {
+        updateCredentialBadge(_credentialCheckCache[cacheKey]);
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/zap/credentials/check?target=${encodeURIComponent(target)}`);
+        const data = await response.json();
+
+        _credentialCheckCache[cacheKey] = data;
+        updateCredentialBadge(data);
+    } catch (error) {
+        console.error('Error checking target credentials:', error);
+        hideCredentialBadge();
+    }
+}
+
+function updateCredentialBadge(data) {
+    const badge = document.getElementById('target-cred-badge');
+    const infoDiv = document.getElementById('target-cred-info');
+    const infoText = document.getElementById('target-cred-text');
+
+    if (!badge || !infoDiv) return;
+
+    if (data.exists) {
+        badge.classList.remove('hidden');
+        infoDiv.classList.remove('hidden');
+
+        const authType = data.auth_type === 'form' ? 'Form-based' :
+                        data.auth_type === 'http_basic' ? 'HTTP Basic' : data.auth_type;
+        const username = data.username || '(no username)';
+
+        if (infoText) {
+            infoText.textContent = `Auth saved: ${authType} login as "${username}"`;
+        }
+    } else {
+        hideCredentialBadge();
+    }
+}
+
+function hideCredentialBadge() {
+    const badge = document.getElementById('target-cred-badge');
+    const infoDiv = document.getElementById('target-cred-info');
+
+    if (badge) badge.classList.add('hidden');
+    if (infoDiv) infoDiv.classList.add('hidden');
+}
+
+/**
+ * Show the credentials management modal
+ */
+function showCredentialsModal() {
+    const modal = document.getElementById('zap-credentials-modal');
+    if (modal) {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+
+        // Pre-fill target from scan input if available
+        const targetInput = document.getElementById('adv-vuln-target');
+        const credTargetInput = document.getElementById('cred-target-host');
+        if (targetInput && credTargetInput && targetInput.value) {
+            credTargetInput.value = targetInput.value.replace(/^https?:\/\//, '').split('/')[0];
+        }
+
+        // Load saved credentials list
+        loadSavedCredentialsList();
+    }
+}
+
+function closeCredentialsModal() {
+    const modal = document.getElementById('zap-credentials-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+/**
+ * Toggle credential form fields based on auth type
+ */
+function toggleCredentialFields() {
+    const authType = document.getElementById('cred-auth-type');
+    const loginUrlContainer = document.getElementById('cred-login-url-container');
+    const realmContainer = document.getElementById('cred-realm-container');
+    const usernameContainer = document.getElementById('cred-username-container');
+    const passwordContainer = document.getElementById('cred-password-container');
+    const loginDataContainer = document.getElementById('cred-login-data-container');
+    const bearerTokenContainer = document.getElementById('cred-bearer-token-container');
+    const apiKeyContainer = document.getElementById('cred-api-key-container');
+    const apiKeyHeaderContainer = document.getElementById('cred-api-key-header-container');
+    const cookieContainer = document.getElementById('cred-cookie-container');
+
+    if (!authType) return;
+
+    const type = authType.value;
+
+    // Hide all optional containers first
+    if (loginUrlContainer) loginUrlContainer.classList.add('hidden');
+    if (realmContainer) realmContainer.classList.add('hidden');
+    if (usernameContainer) usernameContainer.classList.add('hidden');
+    if (passwordContainer) passwordContainer.classList.add('hidden');
+    if (loginDataContainer) loginDataContainer.classList.add('hidden');
+    if (bearerTokenContainer) bearerTokenContainer.classList.add('hidden');
+    if (apiKeyContainer) apiKeyContainer.classList.add('hidden');
+    if (apiKeyHeaderContainer) apiKeyHeaderContainer.classList.add('hidden');
+    if (cookieContainer) cookieContainer.classList.add('hidden');
+
+    // Show relevant fields based on auth type
+    if (type === 'form') {
+        if (loginUrlContainer) loginUrlContainer.classList.remove('hidden');
+        if (usernameContainer) usernameContainer.classList.remove('hidden');
+        if (passwordContainer) passwordContainer.classList.remove('hidden');
+        if (loginDataContainer) loginDataContainer.classList.remove('hidden');
+    } else if (type === 'http_basic') {
+        if (realmContainer) realmContainer.classList.remove('hidden');
+        if (usernameContainer) usernameContainer.classList.remove('hidden');
+        if (passwordContainer) passwordContainer.classList.remove('hidden');
+    } else if (type === 'bearer_token') {
+        if (bearerTokenContainer) bearerTokenContainer.classList.remove('hidden');
+    } else if (type === 'api_key') {
+        if (apiKeyContainer) apiKeyContainer.classList.remove('hidden');
+        if (apiKeyHeaderContainer) apiKeyHeaderContainer.classList.remove('hidden');
+    } else if (type === 'cookie') {
+        if (cookieContainer) cookieContainer.classList.remove('hidden');
+    }
+    // 'none' - all fields stay hidden
+}
+
+/**
+ * Toggle scan form auth fields based on selected auth type
+ */
+function toggleScanAuthFields() {
+    const authType = document.getElementById('zap-auth-type');
+    const loginUrlContainer = document.getElementById('zap-login-url-container');
+    const usernameContainer = document.getElementById('zap-username-container');
+    const passwordContainer = document.getElementById('zap-password-container');
+    const loginDataContainer = document.getElementById('zap-login-data-container');
+    const bearerTokenContainer = document.getElementById('zap-bearer-token-container');
+    const apiKeyContainer = document.getElementById('zap-api-key-container');
+    const apiKeyHeaderContainer = document.getElementById('zap-api-key-header-container');
+    const cookieContainer = document.getElementById('zap-cookie-container');
+
+    if (!authType) return;
+
+    const type = authType.value;
+
+    // Hide all optional containers first
+    if (loginUrlContainer) loginUrlContainer.classList.add('hidden');
+    if (usernameContainer) usernameContainer.classList.add('hidden');
+    if (passwordContainer) passwordContainer.classList.add('hidden');
+    if (loginDataContainer) loginDataContainer.classList.add('hidden');
+    if (bearerTokenContainer) bearerTokenContainer.classList.add('hidden');
+    if (apiKeyContainer) apiKeyContainer.classList.add('hidden');
+    if (apiKeyHeaderContainer) apiKeyHeaderContainer.classList.add('hidden');
+    if (cookieContainer) cookieContainer.classList.add('hidden');
+
+    // Show relevant fields based on auth type
+    if (type === 'form') {
+        if (loginUrlContainer) loginUrlContainer.classList.remove('hidden');
+        if (usernameContainer) usernameContainer.classList.remove('hidden');
+        if (passwordContainer) passwordContainer.classList.remove('hidden');
+        if (loginDataContainer) loginDataContainer.classList.remove('hidden');
+    } else if (type === 'http_basic') {
+        if (usernameContainer) usernameContainer.classList.remove('hidden');
+        if (passwordContainer) passwordContainer.classList.remove('hidden');
+    } else if (type === 'bearer_token') {
+        if (bearerTokenContainer) bearerTokenContainer.classList.remove('hidden');
+    } else if (type === 'api_key') {
+        if (apiKeyContainer) apiKeyContainer.classList.remove('hidden');
+        if (apiKeyHeaderContainer) apiKeyHeaderContainer.classList.remove('hidden');
+    } else if (type === 'cookie') {
+        if (cookieContainer) cookieContainer.classList.remove('hidden');
+    }
+    // '' (none) - all fields stay hidden
+}
+
+/**
+ * Save credentials for a target
+ */
+async function saveTargetCredentials() {
+    const targetHost = document.getElementById('cred-target-host')?.value?.trim();
+    const authType = document.getElementById('cred-auth-type')?.value;
+    const loginUrl = document.getElementById('cred-login-url')?.value?.trim();
+    const username = document.getElementById('cred-username')?.value?.trim();
+    const password = document.getElementById('cred-password')?.value;
+    const loginData = document.getElementById('cred-login-data')?.value?.trim();
+    const httpRealm = document.getElementById('cred-http-realm')?.value?.trim();
+    const notes = document.getElementById('cred-notes')?.value?.trim();
+    const bearerToken = document.getElementById('cred-bearer-token')?.value?.trim();
+    const apiKey = document.getElementById('cred-api-key')?.value?.trim();
+    const apiKeyHeader = document.getElementById('cred-api-key-header')?.value?.trim() || 'X-API-Key';
+    const cookieValue = document.getElementById('cred-cookie-value')?.value?.trim();
+
+    if (!targetHost) {
+        showNotification('Target host is required', 'warning');
+        return;
+    }
+
+    // Validate required fields based on auth type
+    if (authType === 'form' || authType === 'http_basic') {
+        if (!username || !password) {
+            showNotification('Username and password are required', 'warning');
+            return;
+        }
+    } else if (authType === 'bearer_token') {
+        if (!bearerToken) {
+            showNotification('Bearer token is required', 'warning');
+            return;
+        }
+    } else if (authType === 'api_key') {
+        if (!apiKey) {
+            showNotification('API key is required', 'warning');
+            return;
+        }
+    } else if (authType === 'cookie') {
+        if (!cookieValue) {
+            showNotification('Cookie string is required', 'warning');
+            return;
+        }
+    }
+
+    try {
+        const response = await fetch('/api/zap/credentials', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_host: targetHost,
+                auth_type: authType,
+                login_url: loginUrl,
+                username: username,
+                password: password,
+                login_request_data: loginData,
+                http_realm: httpRealm,
+                notes: notes,
+                bearer_token: bearerToken,
+                api_key: apiKey,
+                api_key_header: apiKeyHeader,
+                cookie_value: cookieValue
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification(data.message || 'Credentials saved successfully', 'success');
+            clearCredentialForm();
+            loadSavedCredentialsList();
+
+            // Clear cache so the badge updates
+            _credentialCheckCache = {};
+
+            // Re-check the current target
+            const targetInput = document.getElementById('adv-vuln-target');
+            if (targetInput && targetInput.value) {
+                checkTargetCredentials(targetInput.value);
+            }
+        } else {
+            showNotification(data.error || 'Failed to save credentials', 'error');
+        }
+    } catch (error) {
+        console.error('Error saving credentials:', error);
+        showNotification('Failed to save credentials', 'error');
+    }
+}
+
+/**
+ * Clear the credential form
+ */
+function clearCredentialForm() {
+    const fields = ['cred-target-host', 'cred-login-url', 'cred-username', 'cred-password',
+                    'cred-login-data', 'cred-http-realm', 'cred-notes', 'cred-bearer-token',
+                    'cred-api-key', 'cred-cookie-value'];
+    fields.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+
+    // Reset API key header to default
+    const apiKeyHeader = document.getElementById('cred-api-key-header');
+    if (apiKeyHeader) apiKeyHeader.value = 'X-API-Key';
+
+    const authType = document.getElementById('cred-auth-type');
+    if (authType) authType.value = 'form';
+
+    toggleCredentialFields();
+}
+
+/**
+ * Load the list of saved credentials
+ */
+async function loadSavedCredentialsList() {
+    const listContainer = document.getElementById('saved-credentials-list');
+    if (!listContainer) return;
+
+    listContainer.innerHTML = '<div class="text-gray-400 text-sm text-center py-4">Loading...</div>';
+
+    try {
+        const response = await fetch('/api/zap/credentials');
+        const data = await response.json();
+
+        if (data.success && data.credentials && data.credentials.length > 0) {
+            let html = '';
+            for (const cred of data.credentials) {
+                let authTypeBadge;
+                switch (cred.auth_type) {
+                    case 'form':
+                        authTypeBadge = '<span class="px-2 py-0.5 bg-blue-600 text-xs rounded">Form</span>';
+                        break;
+                    case 'http_basic':
+                        authTypeBadge = '<span class="px-2 py-0.5 bg-purple-600 text-xs rounded">HTTP Basic</span>';
+                        break;
+                    case 'bearer_token':
+                        authTypeBadge = '<span class="px-2 py-0.5 bg-green-600 text-xs rounded">Bearer Token</span>';
+                        break;
+                    case 'api_key':
+                        authTypeBadge = '<span class="px-2 py-0.5 bg-yellow-600 text-xs rounded">API Key</span>';
+                        break;
+                    case 'cookie':
+                        authTypeBadge = '<span class="px-2 py-0.5 bg-orange-600 text-xs rounded">Cookie</span>';
+                        break;
+                    default:
+                        authTypeBadge = '<span class="px-2 py-0.5 bg-gray-600 text-xs rounded">None</span>';
+                }
+
+                html += `
+                    <div class="flex items-center justify-between p-3 bg-slate-800 rounded-lg">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2">
+                                <span class="font-mono text-sm text-white">${escapeHtml(cred.target_host)}</span>
+                                ${authTypeBadge}
+                            </div>
+                            <div class="text-xs text-gray-400 mt-1">
+                                ${cred.username ? `User: ${escapeHtml(cred.username)}` :
+                                  cred.auth_type === 'bearer_token' ? 'Token configured' :
+                                  cred.auth_type === 'api_key' ? `Header: ${escapeHtml(cred.api_key_header || 'X-API-Key')}` :
+                                  cred.auth_type === 'cookie' ? 'Cookie configured' : 'No username'}
+                                ${cred.notes ? ` | ${escapeHtml(cred.notes)}` : ''}
+                            </div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="editTargetCredential('${escapeHtml(cred.target_host)}')"
+                                    class="text-blue-400 hover:text-blue-300 text-sm" title="Edit">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                                </svg>
+                            </button>
+                            <button onclick="deleteTargetCredential('${escapeHtml(cred.target_host)}')"
+                                    class="text-red-400 hover:text-red-300 text-sm" title="Delete">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+            listContainer.innerHTML = html;
+        } else {
+            listContainer.innerHTML = '<div class="text-gray-400 text-sm text-center py-4">No saved credentials. Add credentials above to use authenticated ZAP scans.</div>';
+        }
+    } catch (error) {
+        console.error('Error loading credentials:', error);
+        listContainer.innerHTML = '<div class="text-red-400 text-sm text-center py-4">Failed to load credentials</div>';
+    }
+}
+
+/**
+ * Edit credentials for a target (loads into form)
+ */
+async function editTargetCredential(targetHost) {
+    try {
+        const response = await fetch(`/api/zap/credentials/${encodeURIComponent(targetHost)}`);
+        const data = await response.json();
+
+        if (data.success && data.credentials) {
+            const cred = data.credentials;
+
+            document.getElementById('cred-target-host').value = cred.target_host || '';
+            document.getElementById('cred-auth-type').value = cred.auth_type || 'form';
+            document.getElementById('cred-login-url').value = cred.login_url || '';
+            document.getElementById('cred-username').value = cred.username || '';
+            document.getElementById('cred-password').value = cred.password || '';
+            document.getElementById('cred-login-data').value = cred.login_request_data || '';
+            document.getElementById('cred-http-realm').value = cred.http_realm || '';
+            document.getElementById('cred-notes').value = cred.notes || '';
+            document.getElementById('cred-bearer-token').value = cred.bearer_token || '';
+            document.getElementById('cred-api-key').value = cred.api_key || '';
+            document.getElementById('cred-api-key-header').value = cred.api_key_header || 'X-API-Key';
+            document.getElementById('cred-cookie-value').value = cred.cookie_value || '';
+
+            toggleCredentialFields();
+
+            // Scroll to form
+            document.getElementById('cred-target-host')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            showNotification('Loaded credentials for editing', 'info');
+        } else {
+            showNotification('Failed to load credentials', 'error');
+        }
+    } catch (error) {
+        console.error('Error loading credential for edit:', error);
+        showNotification('Failed to load credentials', 'error');
+    }
+}
+
+/**
+ * Delete credentials for a target
+ */
+async function deleteTargetCredential(targetHost) {
+    if (!confirm(`Delete saved credentials for "${targetHost}"?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/zap/credentials/${encodeURIComponent(targetHost)}`, {
+            method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification(data.message || 'Credentials deleted', 'success');
+            loadSavedCredentialsList();
+
+            // Clear cache
+            _credentialCheckCache = {};
+
+            // Re-check current target
+            const targetInput = document.getElementById('adv-vuln-target');
+            if (targetInput && targetInput.value) {
+                checkTargetCredentials(targetInput.value);
+            }
+        } else {
+            showNotification(data.error || 'Failed to delete credentials', 'error');
+        }
+    } catch (error) {
+        console.error('Error deleting credentials:', error);
+        showNotification('Failed to delete credentials', 'error');
+    }
+}
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Export new functions to window
+window.checkServerCapabilities = checkServerCapabilities;
+window.loadTrafficAnalysisData = loadTrafficAnalysisData;
+window.toggleTrafficCapture = toggleTrafficCapture;
+window.refreshTrafficData = refreshTrafficData;
+window.showTrafficHostDetail = showTrafficHostDetail;
+window.closeTrafficHostModal = closeTrafficHostModal;
+window.showTrafficConnectionDetail = showTrafficConnectionDetail;
+window.closeTrafficConnectionModal = closeTrafficConnectionModal;
+window.showTrafficPortDetail = showTrafficPortDetail;
+window.closeTrafficPortModal = closeTrafficPortModal;
+window.loadAdvancedVulnData = loadAdvancedVulnData;
+window.startAdvancedScan = startAdvancedScan;
+window.refreshAdvVulnData = refreshAdvVulnData;
+window.cancelAdvScan = cancelAdvScan;
+window.startZapDaemon = startZapDaemon;
+window.stopZapDaemon = stopZapDaemon;
+window.zapClearSession = zapClearSession;
+window.zapImportOpenAPI = zapImportOpenAPI;
+window.zapSetAuthentication = zapSetAuthentication;
+window.zapCheckAuthStatus = zapCheckAuthStatus;
+window.zapClearAuthentication = zapClearAuthentication;
+window.fetchZapStatus = fetchZapStatus;
+window.checkTargetCredentials = checkTargetCredentials;
+window.showCredentialsModal = showCredentialsModal;
+window.closeCredentialsModal = closeCredentialsModal;
+window.toggleCredentialFields = toggleCredentialFields;
+window.toggleScanAuthFields = toggleScanAuthFields;
+window.saveTargetCredentials = saveTargetCredentials;
+window.clearCredentialForm = clearCredentialForm;
+window.loadSavedCredentialsList = loadSavedCredentialsList;
+window.editTargetCredential = editTargetCredential;
+window.deleteTargetCredential = deleteTargetCredential;
+
