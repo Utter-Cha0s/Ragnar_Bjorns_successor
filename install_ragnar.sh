@@ -1301,11 +1301,53 @@ main() {
             EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
             
             for version in "${EPD_VERSIONS[@]}"; do
-                if python3 -c "from waveshare_epd import ${version}; epd = ${version}.EPD(); epd.init(); epd.sleep()" 2>/dev/null; then
+                echo -e "${BLUE}Testing ${version}...${NC}"
+                # Create a test script that properly cleans up GPIO
+                TEST_RESULT=$(python3 -c "
+import sys
+import time
+try:
+    from waveshare_epd import ${version}
+    epd = ${version}.EPD()
+    epd.init()
+    time.sleep(0.1)
+    epd.sleep()
+    # Attempt to cleanup GPIO
+    try:
+        epd.module_exit()
+    except:
+        pass
+    print('SUCCESS')
+    sys.exit(0)
+except Exception as e:
+    # Attempt to cleanup GPIO even on error
+    try:
+        import gpiozero
+        gpiozero.Device.pin_factory.reset()
+    except:
+        pass
+    print(f'FAILED: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1)
+                
+                if echo "$TEST_RESULT" | grep -q "SUCCESS"; then
                     EPD_VERSION="$version"
                     echo -e "${GREEN}✓ Detected E-Paper display: $EPD_VERSION${NC}"
                     log "SUCCESS" "Auto-detected E-Paper display: $EPD_VERSION"
                     break
+                else
+                    # If GPIO busy, try to reset it before next attempt
+                    if echo "$TEST_RESULT" | grep -qi "GPIO busy"; then
+                        log "DEBUG" "GPIO busy, attempting reset before next detection attempt"
+                        python3 -c "
+try:
+    import gpiozero
+    gpiozero.Device.pin_factory.reset()
+except:
+    pass
+" 2>/dev/null || true
+                        sleep 0.5
+                    fi
                 fi
             done
             
@@ -1315,6 +1357,7 @@ main() {
                 echo -e "${YELLOW}  - SPI interface not enabled${NC}"
                 echo -e "${YELLOW}  - Incorrect wiring${NC}"
                 echo -e "${YELLOW}  - Unsupported display model${NC}"
+                echo -e "${YELLOW}  - GPIO pins in use by another process${NC}"
                 log "WARNING" "E-Paper auto-detection failed despite user confirmation"
             fi
         else
