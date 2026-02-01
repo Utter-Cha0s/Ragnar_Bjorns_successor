@@ -26,7 +26,7 @@ VERBOSE=false
 ragnar_USER="ragnar"
 ragnar_PATH="/home/${ragnar_USER}/Ragnar"
 CURRENT_STEP=0
-TOTAL_STEPS=9
+TOTAL_STEPS=10
 HEADLESS_MODE=false
 HEADLESS_VARIANT=""
 HEADLESS_VARIANT_LABEL=""
@@ -311,7 +311,6 @@ check_system_compatibility() {
     return 0
 }
 
-# Check internet connectivity
 check_internet() {
     log "INFO" "Checking internet connectivity..."
     
@@ -393,6 +392,10 @@ install_dependencies() {
         "rfkill"
         "sqlite3"
         "arp-scan"
+        "tcpdump"
+        "nikto"
+        "sqlmap"
+        "whatweb"
     )
 
     if [ "$IS_ARM" = true ]; then
@@ -859,6 +862,17 @@ ragnar ALL=(ALL) NOPASSWD: /usr/bin/nmap
 EOF
     chmod 440 /etc/sudoers.d/ragnar-nmap
     
+    # Configure sudo for traffic analysis tools without password
+    log "INFO" "Configuring sudo permissions for traffic analysis..."
+    cat > /etc/sudoers.d/ragnar-traffic << EOF
+# Allow ragnar user to run traffic analysis tools without password
+ragnar ALL=(ALL) NOPASSWD: /usr/bin/tcpdump
+ragnar ALL=(ALL) NOPASSWD: /usr/bin/tshark
+ragnar ALL=(ALL) NOPASSWD: /usr/sbin/iftop
+ragnar ALL=(ALL) NOPASSWD: /usr/sbin/nethogs
+EOF
+    chmod 440 /etc/sudoers.d/ragnar-traffic
+    
     check_success "Added ragnar user to required groups and configured sudo permissions"
 }
 
@@ -1287,11 +1301,53 @@ main() {
             EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
             
             for version in "${EPD_VERSIONS[@]}"; do
-                if python3 -c "from waveshare_epd import ${version}; epd = ${version}.EPD(); epd.init(); epd.sleep()" 2>/dev/null; then
+                echo -e "${BLUE}Testing ${version}...${NC}"
+                # Create a test script that properly cleans up GPIO
+                TEST_RESULT=$(python3 -c "
+import sys
+import time
+try:
+    from waveshare_epd import ${version}
+    epd = ${version}.EPD()
+    epd.init()
+    time.sleep(0.1)
+    epd.sleep()
+    # Attempt to cleanup GPIO
+    try:
+        epd.module_exit()
+    except:
+        pass
+    print('SUCCESS')
+    sys.exit(0)
+except Exception as e:
+    # Attempt to cleanup GPIO even on error
+    try:
+        import gpiozero
+        gpiozero.Device.pin_factory.reset()
+    except:
+        pass
+    print(f'FAILED: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1)
+                
+                if echo "$TEST_RESULT" | grep -q "SUCCESS"; then
                     EPD_VERSION="$version"
                     echo -e "${GREEN}✓ Detected E-Paper display: $EPD_VERSION${NC}"
                     log "SUCCESS" "Auto-detected E-Paper display: $EPD_VERSION"
                     break
+                else
+                    # If GPIO busy, try to reset it before next attempt
+                    if echo "$TEST_RESULT" | grep -qi "GPIO busy"; then
+                        log "DEBUG" "GPIO busy, attempting reset before next detection attempt"
+                        python3 -c "
+try:
+    import gpiozero
+    gpiozero.Device.pin_factory.reset()
+except:
+    pass
+" 2>/dev/null || true
+                        sleep 0.5
+                    fi
                 fi
             done
             
@@ -1301,6 +1357,7 @@ main() {
                 echo -e "${YELLOW}  - SPI interface not enabled${NC}"
                 echo -e "${YELLOW}  - Incorrect wiring${NC}"
                 echo -e "${YELLOW}  - Unsupported display model${NC}"
+                echo -e "${YELLOW}  - GPIO pins in use by another process${NC}"
                 log "WARNING" "E-Paper auto-detection failed despite user confirmation"
             fi
         else
@@ -1370,6 +1427,70 @@ main() {
 
     CURRENT_STEP=8; show_progress "Verifying installation"
     verify_installation
+
+    # Check if system qualifies for advanced tools (8GB+ RAM, not Pi Zero)
+    CURRENT_STEP=9; show_progress "Checking for advanced security tools eligibility"
+    
+    # Detect if this is a Pi Zero (insufficient resources for advanced tools)
+    IS_PI_ZERO=false
+    if grep -qi "Raspberry Pi Zero" /proc/cpuinfo 2>/dev/null; then
+        IS_PI_ZERO=true
+        log "INFO" "Raspberry Pi Zero detected - skipping advanced tools installation"
+    fi
+    
+    # Check available RAM (7.5GB threshold for 8GB systems with overhead)
+    TOTAL_RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
+    TOTAL_RAM_GB=$(echo "scale=2; $TOTAL_RAM_MB / 1024" | bc 2>/dev/null || echo "0")
+    MIN_RAM_GB=7.5
+    HAS_ENOUGH_RAM=$(echo "$TOTAL_RAM_GB >= $MIN_RAM_GB" | bc 2>/dev/null || echo "0")
+    
+    log "INFO" "System RAM: ${TOTAL_RAM_GB}GB (minimum for advanced tools: ${MIN_RAM_GB}GB)"
+    
+    if [ "$IS_PI_ZERO" = false ] && [ "$HAS_ENOUGH_RAM" = "1" ]; then
+        log "INFO" "System qualifies for advanced security tools (${TOTAL_RAM_GB}GB RAM, not Pi Zero)"
+        echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+        echo -e "${CYAN}  Installing Advanced Security Tools${NC}"
+        echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+        echo -e "${GREEN}Your system has sufficient resources for advanced features:${NC}"
+        echo -e "  ${BLUE}•${NC} Real-time traffic analysis (tcpdump, tshark, ngrep)"
+        echo -e "  ${BLUE}•${NC} Advanced vulnerability scanning (Nuclei, Nikto, SQLMap)"
+        echo -e "  ${BLUE}•${NC} Web application security testing (OWASP ZAP)"
+        echo -e "  ${BLUE}•${NC} Enhanced Nmap vulnerability scripts"
+        echo ""
+        
+        log "INFO" "Automatically installing advanced security tools..."
+        echo -e "${BLUE}Running advanced tools installer...${NC}"
+        
+        # Check if install_advanced_tools.sh exists
+        if [ -f "$ragnar_PATH/install_advanced_tools.sh" ]; then
+            chmod +x "$ragnar_PATH/install_advanced_tools.sh"
+            cd "$ragnar_PATH"
+            
+            # Run the advanced tools installer
+            if bash "$ragnar_PATH/install_advanced_tools.sh"; then
+                log "SUCCESS" "Advanced security tools installed successfully"
+                echo -e "${GREEN}✓ Advanced security tools installed${NC}"
+            else
+                log "WARNING" "Advanced tools installation encountered issues"
+                echo -e "${YELLOW}⚠ Some advanced tools may not have installed correctly${NC}"
+                echo -e "${YELLOW}  You can run the installer manually later:${NC}"
+                echo -e "${YELLOW}  cd /home/ragnar/Ragnar && sudo ./install_advanced_tools.sh${NC}"
+            fi
+        else
+            log "ERROR" "install_advanced_tools.sh not found at $ragnar_PATH"
+            echo -e "${RED}Advanced tools installer script not found${NC}"
+            echo -e "${YELLOW}You can install advanced tools manually later if needed${NC}"
+        fi
+    else
+        if [ "$IS_PI_ZERO" = true ]; then
+            log "INFO" "Raspberry Pi Zero detected - advanced tools not recommended due to limited resources"
+        else
+            log "INFO" "System has ${TOTAL_RAM_GB}GB RAM (minimum ${MIN_RAM_GB}GB required for advanced tools)"
+            echo -e "\n${YELLOW}Note: Advanced security tools require at least 8GB RAM${NC}"
+            echo -e "${YELLOW}Your system: ${TOTAL_RAM_GB}GB RAM${NC}"
+            echo -e "${YELLOW}Advanced tools can be manually installed later if upgraded${NC}"
+        fi
+    fi
 
     # Git repository is preserved for updates
     # Use .gitignore to protect runtime data and configurations

@@ -43,6 +43,14 @@ EOF
 
 select_station_interface() {
     local attempt=0
+    local max_attempts=5
+    local is_interactive=false
+
+    # Check if we're running in an interactive terminal
+    if [[ -t 0 ]]; then
+        is_interactive=true
+    fi
+
     while true; do
         attempt=$((attempt + 1))
         mapfile -t wlan_ifaces < <(ls /sys/class/net 2>/dev/null | grep -E '^wlan[0-9]+' | sort || true)
@@ -52,8 +60,22 @@ select_station_interface() {
                 return 0
             fi
         done
-        echo "[WARN] No secondary wlan interface detected (attempt ${attempt})." >&2
+        echo "[WARN] No secondary wlan interface detected (attempt ${attempt}/${max_attempts})." >&2
         echo "[WARN] Connect a USB WiFi adapter (wlan1/wlan2...) for monitor mode." >&2
+
+        # Non-interactive mode (GUI install): retry a few times then fail gracefully
+        if [[ "$is_interactive" != true ]]; then
+            if [[ $attempt -ge $max_attempts ]]; then
+                echo "[ERROR] No secondary WiFi adapter found after ${max_attempts} attempts." >&2
+                echo "[ERROR] Please connect a USB WiFi adapter and try again." >&2
+                return 1
+            fi
+            echo "[INFO] Waiting 3 seconds before retry (attempt ${attempt}/${max_attempts})..." >&2
+            sleep 3
+            continue
+        fi
+
+        # Interactive mode (terminal install): prompt user
         read -rp "Press Enter to rescan or type 'abort' to cancel installation: " response || true
         if [[ "${response,,}" == "abort" ]]; then
             return 1
@@ -168,6 +190,7 @@ if [[ $available_space -lt $MIN_SPACE_MB ]]; then
     exit 1
 fi
 
+write_status "installing" "Updating package lists" "apt_update"
 echo "[INFO] Updating apt repositories"
 apt-get update -y
 
@@ -200,9 +223,11 @@ optional_packages=(
     liblapack-dev
 )
 
+write_status "installing" "Installing required system packages" "apt_required"
 echo "[INFO] Installing required packages..."
 apt-get install -y "${packages[@]}"
 
+write_status "installing" "Installing optional wireless tools" "apt_optional"
 echo "[INFO] Installing optional wireless tools in one batch..."
 if ! apt-get install -y "${optional_packages[@]}"; then
     echo "[WARN] Optional wireless bundle had installation issues. Continuing with required packages only."
@@ -213,9 +238,11 @@ write_status "installing" "System packages installed" "dependencies"
 # -------------------------------------------------------------------
 # CLONE REPOSITORY
 # -------------------------------------------------------------------
+write_status "installing" "Cloning Pwnagotchi repository" "clone"
 echo "[INFO] Cloning Pwnagotchi repository to ${PWN_DIR}"
 rm -rf "$PWN_DIR"
-git clone "$PWN_REPO" "$PWN_DIR"
+# Use shallow clone for faster download
+git clone --depth 1 "$PWN_REPO" "$PWN_DIR"
 
 write_status "installing" "Installing Pwnagotchi from source" "python"
 cd "$PWN_DIR"
@@ -232,24 +259,27 @@ sed -i '/^numpy/d' requirements.txt 2>/dev/null || true
 # -------------------------------------------------------------------
 # PIP + INSTALL
 # -------------------------------------------------------------------
+write_status "installing" "Upgrading pip" "pip"
 echo "[INFO] Upgrading pip..."
 python3 -m pip install --upgrade --break-system-packages pip || echo "[WARN] pip upgrade skipped"
 
+write_status "installing" "Installing Python dependencies (this may take a few minutes)" "python_deps"
 echo "[INFO] Installing Pwnagotchi dependencies..."
+# Note: Removed --no-cache-dir and --ignore-installed for faster installs
+# --no-cache-dir prevented pip from caching wheels, slowing reinstalls
+# --ignore-installed forced reinstalling packages already present
 python3 -m pip install \
-    --no-cache-dir \
-    --ignore-installed \
     --break-system-packages \
     -r requirements.txt
 
+write_status "installing" "Installing Pwnagotchi package" "python_install"
 echo "[INFO] Installing Pwnagotchi package (editable mode)..."
 python3 -m pip install \
-    --no-cache-dir \
-    --ignore-installed \
     --break-system-packages \
     --use-pep517 \
     -e .
 
+write_status "installing" "Installing gymnasium dependency" "gymnasium"
 # Ensure gymnasium is available for reinforcement-learning plugins
 echo "[INFO] Installing gymnasium dependency..."
 sudo -H pip3 install --break-system-packages gymnasium
@@ -257,27 +287,32 @@ sudo -H pip3 install --break-system-packages gymnasium
 # -------------------------------------------------------------------
 # VALIDATE + FIX /etc/pwnagotchi
 # -------------------------------------------------------------------
+write_status "installing" "Configuring Pwnagotchi directories" "config_dirs"
 echo "[INFO] Validating /etc/pwnagotchi directory..."
 
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 chown root:root "$CONFIG_DIR"
 
+write_status "installing" "Detecting WiFi interfaces" "interface_detect"
 STATION_IFACE="${PWN_DATA_IFACE:-}"
 if [[ -z "$STATION_IFACE" ]]; then
     if ! STATION_IFACE=$(select_station_interface); then
         echo "[ERROR] Unable to detect a wlan interface other than wlan0. Exiting." >&2
-        write_status "error" "Missing dedicated WiFi adapter for monitor mode" "preflight"
+        write_status "error" "Missing dedicated WiFi adapter for monitor mode. Please connect a USB WiFi adapter and try again." "interface_error"
         exit 1
     fi
 fi
 MONITOR_IFACE_NAME="${PWN_MON_IFACE:-mon0}"
 echo "[INFO] Using managed iface: ${STATION_IFACE} (monitor alias: ${MONITOR_IFACE_NAME})"
+
+write_status "installing" "Installing monitor mode scripts" "monitor_scripts"
 install_monitor_scripts "$STATION_IFACE" "$MONITOR_IFACE_NAME"
 
 # -------------------------------------------------------------------
 # RSA KEY VALIDATION + AUTO-GENERATION
 # -------------------------------------------------------------------
+write_status "installing" "Setting up RSA keys" "rsa_keys"
 if [[ ! -f "$CONFIG_DIR/id_rsa" ]]; then
     echo "[INFO] Generating new RSA keypair for Pwnagotchi..."
     ssh-keygen -t rsa -b 2048 -f "$CONFIG_DIR/id_rsa" -N ""
@@ -291,6 +326,7 @@ chmod 644 "$CONFIG_DIR/id_rsa.pub"
 # -------------------------------------------------------------------
 # CONFIG FILE SETUP
 # -------------------------------------------------------------------
+write_status "installing" "Creating configuration files" "config_files"
 if [[ ! -f "$CONFIG_FILE" ]]; then
     cat >"$CONFIG_FILE" <<EOF
 main.name = "RagnarPwn"
@@ -368,6 +404,7 @@ fi
 # -------------------------------------------------------------------
 # SYSTEMD SERVICE SETUP
 # -------------------------------------------------------------------
+write_status "installing" "Setting up systemd service" "systemd"
 cat >"$SERVICE_FILE" <<EOF
 [Unit]
 Description=Pwnagotchi Mode Service
@@ -410,8 +447,9 @@ fi
 # -------------------------------------------------------------------
 # CLEANUP
 # -------------------------------------------------------------------
+write_status "installing" "Cleaning up temporary files" "cleanup"
 echo "[INFO] Cleaning up temporary files..."
 rm -rf "$TEMP_DIR"
 
-write_status "installed" "Pwnagotchi installed. Use Ragnar dashboard to launch." "complete"
+write_status "installed" "Pwnagotchi installed successfully. Use Ragnar dashboard to launch." "complete"
 echo "[INFO] Installation complete. Service disabled until manually started."

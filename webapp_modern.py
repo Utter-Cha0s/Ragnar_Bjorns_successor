@@ -10632,6 +10632,1410 @@ def format_uptime(seconds):
     else:
         return f"{minutes}m"
 
+
+# ============================================================================
+# SERVER MODE & ADVANCED FEATURES API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/server/capabilities')
+def get_server_capabilities_api():
+    """Get server capabilities and feature availability"""
+    try:
+        from server_capabilities import get_server_capabilities
+        caps = get_server_capabilities(shared_data)
+        return jsonify({
+            'success': True,
+            'capabilities': caps.get_capabilities(),
+            'features': caps.get_feature_status()
+        })
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Server capabilities module not available',
+            'capabilities': {},
+            'features': {
+                'server_mode': False,
+                'traffic_analysis': False,
+                'advanced_vuln_assessment': False,
+                'parallel_scanning': False,
+                'local_ai': False,
+                'large_dictionaries': False
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting server capabilities: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/server/debug')
+def debug_server_capabilities():
+    """Debug endpoint to see raw capability detection values"""
+    import platform
+    import os
+    
+    debug_info = {
+        'platform': {
+            'machine': platform.machine(),
+            'architecture': platform.architecture(),
+            'system': platform.system(),
+            'node': platform.node(),
+            'release': platform.release(),
+        },
+        'cpu_count': os.cpu_count(),
+    }
+    
+    # Try to get RAM info
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        debug_info['ram'] = {
+            'total_bytes': mem.total,
+            'total_gb': mem.total / (1024**3),
+            'available_gb': mem.available / (1024**3),
+        }
+    except ImportError:
+        debug_info['ram'] = {'error': 'psutil not installed'}
+    
+    # Check device model on Linux
+    try:
+        model_path = '/sys/firmware/devicetree/base/model'
+        if os.path.exists(model_path):
+            with open(model_path, 'r') as f:
+                debug_info['device_model'] = f.read().strip('\\x00').strip()
+    except Exception as e:
+        debug_info['device_model_error'] = str(e)
+    
+    # Get actual capabilities
+    try:
+        from server_capabilities import get_server_capabilities
+        caps = get_server_capabilities(shared_data)
+        debug_info['capabilities'] = caps.get_capabilities()
+        debug_info['features'] = caps.get_feature_status()
+    except Exception as e:
+        debug_info['caps_error'] = str(e)
+    
+    return jsonify(debug_info)
+
+
+@app.route('/api/server/install-tools', methods=['POST'])
+def install_server_tools():
+    """Install missing tools for a feature"""
+    try:
+        from server_capabilities import get_server_capabilities
+        caps = get_server_capabilities(shared_data)
+        
+        if not caps.is_server_mode():
+            return jsonify({
+                'success': False,
+                'error': 'Server mode not available on this system'
+            }), 400
+        
+        data = request.get_json(silent=True) or {}
+        feature = data.get('feature', '')
+        
+        if feature not in ['traffic_analysis', 'advanced_vuln']:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid feature specified'
+            }), 400
+        
+        success, message = caps.install_missing_tools(feature)
+        return jsonify({
+            'success': success,
+            'message': message,
+            'missing_tools': caps.get_missing_tools(feature)
+        })
+        
+    except ImportError:
+        return jsonify({'success': False, 'error': 'Server capabilities module not available'}), 503
+    except Exception as e:
+        logger.error(f"Error installing tools: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# TRAFFIC ANALYSIS API ENDPOINTS
+# ============================================================================
+
+# Global traffic analyzer instance
+_traffic_analyzer_instance = None
+
+def get_traffic_analyzer():
+    """Get or create traffic analyzer instance"""
+    global _traffic_analyzer_instance
+    if _traffic_analyzer_instance is None:
+        try:
+            from traffic_analyzer import TrafficAnalyzer
+            _traffic_analyzer_instance = TrafficAnalyzer(shared_data)
+        except ImportError:
+            return None
+    return _traffic_analyzer_instance
+
+
+@app.route('/api/traffic/status')
+def get_traffic_status():
+    """Get traffic analyzer status and summary"""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({
+                'success': False,
+                'available': False,
+                'error': 'Traffic analysis module not available'
+            })
+        
+        return jsonify({
+            'success': True,
+            'available': analyzer.is_available(),
+            'summary': analyzer.get_summary()
+        })
+    except Exception as e:
+        logger.error(f"Error getting traffic status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/debug')
+def get_traffic_debug():
+    """Debug endpoint for traffic analyzer"""
+    import shutil
+    import subprocess
+    
+    debug_info = {
+        'tcpdump_path': shutil.which('tcpdump'),
+        'tcpdump_available': shutil.which('tcpdump') is not None,
+    }
+    
+    # Check if tcpdump can run with sudo
+    try:
+        result = subprocess.run(
+            ['sudo', '-n', 'tcpdump', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        debug_info['tcpdump_sudo_works'] = result.returncode == 0
+        debug_info['tcpdump_version'] = result.stdout.strip() if result.returncode == 0 else result.stderr.strip()
+    except Exception as e:
+        debug_info['tcpdump_sudo_works'] = False
+        debug_info['tcpdump_sudo_error'] = str(e)
+    
+    # Check analyzer state
+    try:
+        analyzer = get_traffic_analyzer()
+        if analyzer:
+            debug_info['analyzer_exists'] = True
+            debug_info['analyzer_running'] = analyzer._running
+            debug_info['analyzer_interface'] = analyzer.interface
+            debug_info['packet_queue_size'] = analyzer._packet_queue.qsize()
+            debug_info['total_packets_raw'] = getattr(analyzer, '_raw_packet_count', 0)
+            debug_info['total_packets_parsed'] = analyzer.total_packets
+            debug_info['total_bytes'] = analyzer.total_bytes
+            debug_info['host_count'] = len(analyzer.host_stats)
+            debug_info['connection_count'] = len(analyzer.connections)
+            debug_info['capture_process_alive'] = analyzer._capture_process is not None and analyzer._capture_process.poll() is None
+            if analyzer._capture_process:
+                debug_info['capture_process_pid'] = analyzer._capture_process.pid
+                debug_info['capture_process_returncode'] = analyzer._capture_process.poll()
+        else:
+            debug_info['analyzer_exists'] = False
+    except Exception as e:
+        debug_info['analyzer_error'] = str(e)
+    
+    # List network interfaces
+    try:
+        result = subprocess.run(['ip', 'link', 'show'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            interfaces = []
+            for line in result.stdout.split('\n'):
+                if ': ' in line and '@' not in line:
+                    parts = line.split(': ')
+                    if len(parts) >= 2:
+                        interfaces.append(parts[1].split('@')[0])
+            debug_info['interfaces'] = interfaces
+    except Exception as e:
+        debug_info['interfaces_error'] = str(e)
+    
+    return jsonify(debug_info)
+
+
+@app.route('/api/traffic/start', methods=['POST'])
+def start_traffic_capture():
+    """Start traffic capture"""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+        
+        if not analyzer.is_available():
+            return jsonify({
+                'success': False,
+                'error': 'Traffic analysis not available - check system requirements'
+            }), 400
+        
+        data = request.get_json(silent=True) or {}
+        interface = data.get('interface')
+        
+        if interface:
+            analyzer.interface = interface
+        
+        success = analyzer.start()
+        return jsonify({
+            'success': success,
+            'message': 'Traffic capture started' if success else 'Failed to start capture',
+            'interface': analyzer.interface
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting traffic capture: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/stop', methods=['POST'])
+def stop_traffic_capture():
+    """Stop traffic capture"""
+    try:
+        analyzer = get_traffic_analyzer()
+        if analyzer:
+            analyzer.stop()
+        return jsonify({'success': True, 'message': 'Traffic capture stopped'})
+    except Exception as e:
+        logger.error(f"Error stopping traffic capture: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/summary')
+def get_traffic_summary():
+    """Get traffic analysis summary"""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+        
+        return jsonify({
+            'success': True,
+            'summary': analyzer.get_summary(),
+            'protocols': analyzer.get_protocol_distribution()
+        })
+    except Exception as e:
+        logger.error(f"Error getting traffic summary: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/hosts')
+def get_traffic_hosts():
+    """Get top hosts by traffic"""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+        
+        limit = request.args.get('limit', 20, type=int)
+        sort_by = request.args.get('sort', 'bytes')
+        
+        return jsonify({
+            'success': True,
+            'hosts': analyzer.get_top_hosts(limit=limit, sort_by=sort_by)
+        })
+    except Exception as e:
+        logger.error(f"Error getting traffic hosts: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/connections')
+def get_traffic_connections():
+    """Get active connections"""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+        
+        limit = request.args.get('limit', 50, type=int)
+        
+        return jsonify({
+            'success': True,
+            'connections': analyzer.get_active_connections(limit=limit)
+        })
+    except Exception as e:
+        logger.error(f"Error getting connections: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/alerts')
+def get_traffic_alerts():
+    """Get traffic alerts"""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+        
+        limit = request.args.get('limit', 100, type=int)
+        level = request.args.get('level')
+        
+        return jsonify({
+            'success': True,
+            'alerts': analyzer.get_alerts(limit=limit, level=level)
+        })
+    except Exception as e:
+        logger.error(f"Error getting traffic alerts: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/host/<ip>')
+def get_traffic_host_details(ip):
+    """Get detailed traffic stats for a specific host"""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+        
+        details = analyzer.get_host_details(ip)
+        if details:
+            return jsonify({'success': True, 'host': details})
+        else:
+            return jsonify({'success': False, 'error': 'Host not found'}), 404
+    except Exception as e:
+        logger.error(f"Error getting host details: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# ADVANCED VULNERABILITY SCANNING API ENDPOINTS
+# ============================================================================
+
+# Global advanced vuln scanner instance
+_advanced_vuln_scanner_instance = None
+
+def get_advanced_vuln_scanner():
+    """Get or create advanced vuln scanner instance"""
+    global _advanced_vuln_scanner_instance
+    if _advanced_vuln_scanner_instance is None:
+        try:
+            from advanced_vuln_scanner import AdvancedVulnScanner
+            _advanced_vuln_scanner_instance = AdvancedVulnScanner(shared_data)
+        except ImportError:
+            return None
+    return _advanced_vuln_scanner_instance
+
+
+@app.route('/api/vuln-advanced/status')
+def get_advanced_vuln_status():
+    """Get advanced vulnerability scanner status"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'available': False,
+                'error': 'Advanced vulnerability scanner not available'
+            })
+
+        return jsonify({
+            'success': True,
+            'available': scanner.is_available(),
+            'scanners': scanner.get_available_scanners(),
+            'summary': scanner.get_summary(),
+            'active_scans': scanner.get_active_scans_list()
+        })
+    except Exception as e:
+        logger.error(f"Error getting advanced vuln status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/debug')
+def get_advanced_vuln_debug():
+    """Debug endpoint for vulnerability scanner"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'error': 'Scanner not available'})
+        
+        debug_info = {
+            'tool_paths': scanner._tool_paths,
+            'total_scans': len(scanner.scan_history),
+            'active_scans': len(scanner.active_scans),
+            'scan_results_keys': list(scanner.scan_results.keys()),
+            'scan_results_counts': {k: len(v) for k, v in scanner.scan_results.items()},
+            'scan_history': [
+                {
+                    'scan_id': s.scan_id,
+                    'scan_type': s.scan_type.value,
+                    'target': s.target,
+                    'status': s.status,
+                    'current_check': s.current_check,
+                    'error_message': s.error_message,
+                    'findings_count': s.findings_count
+                }
+                for s in list(scanner.scan_history)[-10:]  # Last 10 scans
+            ]
+        }
+        
+        return jsonify(debug_info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/scan', methods=['POST'])
+def start_advanced_vuln_scan():
+    """Start an advanced vulnerability scan"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Advanced vuln scanner not available'}), 503
+
+        if not scanner.is_available():
+            return jsonify({
+                'success': False,
+                'error': 'Advanced vulnerability scanning not available - check system requirements'
+            }), 400
+
+        data = request.get_json(silent=True) or {}
+        target = data.get('target')
+        scan_type = data.get('scan_type', 'nuclei')
+        options = data.get('options', {})
+
+        if not target:
+            return jsonify({'success': False, 'error': 'Target is required'}), 400
+
+        # Auto-inject stored credentials if not already provided in options
+        if not options.get('http_basic_auth') and not options.get('bearer_token') and not options.get('api_key') and not options.get('cookie_value'):
+            try:
+                from db_manager import get_db
+                db = get_db()
+                creds = db.get_zap_credentials_for_url(target)
+                if creds:
+                    auth_type = creds.get('auth_type')
+                    if auth_type == 'http_basic' and creds.get('username') and creds.get('password'):
+                        options['http_basic_auth'] = f"{creds['username']}:{creds['password']}"
+                    elif auth_type == 'bearer_token' and creds.get('bearer_token'):
+                        options['bearer_token'] = creds['bearer_token']
+                    elif auth_type == 'api_key' and creds.get('api_key'):
+                        options['api_key'] = creds['api_key']
+                        options['api_key_header'] = creds.get('api_key_header', 'X-API-Key')
+                    elif auth_type == 'cookie' and creds.get('cookie_value'):
+                        options['cookie_value'] = creds['cookie_value']
+                    logger.info(f"Using stored {auth_type} credentials for scan target: {target}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch stored credentials for {target}: {e}")
+
+        # Map string to enum
+        from advanced_vuln_scanner import ScanType
+        try:
+            scan_type_enum = ScanType(scan_type)
+        except ValueError:
+            return jsonify({'success': False, 'error': f'Invalid scan type: {scan_type}'}), 400
+
+        scan_id = scanner.start_scan(target, scan_type_enum, options)
+
+        return jsonify({
+            'success': True,
+            'scan_id': scan_id,
+            'message': f'Started {scan_type} scan against {target}'
+        })
+
+    except Exception as e:
+        logger.error(f"Error starting advanced vuln scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/scan/<scan_id>')
+def get_advanced_vuln_scan_status(scan_id):
+    """Get status of a specific scan"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+        
+        status = scanner.get_scan_status(scan_id)
+        if status:
+            return jsonify({
+                'success': True,
+                'scan': status,
+                'results': scanner.get_scan_results(scan_id)
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Scan not found'}), 404
+    except Exception as e:
+        logger.error(f"Error getting scan status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/scan/<scan_id>/cancel', methods=['POST'])
+def cancel_advanced_vuln_scan(scan_id):
+    """Cancel a running scan"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+
+        success = scanner.cancel_scan(scan_id)
+        return jsonify({
+            'success': success,
+            'message': 'Scan cancelled' if success else 'Could not cancel scan'
+        })
+    except Exception as e:
+        logger.error(f"Error cancelling scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/scan/<scan_id>', methods=['DELETE'])
+def delete_advanced_vuln_scan(scan_id):
+    """Delete a scan and its findings"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+
+        success = scanner.delete_scan(scan_id)
+        return jsonify({
+            'success': success,
+            'message': 'Scan deleted' if success else 'Could not delete scan'
+        })
+    except Exception as e:
+        logger.error(f"Error deleting scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/scans', methods=['DELETE'])
+def delete_all_advanced_vuln_scans():
+    """Delete all scans and findings"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+
+        count = scanner.delete_all_scans()
+        return jsonify({
+            'success': True,
+            'message': f'Deleted {count} scans'
+        })
+    except Exception as e:
+        logger.error(f"Error deleting all scans: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/scan/<scan_id>/report')
+def download_scan_report(scan_id):
+    """Download report for a specific scan"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+
+        report_format = request.args.get('format', 'html')
+
+        # Get scan info and findings
+        scan_info = scanner.get_scan_status(scan_id)
+        if not scan_info:
+            return jsonify({'success': False, 'error': 'Scan not found'}), 404
+
+        findings = scanner.get_scan_results(scan_id)
+
+        # Generate HTML report
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        severity_colors = {
+            'critical': '#dc2626',
+            'high': '#f97316',
+            'medium': '#eab308',
+            'low': '#3b82f6',
+            'info': '#6b7280'
+        }
+
+        findings_html = ''
+        for f in findings:
+            sev = f.get('severity', 'info')
+            color = severity_colors.get(sev, '#6b7280')
+            findings_html += f'''
+            <div style="border-left: 4px solid {color}; padding: 15px; margin: 10px 0; background: #1e293b; border-radius: 4px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="background: {color}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; text-transform: uppercase;">{sev}</span>
+                    <span style="color: #94a3b8; font-size: 12px;">{f.get('scanner', 'unknown')}</span>
+                </div>
+                <h3 style="color: #f1f5f9; margin: 10px 0 5px 0;">{f.get('title', 'Unknown')}</h3>
+                <p style="color: #94a3b8; font-size: 14px;">Host: {f.get('host', 'N/A')}{':' + str(f.get('port')) if f.get('port') else ''}</p>
+                <p style="color: #cbd5e1; font-size: 14px; margin-top: 10px;">{f.get('description', '')}</p>
+                {f'<div style="margin-top: 10px;"><strong style="color: #22d3ee;">Evidence:</strong><pre style="background: #0f172a; padding: 10px; border-radius: 4px; overflow-x: auto; color: #4ade80; font-size: 12px;">{f.get("evidence", "")}</pre></div>' if f.get('evidence') else ''}
+                {f'<p style="color: #fbbf24; margin-top: 10px;"><strong>Remediation:</strong> {f.get("remediation", "")}</p>' if f.get('remediation') else ''}
+            </div>
+            '''
+
+        if not findings_html:
+            findings_html = '<p style="color: #94a3b8; text-align: center; padding: 40px;">No findings for this scan.</p>'
+
+        # Count severities
+        sev_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0}
+        for f in findings:
+            sev = f.get('severity', 'info')
+            sev_counts[sev] = sev_counts.get(sev, 0) + 1
+
+        html_report = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Ragnar Security Scan Report - {scan_id}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        .header {{ background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 30px; border-radius: 8px; margin-bottom: 20px; }}
+        .header h1 {{ margin: 0; color: #22d3ee; }}
+        .header p {{ color: #94a3b8; margin: 5px 0 0 0; }}
+        .summary {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; margin-bottom: 20px; }}
+        .summary-card {{ background: #1e293b; padding: 20px; border-radius: 8px; text-align: center; }}
+        .summary-card .count {{ font-size: 32px; font-weight: bold; }}
+        .summary-card .label {{ color: #94a3b8; font-size: 12px; text-transform: uppercase; }}
+        .critical .count {{ color: #dc2626; }}
+        .high .count {{ color: #f97316; }}
+        .medium .count {{ color: #eab308; }}
+        .low .count {{ color: #3b82f6; }}
+        .info .count {{ color: #6b7280; }}
+        .scan-info {{ background: #1e293b; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+        .scan-info h2 {{ color: #22d3ee; margin-top: 0; }}
+        .scan-info table {{ width: 100%; border-collapse: collapse; }}
+        .scan-info td {{ padding: 8px 0; border-bottom: 1px solid #334155; }}
+        .scan-info td:first-child {{ color: #94a3b8; width: 150px; }}
+        .findings {{ background: #1e293b; padding: 20px; border-radius: 8px; }}
+        .findings h2 {{ color: #22d3ee; margin-top: 0; }}
+        pre {{ white-space: pre-wrap; word-wrap: break-word; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Ragnar Security Scan Report</h1>
+            <p>Generated: {timestamp}</p>
+        </div>
+
+        <div class="summary">
+            <div class="summary-card critical"><div class="count">{sev_counts['critical']}</div><div class="label">Critical</div></div>
+            <div class="summary-card high"><div class="count">{sev_counts['high']}</div><div class="label">High</div></div>
+            <div class="summary-card medium"><div class="count">{sev_counts['medium']}</div><div class="label">Medium</div></div>
+            <div class="summary-card low"><div class="count">{sev_counts['low']}</div><div class="label">Low</div></div>
+            <div class="summary-card info"><div class="count">{sev_counts['info']}</div><div class="label">Info</div></div>
+        </div>
+
+        <div class="scan-info">
+            <h2>Scan Information</h2>
+            <table>
+                <tr><td>Scan ID</td><td>{scan_id}</td></tr>
+                <tr><td>Target</td><td>{scan_info.get('target', 'N/A')}</td></tr>
+                <tr><td>Scan Type</td><td>{scan_info.get('scan_type', 'N/A')}</td></tr>
+                <tr><td>Status</td><td>{scan_info.get('status', 'N/A')}</td></tr>
+                <tr><td>Started</td><td>{scan_info.get('started_at', 'N/A')}</td></tr>
+                <tr><td>Completed</td><td>{scan_info.get('completed_at', 'N/A')}</td></tr>
+                <tr><td>Total Findings</td><td>{len(findings)}</td></tr>
+            </table>
+        </div>
+
+        <div class="findings">
+            <h2>Findings ({len(findings)})</h2>
+            {findings_html}
+        </div>
+    </div>
+</body>
+</html>'''
+
+        filename = f'ragnar_scan_report_{scan_id}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.html'
+        response = Response(html_report, content_type='text/html')
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as e:
+        logger.error(f"Error generating scan report: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/report')
+def download_zap_report():
+    """Download ZAP scan report"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+
+        report_format = request.args.get('format', 'html')
+        if report_format not in ('html', 'xml', 'json', 'md'):
+            return jsonify({'success': False, 'error': 'Invalid format. Use: html, xml, json, md'}), 400
+
+        report_data = scanner.generate_zap_report(report_format)
+        if not report_data:
+            return jsonify({'success': False, 'error': 'Failed to generate report. Is ZAP running?'}), 500
+
+        # Set content type based on format
+        content_types = {
+            'html': 'text/html',
+            'xml': 'application/xml',
+            'json': 'application/json',
+            'md': 'text/markdown'
+        }
+
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'ragnar_zap_report_{timestamp}.{report_format}'
+
+        response = Response(report_data, content_type=content_types.get(report_format, 'text/plain'))
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as e:
+        logger.error(f"Error generating ZAP report: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/findings')
+def get_advanced_vuln_findings():
+    """Get all vulnerability findings"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+        
+        limit = request.args.get('limit', 100, type=int)
+        severity = request.args.get('severity')
+        
+        return jsonify({
+            'success': True,
+            'findings': scanner.get_all_findings(severity=severity, limit=limit),
+            'summary': scanner.get_summary()
+        })
+    except Exception as e:
+        logger.error(f"Error getting findings: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/summary')
+def get_advanced_vuln_summary():
+    """Get vulnerability summary"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Scanner not available',
+                'summary': {
+                    'total_findings': 0,
+                    'severity_counts': {},
+                    'available_scanners': {}
+                }
+            })
+        
+        return jsonify({
+            'success': True,
+            'summary': scanner.get_summary()
+        })
+    except Exception as e:
+        logger.error(f"Error getting vuln summary: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# OWASP ZAP API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/zap/status')
+def get_zap_status():
+    """Get OWASP ZAP daemon status"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available'
+            }), 503
+
+        return jsonify({
+            'success': True,
+            'status': scanner.get_zap_status()
+        })
+    except Exception as e:
+        logger.error(f"Error getting ZAP status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/alerts')
+def get_zap_alerts():
+    """Get raw ZAP alerts for debugging"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+
+        if not scanner._is_zap_running():
+            return jsonify({'success': False, 'error': 'ZAP not running'}), 503
+
+        baseurl = request.args.get('baseurl', '')
+        limit = request.args.get('limit', '100')
+
+        params = {'start': '0', 'count': limit}
+        if baseurl:
+            params['baseurl'] = baseurl
+
+        alerts_resp = scanner._zap_api_call('JSON/core/view/alerts', params)
+        alerts = alerts_resp.get('alerts', [])
+
+        return jsonify({
+            'success': True,
+            'count': len(alerts),
+            'alerts': alerts
+        })
+    except Exception as e:
+        logger.error(f"Error getting ZAP alerts: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/start', methods=['POST'])
+def start_zap_daemon():
+    """Start OWASP ZAP daemon"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available'
+            }), 503
+
+        data = request.get_json(silent=True) or {}
+        port = data.get('port')
+
+        success = scanner.start_zap_daemon(port)
+        return jsonify({
+            'success': success,
+            'message': 'ZAP daemon started' if success else 'Failed to start ZAP daemon',
+            'status': scanner.get_zap_status()
+        })
+    except Exception as e:
+        logger.error(f"Error starting ZAP: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/stop', methods=['POST'])
+def stop_zap_daemon():
+    """Stop OWASP ZAP daemon"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available'
+            }), 503
+
+        success = scanner.stop_zap_daemon()
+        return jsonify({
+            'success': success,
+            'message': 'ZAP daemon stopped' if success else 'Failed to stop ZAP daemon'
+        })
+    except Exception as e:
+        logger.error(f"Error stopping ZAP: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/scan', methods=['POST'])
+def start_zap_scan():
+    """Start a ZAP vulnerability scan"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available'
+            }), 503
+
+        data = request.get_json(silent=True) or {}
+        target = data.get('target')
+        if not target:
+            return jsonify({'success': False, 'error': 'Target URL required'}), 400
+
+        # Validate target is a URL
+        if not target.startswith('http://') and not target.startswith('https://'):
+            target = f"http://{target}"
+
+        # Check if saved credentials exist for this target
+        auth_applied = False
+        auth_info = None
+        skip_auth = data.get('skip_auth', False)  # Allow explicit skip
+
+        if not skip_auth:
+            try:
+                from db_manager import get_db
+                db = get_db()
+                saved_creds = db.get_zap_credentials_for_url(target)
+
+                if saved_creds and saved_creds.get('auth_type') != 'none':
+                    # Apply saved credentials to ZAP
+                    logger.info(f"Found saved credentials for {target}, applying to ZAP...")
+
+                    auth_params = {
+                        'login_url': saved_creds.get('login_url') or target,
+                        'username': saved_creds.get('username'),
+                        'password': saved_creds.get('password'),
+                        'login_request_data': saved_creds.get('login_request_data'),
+                        'username_field': saved_creds.get('username_field', 'username'),
+                        'password_field': saved_creds.get('password_field', 'password'),
+                    }
+
+                    if saved_creds.get('auth_type') == 'http_basic':
+                        auth_params['hostname'] = saved_creds.get('target_host')
+                        auth_params['realm'] = saved_creds.get('http_realm')
+
+                    success, error = scanner.zap_set_authentication(
+                        'default',
+                        saved_creds.get('auth_type'),
+                        auth_params
+                    )
+
+                    if success:
+                        auth_applied = True
+                        auth_info = {
+                            'type': saved_creds.get('auth_type'),
+                            'username': saved_creds.get('username'),
+                            'message': f"Using saved {saved_creds.get('auth_type')} auth for {saved_creds.get('target_host')}"
+                        }
+                        logger.info(f"Applied saved auth: {auth_info['message']}")
+                    else:
+                        logger.warning(f"Failed to apply saved auth: {error}")
+            except Exception as auth_err:
+                logger.warning(f"Error checking/applying saved credentials: {auth_err}")
+
+        # Determine scan type
+        scan_type_str = data.get('scan_type', 'zap_full')
+        scan_type_map = {
+            'spider': ScanType.ZAP_SPIDER,
+            'zap_spider': ScanType.ZAP_SPIDER,
+            'active': ScanType.ZAP_ACTIVE,
+            'zap_active': ScanType.ZAP_ACTIVE,
+            'full': ScanType.ZAP_FULL,
+            'zap_full': ScanType.ZAP_FULL,
+        }
+
+        from advanced_vuln_scanner import ScanType
+        scan_type = scan_type_map.get(scan_type_str, ScanType.ZAP_FULL)
+
+        options = {
+            'ajax_spider': data.get('ajax_spider', True),
+            'max_children': data.get('max_children', 10),
+            'scan_policy': data.get('scan_policy', 'Default Policy'),
+            'recurse': data.get('recurse', True),
+            'in_scope_only': data.get('in_scope_only', True),
+        }
+
+        scan_id = scanner.start_scan(target, scan_type, options)
+
+        response = {
+            'success': True,
+            'scan_id': scan_id,
+            'message': f'ZAP {scan_type.value} scan started',
+            'target': target,
+            'auth_applied': auth_applied
+        }
+
+        if auth_info:
+            response['auth_info'] = auth_info
+
+        return jsonify(response)
+
+    except Exception as e:
+        logger.error(f"Error starting ZAP scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/clear-session', methods=['POST'])
+def zap_clear_session():
+    """Clear ZAP session data"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available'
+            }), 503
+
+        success = scanner.zap_clear_session()
+        return jsonify({
+            'success': success,
+            'message': 'ZAP session cleared' if success else 'Failed to clear session'
+        })
+    except Exception as e:
+        logger.error(f"Error clearing ZAP session: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/import-openapi', methods=['POST'])
+def zap_import_openapi():
+    """Import OpenAPI/Swagger specification for API scanning"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available'
+            }), 503
+
+        data = request.get_json(silent=True) or {}
+        spec_url = data.get('spec_url')
+        target_url = data.get('target_url')
+
+        if not spec_url:
+            return jsonify({'success': False, 'error': 'spec_url required'}), 400
+
+        success = scanner.zap_import_openapi(spec_url, target_url)
+        return jsonify({
+            'success': success,
+            'message': 'OpenAPI spec imported' if success else 'Failed to import spec'
+        })
+    except Exception as e:
+        logger.error(f"Error importing OpenAPI spec: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/set-auth', methods=['POST'])
+def zap_set_authentication():
+    """Configure authentication for ZAP scanning"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available'
+            }), 503
+
+        data = request.get_json(silent=True) or {}
+        context_name = data.get('context_name', 'default')
+        auth_type = data.get('auth_type')
+        auth_params = data.get('auth_params', {})
+
+        if not auth_type:
+            return jsonify({'success': False, 'error': 'auth_type required (form, http_basic)'}), 400
+
+        success, error_message = scanner.zap_set_authentication(context_name, auth_type, auth_params)
+
+        if success:
+            return jsonify({
+                'success': True,
+                'message': f'{auth_type} authentication configured successfully'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': error_message or 'Failed to configure authentication'
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error setting ZAP auth: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/auth-status')
+def zap_get_auth_status():
+    """Get current ZAP authentication configuration status"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available',
+                'has_auth': False
+            }), 503
+
+        auth_status = scanner.zap_get_auth_status()
+        auth_status['success'] = True
+        return jsonify(auth_status)
+
+    except Exception as e:
+        logger.error(f"Error getting ZAP auth status: {e}")
+        return jsonify({'success': False, 'error': str(e), 'has_auth': False}), 500
+
+
+@app.route('/api/zap/clear-auth', methods=['POST'])
+def zap_clear_auth():
+    """Clear all ZAP authentication configurations"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'success': False,
+                'error': 'Advanced scanner not available'
+            }), 503
+
+        success, message = scanner.zap_clear_auth()
+
+        if success:
+            return jsonify({
+                'success': True,
+                'message': message
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': message
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error clearing ZAP auth: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/diagnose')
+def zap_diagnose():
+    """Diagnose ZAP connectivity and configuration issues"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        diagnosis = {
+            'scanner_available': scanner is not None,
+            'zap_running': False,
+            'zap_reachable': False,
+            'contexts': [],
+            'auth_status': None,
+            'recent_errors': [],
+            'recommendations': []
+        }
+
+        if not scanner:
+            diagnosis['recommendations'].append("Advanced scanner not available - restart server")
+            return jsonify(diagnosis)
+
+        # Check if ZAP is running
+        diagnosis['zap_running'] = scanner._is_zap_running()
+
+        if not diagnosis['zap_running']:
+            diagnosis['recommendations'].append("ZAP daemon is not running. Click 'Start ZAP' to start it.")
+            return jsonify(diagnosis)
+
+        # Try to reach ZAP API
+        try:
+            status = scanner.get_zap_status()
+            diagnosis['zap_reachable'] = True
+            diagnosis['zap_status'] = status
+        except Exception as e:
+            diagnosis['zap_reachable'] = False
+            diagnosis['recent_errors'].append(f"Cannot reach ZAP API: {str(e)}")
+            diagnosis['recommendations'].append("ZAP process may be running but API is not responding. Try restarting ZAP.")
+            return jsonify(diagnosis)
+
+        # Check auth status
+        try:
+            auth_status = scanner.zap_get_auth_status()
+            diagnosis['auth_status'] = auth_status
+
+            if auth_status.get('has_auth'):
+                diagnosis['recommendations'].append(
+                    f"Authentication is configured ({auth_status.get('auth_type')}). "
+                    "If scanning unauthenticated targets, click 'Clear Auth' first."
+                )
+        except Exception as e:
+            diagnosis['recent_errors'].append(f"Error checking auth: {str(e)}")
+
+        # Check contexts
+        try:
+            contexts_resp = scanner._zap_api_call('JSON/context/view/contextList', {})
+            context_list = contexts_resp.get('contextList', [])
+            if isinstance(context_list, str):
+                context_list = [c.strip() for c in context_list.split(',') if c.strip()]
+            diagnosis['contexts'] = context_list
+
+            if len(context_list) > 5:
+                diagnosis['recommendations'].append(
+                    f"Many contexts configured ({len(context_list)}). Consider clearing ZAP session."
+                )
+        except Exception as e:
+            diagnosis['recent_errors'].append(f"Error listing contexts: {str(e)}")
+
+        # General recommendations
+        if not diagnosis['recent_errors'] and not diagnosis['recommendations']:
+            diagnosis['recommendations'].append("ZAP appears to be configured correctly. If scans still fail, check target accessibility.")
+
+        return jsonify(diagnosis)
+
+    except Exception as e:
+        logger.error(f"Error in ZAP diagnosis: {e}")
+        return jsonify({
+            'error': str(e),
+            'recommendations': ['An error occurred during diagnosis. Check server logs.']
+        }), 500
+
+
+@app.route('/api/zap/diagnose-target', methods=['POST'])
+def zap_diagnose_target():
+    """Diagnose a target URL before scanning - check accessibility, DNS, connectivity"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({
+                'valid': False,
+                'errors': ['Advanced scanner not available'],
+                'recommendations': ['Restart server or check server capabilities']
+            }), 503
+
+        data = request.get_json(silent=True) or {}
+        target = data.get('target', '')
+
+        if not target:
+            return jsonify({
+                'valid': False,
+                'errors': ['No target URL provided'],
+                'recommendations': ['Provide a target URL to diagnose']
+            }), 400
+
+        # Ensure URL has scheme
+        if not target.startswith('http://') and not target.startswith('https://'):
+            target = f"http://{target}"
+
+        result = scanner.zap_diagnose_target(target)
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error diagnosing target: {e}")
+        return jsonify({
+            'valid': False,
+            'errors': [str(e)],
+            'recommendations': ['An error occurred. Check server logs.']
+        }), 500
+
+
+# ============================================================================
+# ZAP TARGET CREDENTIALS API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/zap/credentials', methods=['GET'])
+def list_zap_credentials():
+    """List all saved ZAP target credentials (without passwords)"""
+    try:
+        from db_manager import get_db
+        db = get_db()
+        credentials = db.list_zap_credentials()
+        return jsonify({
+            'success': True,
+            'credentials': credentials,
+            'count': len(credentials)
+        })
+    except Exception as e:
+        logger.error(f"Error listing ZAP credentials: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/credentials', methods=['POST'])
+def save_zap_credentials():
+    """Save ZAP authentication credentials for a target"""
+    try:
+        from db_manager import get_db
+        db = get_db()
+
+        data = request.get_json(silent=True) or {}
+        target_host = data.get('target_host') or data.get('target')
+
+        if not target_host:
+            return jsonify({'success': False, 'error': 'target_host required'}), 400
+
+        auth_type = data.get('auth_type', 'form')
+        valid_auth_types = ('form', 'http_basic', 'bearer_token', 'api_key', 'cookie', 'none')
+        if auth_type not in valid_auth_types:
+            return jsonify({'success': False, 'error': f'auth_type must be one of: {", ".join(valid_auth_types)}'}), 400
+
+        success = db.save_zap_credentials(
+            target_host=target_host,
+            auth_type=auth_type,
+            login_url=data.get('login_url'),
+            username=data.get('username'),
+            password=data.get('password'),
+            login_request_data=data.get('login_request_data'),
+            username_field=data.get('username_field', 'username'),
+            password_field=data.get('password_field', 'password'),
+            http_realm=data.get('http_realm'),
+            notes=data.get('notes'),
+            bearer_token=data.get('bearer_token'),
+            api_key=data.get('api_key'),
+            api_key_header=data.get('api_key_header', 'X-API-Key'),
+            cookie_value=data.get('cookie_value')
+        )
+
+        if success:
+            return jsonify({
+                'success': True,
+                'message': f'Credentials saved for {target_host}'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to save credentials'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error saving ZAP credentials: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/credentials/check', methods=['GET', 'POST'])
+def check_zap_credentials():
+    """Check if credentials exist for a target (used by scan form)"""
+    try:
+        from db_manager import get_db
+        db = get_db()
+
+        # Support both GET with query param and POST with JSON
+        if request.method == 'POST':
+            data = request.get_json(silent=True) or {}
+            target = data.get('target') or data.get('target_host')
+        else:
+            target = request.args.get('target') or request.args.get('target_host')
+
+        if not target:
+            return jsonify({'exists': False, 'error': 'target required'}), 400
+
+        result = db.check_zap_credentials_exist(target)
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error checking ZAP credentials: {e}")
+        return jsonify({'exists': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/credentials/<path:target_host>', methods=['GET'])
+def get_zap_credentials(target_host):
+    """Get full credentials for a target (including password - use carefully)"""
+    try:
+        from db_manager import get_db
+        db = get_db()
+
+        credentials = db.get_zap_credentials(target_host)
+        if credentials:
+            return jsonify({
+                'success': True,
+                'credentials': credentials
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'No credentials found for this target'
+            }), 404
+
+    except Exception as e:
+        logger.error(f"Error getting ZAP credentials: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/zap/credentials/<path:target_host>', methods=['DELETE'])
+def delete_zap_credentials(target_host):
+    """Delete credentials for a target"""
+    try:
+        from db_manager import get_db
+        db = get_db()
+
+        success = db.delete_zap_credentials(target_host)
+        if success:
+            return jsonify({
+                'success': True,
+                'message': f'Credentials deleted for {target_host}'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to delete credentials'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error deleting ZAP credentials: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ============================================================================
 # DASHBOARD API ENDPOINTS
 # ============================================================================
@@ -11521,11 +12925,127 @@ def handle_exit(signum, frame):
 # MAIN
 # ============================================================================
 
-def run_server(host='0.0.0.0', port=8000):
-    """Run the Flask server"""
+def generate_self_signed_cert(cert_path: str, key_path: str):
+    """Generate a self-signed SSL certificate"""
     try:
-        logger.info(f"Starting Ragnar web server on {host}:{port}")
-        logger.info(f"Access the interface at http://{host}:{port}")
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.backends import default_backend
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.primitives import serialization
+        import datetime
+
+        # Generate key
+        key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+            backend=default_backend()
+        )
+
+        # Generate certificate
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+            x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "Security"),
+            x509.NameAttribute(NameOID.LOCALITY_NAME, "Ragnar"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Ragnar Security Scanner"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "ragnar.local"),
+        ])
+
+        cert = x509.CertificateBuilder().subject_name(
+            subject
+        ).issuer_name(
+            issuer
+        ).public_key(
+            key.public_key()
+        ).serial_number(
+            x509.random_serial_number()
+        ).not_valid_before(
+            datetime.datetime.utcnow()
+        ).not_valid_after(
+            datetime.datetime.utcnow() + datetime.timedelta(days=365)
+        ).add_extension(
+            x509.SubjectAlternativeName([
+                x509.DNSName("localhost"),
+                x509.DNSName("ragnar.local"),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+            ]),
+            critical=False,
+        ).sign(key, hashes.SHA256(), default_backend())
+
+        # Write key
+        with open(key_path, "wb") as f:
+            f.write(key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption()
+            ))
+
+        # Write certificate
+        with open(cert_path, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+        logger.info(f"Generated self-signed SSL certificate: {cert_path}")
+        return True
+
+    except ImportError:
+        logger.warning("cryptography library not installed. Cannot generate SSL certificate.")
+        logger.warning("Install with: pip install cryptography")
+        return False
+    except Exception as e:
+        logger.error(f"Error generating SSL certificate: {e}")
+        return False
+
+
+def run_server(host='0.0.0.0', port=8000, ssl_cert=None, ssl_key=None, https_port=None):
+    """
+    Run the Flask server with optional HTTPS support.
+
+    Args:
+        host: Host to bind to (default: 0.0.0.0)
+        port: HTTP port (default: 8000)
+        ssl_cert: Path to SSL certificate file (optional)
+        ssl_key: Path to SSL key file (optional)
+        https_port: HTTPS port (default: None, uses port+443-80 if SSL enabled)
+    """
+    try:
+        # Determine SSL configuration
+        ssl_context = None
+        use_https = False
+
+        if ssl_cert and ssl_key:
+            if os.path.exists(ssl_cert) and os.path.exists(ssl_key):
+                ssl_context = (ssl_cert, ssl_key)
+                use_https = True
+                logger.info(f"SSL enabled with certificate: {ssl_cert}")
+            else:
+                logger.warning(f"SSL cert/key not found. Running HTTP only.")
+        elif ssl_cert == 'adhoc' or os.environ.get('RAGNAR_HTTPS', '').lower() == 'true':
+            # Generate self-signed certificate
+            cert_dir = os.path.join(os.path.dirname(__file__), 'certs')
+            os.makedirs(cert_dir, exist_ok=True)
+            cert_path = os.path.join(cert_dir, 'ragnar.crt')
+            key_path = os.path.join(cert_dir, 'ragnar.key')
+
+            if os.path.exists(cert_path) and os.path.exists(key_path):
+                ssl_context = (cert_path, key_path)
+                use_https = True
+                logger.info(f"Using existing SSL certificate: {cert_path}")
+            elif generate_self_signed_cert(cert_path, key_path):
+                ssl_context = (cert_path, key_path)
+                use_https = True
+            else:
+                logger.warning("Could not generate SSL certificate. Running HTTP only.")
+
+        # Determine effective port
+        effective_port = https_port if (use_https and https_port) else port
+
+        protocol = "https" if use_https else "http"
+        logger.info(f"Starting Ragnar web server on {host}:{effective_port}")
+        logger.info(f"Access the interface at {protocol}://{host}:{effective_port}")
+
+        if use_https:
+            logger.info("⚠️  Using self-signed certificate - browser will show security warning")
 
         # Prime synchronized data before clients connect
         sync_all_counts()
@@ -11535,20 +13055,51 @@ def run_server(host='0.0.0.0', port=8000):
         socketio.start_background_task(background_sync_loop)
         socketio.start_background_task(background_arp_scan_loop)
         socketio.start_background_task(background_health_monitor)
-        
+
         logger.info("✅ All background threads started successfully")
 
         # Run the server
-        socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+        if use_https and ssl_context:
+            socketio.run(app, host=host, port=effective_port, debug=False,
+                        allow_unsafe_werkzeug=True, ssl_context=ssl_context)
+        else:
+            socketio.run(app, host=host, port=effective_port, debug=False,
+                        allow_unsafe_werkzeug=True)
+
     except Exception as e:
         logger.error(f"Error running server: {e}")
         raise
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Ragnar Security Scanner Web Server')
+    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
+    parser.add_argument('--port', type=int, default=8000, help='HTTP port (default: 8000)')
+    parser.add_argument('--ssl-cert', help='Path to SSL certificate file')
+    parser.add_argument('--ssl-key', help='Path to SSL key file')
+    parser.add_argument('--https', action='store_true', help='Enable HTTPS with self-signed certificate')
+    parser.add_argument('--https-port', type=int, help='HTTPS port (default: same as --port)')
+
+    args = parser.parse_args()
+
     # Set up signal handling
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
-    
+
+    # Determine SSL settings
+    ssl_cert = args.ssl_cert
+    ssl_key = args.ssl_key
+
+    if args.https and not ssl_cert:
+        ssl_cert = 'adhoc'  # Will trigger self-signed cert generation
+
     # Run the server
-    run_server()
+    run_server(
+        host=args.host,
+        port=args.port,
+        ssl_cert=ssl_cert,
+        ssl_key=ssl_key,
+        https_port=args.https_port
+    )

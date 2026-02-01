@@ -31,6 +31,9 @@
                             800: '#075985',
                             900: '#0c4a6e',
                         }
+                    },
+                    screens: {
+                        'nav': '1280px',
                     }
                 }
             }
@@ -247,7 +250,7 @@
     
     <!-- Navigation -->
     <nav class="glass sticky top-0 z-50 border-b border-slate-700">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="max-w-7xl 2xl:max-w-[1664px] mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-16">
                 <!-- Logo -->
                 <div class="flex items-center space-x-3">
@@ -265,7 +268,7 @@
                 </div>
                 
                 <!-- Navigation Links -->
-                <div class="hidden lg:flex space-x-1">
+                <div class="hidden nav:flex space-x-1">
                     <button onclick="showTab('dashboard')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="dashboard">
                         Dashboard
                     </button>
@@ -288,6 +291,22 @@
                     <button onclick="showTab('threat-intel')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="threat-intel">
                         Threat Intel
                     </button>
+                    <button onclick="showTab('traffic')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors server-mode-feature hidden" data-tab="traffic">
+                        <span class="flex items-center space-x-1">
+                            <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                            <span>Traffic</span>
+                        </span>
+                    </button>
+                    <button onclick="showTab('adv-vuln')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors server-mode-feature hidden" data-tab="adv-vuln">
+                        <span class="flex items-center space-x-1">
+                            <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                            </svg>
+                            <span>Adv Scan</span>
+                        </span>
+                    </button>
                     <button onclick="showTab('epaper')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors requires-display" data-tab="epaper">
                         E-Paper
                     </button>
@@ -306,7 +325,7 @@
                 </div>
                 
                 <!-- Mobile Menu Button -->
-                <button id="mobile-menu-btn" class="lg:hidden p-2 rounded-lg hover:bg-slate-700">
+                <button id="mobile-menu-btn" class="nav:hidden p-2 rounded-lg hover:bg-slate-700">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
                     </svg>
@@ -315,7 +334,7 @@
         </div>
         
         <!-- Mobile Menu -->
-        <div id="mobile-menu" class="hidden lg:hidden border-t border-slate-700">
+        <div id="mobile-menu" class="hidden nav:hidden border-t border-slate-700">
             <div class="px-2 pt-2 pb-3 space-y-1">
                 <button onclick="showTab('dashboard')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Dashboard</button>
                 <button onclick="showTab('network')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Network</button>
@@ -327,6 +346,8 @@
                     Pentest
                 </button>
                 <button onclick="showTab('threat-intel')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Threat Intel</button>
+                <button onclick="showTab('traffic')" data-tab="traffic" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 server-mode-feature hidden">Traffic Analysis</button>
+                <button onclick="showTab('adv-vuln')" data-tab="adv-vuln" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 server-mode-feature hidden">Adv Scan</button>
                 <button onclick="showTab('epaper')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 requires-display">E-Paper</button>
                 <button onclick="showTab('files')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Files</button>
                 <button onclick="showTab('system')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">System</button>
@@ -337,7 +358,7 @@
     </nav>
 
     <!-- Main Content -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <main class="max-w-7xl 2xl:max-w-[1664px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
         <!-- Dashboard Tab -->
         <div id="dashboard-tab" class="tab-content">
@@ -2244,6 +2265,1031 @@
                 </div>
             </div>
         </div>
+
+        <!-- Traffic Analysis Tab (Server Mode Only) -->
+        <div id="traffic-tab" class="tab-content hidden">
+            <div class="glass rounded-xl p-4 sm:p-6">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+                    <div class="flex items-center space-x-3">
+                        <h2 class="text-xl sm:text-2xl font-bold">Traffic Analysis</h2>
+                        <span class="px-2 py-1 bg-cyan-600 bg-opacity-30 text-cyan-400 text-xs rounded-full">Server Mode</span>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="toggleTrafficCapture()" id="traffic-toggle-btn" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors text-sm sm:text-base">
+                            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Start Capture
+                        </button>
+                        <button onclick="refreshTrafficData()" class="flex-1 sm:flex-none refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors text-sm sm:text-base">
+                            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Security Risk Score & Overview Stats -->
+                <div class="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mb-6">
+                    <!-- Security Risk Score - Larger prominent card -->
+                    <div class="glass-card p-3 sm:p-4 col-span-2 border-l-4" id="traffic-risk-card" style="border-color: #22c55e;">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="text-sm text-gray-400 mb-1">Security Risk Score</div>
+                                <div class="text-4xl font-bold" id="traffic-risk-score" style="color: #22c55e;">0</div>
+                                <div class="text-xs text-gray-500 mt-1" id="traffic-risk-label">No threats detected</div>
+                            </div>
+                            <div class="relative w-20 h-20">
+                                <svg class="w-20 h-20 transform -rotate-90" viewBox="0 0 36 36">
+                                    <path class="text-slate-700" stroke="currentColor" stroke-width="3" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+                                    <path id="traffic-risk-circle" stroke="#22c55e" stroke-width="3" stroke-linecap="round" fill="none" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+                                </svg>
+                                <div class="absolute inset-0 flex items-center justify-center">
+                                    <svg class="w-8 h-8" id="traffic-risk-icon" fill="none" stroke="#22c55e" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                            <div class="bg-slate-700 bg-opacity-50 rounded p-1">
+                                <div class="text-yellow-400 font-semibold" id="traffic-threat-port-scans">0</div>
+                                <div class="text-gray-500">Port Scans</div>
+                            </div>
+                            <div class="bg-slate-700 bg-opacity-50 rounded p-1">
+                                <div class="text-orange-400 font-semibold" id="traffic-threat-c2">0</div>
+                                <div class="text-gray-500">C2 Suspects</div>
+                            </div>
+                            <div class="bg-slate-700 bg-opacity-50 rounded p-1">
+                                <div class="text-red-400 font-semibold" id="traffic-threat-suspicious">0</div>
+                                <div class="text-gray-500">Suspicious</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Network Metrics -->
+                    <div class="glass-card p-3 sm:p-4 text-center">
+                        <div class="text-2xl sm:text-3xl font-bold text-cyan-400" id="traffic-packets-sec">0</div>
+                        <div class="text-xs sm:text-sm text-gray-400">Packets/sec</div>
+                        <div class="text-xs text-gray-500 mt-1" id="traffic-packets-total">0 total</div>
+                    </div>
+                    <div class="glass-card p-3 sm:p-4 text-center">
+                        <div class="text-2xl sm:text-3xl font-bold text-green-400" id="traffic-mbps">0.00</div>
+                        <div class="text-xs sm:text-sm text-gray-400">Mbps</div>
+                        <div class="text-xs text-gray-500 mt-1" id="traffic-bytes-total">0 B total</div>
+                    </div>
+                    <div class="glass-card p-3 sm:p-4 text-center">
+                        <div class="text-2xl sm:text-3xl font-bold text-blue-400" id="traffic-hosts">0</div>
+                        <div class="text-xs sm:text-sm text-gray-400">Active Hosts</div>
+                        <div class="text-xs text-gray-500 mt-1" id="traffic-unique-ports">0 ports</div>
+                    </div>
+                    <div class="glass-card p-3 sm:p-4 text-center">
+                        <div class="text-2xl sm:text-3xl font-bold text-purple-400" id="traffic-connections">0</div>
+                        <div class="text-xs sm:text-sm text-gray-400">Connections</div>
+                        <div class="text-xs text-gray-500 mt-1" id="traffic-dns-queries">0 DNS</div>
+                    </div>
+                </div>
+
+                <!-- Bandwidth Timeline Chart -->
+                <div class="glass-card p-3 sm:p-4 mb-6">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                        <h3 class="font-semibold flex items-center text-sm sm:text-base">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path>
+                            </svg>
+                            <span class="hidden sm:inline">Bandwidth Timeline (Last 60 Seconds)</span>
+                            <span class="sm:hidden">Bandwidth (60s)</span>
+                        </h3>
+                        <div class="flex items-center space-x-4 text-xs">
+                            <span class="flex items-center"><span class="w-3 h-3 bg-cyan-400 rounded-full mr-1"></span>Inbound</span>
+                            <span class="flex items-center"><span class="w-3 h-3 bg-green-400 rounded-full mr-1"></span>Outbound</span>
+                        </div>
+                    </div>
+                    <div class="relative h-32">
+                        <canvas id="traffic-bandwidth-chart" class="w-full h-full"></canvas>
+                        <div class="absolute top-0 right-0 text-xs text-gray-400">
+                            <span id="traffic-chart-max">0 Mbps</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Traffic Details Grid -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                    <!-- Top Hosts by Traffic -->
+                    <div class="glass-card p-3 sm:p-4">
+                        <h3 class="font-semibold mb-4 flex items-center text-sm sm:text-base">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                            </svg>
+                            Top Hosts by Traffic
+                        </h3>
+                        <div id="traffic-top-hosts" class="space-y-2 max-h-60 sm:max-h-80 overflow-y-auto scrollbar-thin">
+                            <p class="text-gray-400 text-center py-8">Start capture to see traffic data...</p>
+                        </div>
+                    </div>
+
+                    <!-- Active Connections -->
+                    <div class="glass-card p-3 sm:p-4">
+                        <h3 class="font-semibold mb-4 flex items-center text-sm sm:text-base">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                            </svg>
+                            Active Connections
+                        </h3>
+                        <div id="traffic-connections-list" class="space-y-2 max-h-60 sm:max-h-80 overflow-y-auto scrollbar-thin">
+                            <p class="text-gray-400 text-center py-8">No active connections</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Protocol Distribution & Traffic Alerts -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mt-6">
+                    <!-- Protocol Distribution with Chart -->
+                    <div class="glass-card p-3 sm:p-4">
+                        <h3 class="font-semibold mb-4 flex items-center text-sm sm:text-base">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"></path>
+                            </svg>
+                            Protocol Distribution
+                        </h3>
+                        <div class="flex flex-col sm:flex-row sm:items-start gap-4">
+                            <!-- Donut Chart -->
+                            <div class="flex-shrink-0 mx-auto sm:mx-0">
+                                <div class="relative w-28 h-28 sm:w-32 sm:h-32">
+                                    <canvas id="traffic-protocol-chart" width="128" height="128"></canvas>
+                                    <div class="absolute inset-0 flex items-center justify-center">
+                                        <div class="text-center">
+                                            <div class="text-lg font-bold text-white" id="traffic-protocol-total">0</div>
+                                            <div class="text-xs text-gray-400">packets</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Traffic Direction Mini Chart -->
+                                <div class="mt-3">
+                                    <div class="text-xs text-gray-400 text-center mb-1">Traffic Direction</div>
+                                    <div class="relative h-4 bg-slate-700 rounded-full overflow-hidden">
+                                        <div id="traffic-direction-in" class="absolute left-0 top-0 h-full bg-gradient-to-r from-green-500 to-green-400" style="width: 50%"></div>
+                                        <div id="traffic-direction-out" class="absolute right-0 top-0 h-full bg-gradient-to-l from-blue-500 to-blue-400" style="width: 50%"></div>
+                                    </div>
+                                    <div class="flex justify-between text-xs mt-1">
+                                        <span class="text-green-400"><span id="traffic-in-percent">50</span>% In</span>
+                                        <span class="text-blue-400"><span id="traffic-out-percent">50</span>% Out</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Protocol List -->
+                            <div id="traffic-protocols" class="flex-1 space-y-2 max-h-44 overflow-y-auto scrollbar-thin">
+                                <p class="text-gray-400 text-center py-8">No protocol data</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Traffic Alerts with Severity -->
+                    <div class="glass-card p-3 sm:p-4">
+                        <h3 class="font-semibold mb-4 flex items-center justify-between text-sm sm:text-base">
+                            <span class="flex items-center">
+                                <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                                </svg>
+                                Security Alerts
+                            </span>
+                            <span class="text-xs px-2 py-1 bg-red-900 bg-opacity-50 rounded-full text-red-400" id="traffic-alerts">0</span>
+                        </h3>
+                        <div id="traffic-alerts-list" class="space-y-2 max-h-60 sm:max-h-80 overflow-y-auto scrollbar-thin">
+                            <p class="text-gray-400 text-center py-8">No alerts</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DNS Analysis & Top Talkers Matrix -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mt-6">
+                    <!-- DNS Query Analysis -->
+                    <div class="glass-card p-3 sm:p-4">
+                        <h3 class="font-semibold mb-4 flex items-center text-sm sm:text-base">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path>
+                            </svg>
+                            DNS Query Analysis
+                        </h3>
+                        <div class="grid grid-cols-3 gap-2 mb-4 text-center text-xs">
+                            <div class="bg-slate-700 bg-opacity-50 rounded p-2">
+                                <div class="text-lg font-bold text-yellow-400" id="traffic-dns-total">0</div>
+                                <div class="text-gray-500">Total Queries</div>
+                            </div>
+                            <div class="bg-slate-700 bg-opacity-50 rounded p-2">
+                                <div class="text-lg font-bold text-green-400" id="traffic-dns-unique">0</div>
+                                <div class="text-gray-500">Unique Domains</div>
+                            </div>
+                            <div class="bg-slate-700 bg-opacity-50 rounded p-2">
+                                <div class="text-lg font-bold text-red-400" id="traffic-dns-suspicious">0</div>
+                                <div class="text-gray-500">Suspicious</div>
+                            </div>
+                        </div>
+                        <div id="traffic-dns-list" class="space-y-1 max-h-48 overflow-y-auto scrollbar-thin text-xs font-mono">
+                            <p class="text-gray-400 text-center py-4">No DNS queries logged</p>
+                        </div>
+                    </div>
+
+                    <!-- Top Talkers / Connection Matrix -->
+                    <div class="glass-card p-3 sm:p-4">
+                        <h3 class="font-semibold mb-4 flex items-center text-sm sm:text-base">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                            </svg>
+                            <span class="hidden sm:inline">Top Talkers (Source → Destination)</span>
+                            <span class="sm:hidden">Top Talkers</span>
+                        </h3>
+                        <div id="traffic-top-talkers" class="space-y-2 max-h-48 sm:max-h-64 overflow-y-auto scrollbar-thin">
+                            <p class="text-gray-400 text-center py-4">No connection data</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Port Activity Heatmap -->
+                <div class="glass-card p-3 sm:p-4 mt-6">
+                    <h3 class="font-semibold mb-4 flex items-center text-sm sm:text-base">
+                        <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"></path>
+                        </svg>
+                        Port Activity Analysis
+                    </h3>
+                    <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2" id="traffic-port-activity">
+                        <div class="text-center p-2 bg-slate-700 bg-opacity-30 rounded">
+                            <div class="text-xs text-gray-500">HTTP/80</div>
+                            <div class="text-sm font-mono text-cyan-400" id="port-80-count">0</div>
+                        </div>
+                        <div class="text-center p-2 bg-slate-700 bg-opacity-30 rounded">
+                            <div class="text-xs text-gray-500">HTTPS/443</div>
+                            <div class="text-sm font-mono text-green-400" id="port-443-count">0</div>
+                        </div>
+                        <div class="text-center p-2 bg-slate-700 bg-opacity-30 rounded">
+                            <div class="text-xs text-gray-500">DNS/53</div>
+                            <div class="text-sm font-mono text-yellow-400" id="port-53-count">0</div>
+                        </div>
+                        <div class="text-center p-2 bg-slate-700 bg-opacity-30 rounded">
+                            <div class="text-xs text-gray-500">SSH/22</div>
+                            <div class="text-sm font-mono text-blue-400" id="port-22-count">0</div>
+                        </div>
+                        <div class="text-center p-2 bg-slate-700 bg-opacity-30 rounded">
+                            <div class="text-xs text-gray-500">RDP/3389</div>
+                            <div class="text-sm font-mono text-purple-400" id="port-3389-count">0</div>
+                        </div>
+                        <div class="text-center p-2 bg-slate-700 bg-opacity-30 rounded border border-red-600 border-opacity-30">
+                            <div class="text-xs text-red-400">Suspicious</div>
+                            <div class="text-sm font-mono text-red-400" id="port-suspicious-count">0</div>
+                        </div>
+                    </div>
+                    <!-- Suspicious Ports Detail Section -->
+                    <div class="mt-4 p-3 bg-red-900 bg-opacity-20 border border-red-600 border-opacity-30 rounded-lg" id="suspicious-ports-section" style="display: none;">
+                        <h4 class="text-sm text-red-400 font-semibold mb-2 flex items-center">
+                            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                            </svg>
+                            Suspicious Ports Detected
+                        </h4>
+                        <div id="suspicious-ports-list" class="space-y-2 max-h-40 overflow-y-auto scrollbar-thin">
+                            <!-- Populated by JavaScript -->
+                        </div>
+                    </div>
+
+                    <!-- Custom Port List -->
+                    <div class="mt-4">
+                        <h4 class="text-sm text-gray-400 mb-2">All Active Ports</h4>
+                        <div id="traffic-all-ports" class="flex flex-wrap gap-1 max-h-20 overflow-y-auto scrollbar-thin">
+                            <span class="text-xs text-gray-500 px-2 py-1 bg-slate-700 rounded">No data</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Host Detail Modal -->
+                <div id="traffic-host-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50 p-2 sm:p-4">
+                    <div class="glass rounded-xl p-4 sm:p-6 max-w-2xl w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-xl font-bold flex items-center">
+                                <svg class="w-5 h-5 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                                </svg>
+                                <span id="traffic-host-modal-ip">Host Details</span>
+                            </h3>
+                            <button onclick="closeTrafficHostModal()" class="text-gray-400 hover:text-white">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="traffic-host-modal-content" class="space-y-4">
+                            <!-- Content populated by JS -->
+                        </div>
+                        <div class="mt-6 flex justify-end">
+                            <button onclick="closeTrafficHostModal()" class="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded-lg transition-colors">
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Connection Detail Modal -->
+                <div id="traffic-connection-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50 p-2 sm:p-4">
+                    <div class="glass rounded-xl p-4 sm:p-6 max-w-xl w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-xl font-bold flex items-center">
+                                <svg class="w-5 h-5 mr-2 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                </svg>
+                                Connection Details
+                            </h3>
+                            <button onclick="closeTrafficConnectionModal()" class="text-gray-400 hover:text-white">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="traffic-connection-modal-content" class="space-y-4">
+                            <!-- Content populated by JS -->
+                        </div>
+                        <div class="mt-6 flex justify-end">
+                            <button onclick="closeTrafficConnectionModal()" class="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded-lg transition-colors">
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Port Detail Modal -->
+                <div id="traffic-port-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50 p-2 sm:p-4">
+                    <div class="glass rounded-xl p-4 sm:p-6 max-w-2xl w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center space-x-3">
+                                <span class="text-2xl">🔌</span>
+                                <div>
+                                    <h3 class="text-xl font-bold text-white">Port <span id="traffic-port-modal-port" class="text-cyan-400 font-mono"></span></h3>
+                                    <p id="traffic-port-modal-service" class="text-sm text-gray-400"></p>
+                                </div>
+                            </div>
+                            <button onclick="closeTrafficPortModal()" class="text-gray-400 hover:text-white transition-colors">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="traffic-port-modal-content" class="space-y-4">
+                            <!-- Content populated by JS -->
+                        </div>
+                        <div class="mt-6 flex justify-end">
+                            <button onclick="closeTrafficPortModal()" class="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded-lg transition-colors">
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Server Mode Notice -->
+                <div id="traffic-not-available" class="hidden mt-6 p-4 bg-yellow-900 bg-opacity-30 border border-yellow-600 rounded-lg">
+                    <div class="flex items-start">
+                        <svg class="w-6 h-6 text-yellow-500 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <h4 class="font-semibold text-yellow-400">Server Mode Required</h4>
+                            <p class="text-gray-300 text-sm mt-1">
+                                Traffic analysis requires Server Mode (AMD64/ARM64 with 8GB+ RAM).
+                                This feature provides real-time packet capture and network traffic monitoring.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Advanced Vulnerability Scanning Tab (Server Mode Only) -->
+        <div id="adv-vuln-tab" class="tab-content hidden">
+            <div class="glass rounded-xl p-4 sm:p-6">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                    <div class="flex items-center space-x-3">
+                        <h2 class="text-lg sm:text-2xl font-bold">Advanced Vulnerability Scanning</h2>
+                        <span class="px-2 py-1 bg-cyan-600 bg-opacity-30 text-cyan-400 text-xs rounded-full whitespace-nowrap">Server Mode</span>
+                    </div>
+                    <button onclick="refreshAdvVulnData()" class="w-full sm:w-auto refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors text-sm sm:text-base">
+                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                        Refresh
+                    </button>
+                </div>
+
+                <!-- Scanner Status Cards -->
+                <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-2 sm:gap-3 mb-6">
+                    <div class="glass-card p-2 sm:p-3 text-center" id="scanner-nuclei">
+                        <div class="text-lg sm:text-2xl mb-1">🔬</div>
+                        <div class="text-xs sm:text-sm font-medium">Nuclei</div>
+                        <div class="text-xs text-gray-400 hidden sm:block" id="scanner-nuclei-status">Checking...</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center" id="scanner-nikto">
+                        <div class="text-lg sm:text-2xl mb-1">🌐</div>
+                        <div class="text-xs sm:text-sm font-medium">Nikto</div>
+                        <div class="text-xs text-gray-400 hidden sm:block" id="scanner-nikto-status">Checking...</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center" id="scanner-sqlmap">
+                        <div class="text-lg sm:text-2xl mb-1">💉</div>
+                        <div class="text-xs sm:text-sm font-medium">SQLMap</div>
+                        <div class="text-xs text-gray-400 hidden sm:block" id="scanner-sqlmap-status">Checking...</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center" id="scanner-nmap-vuln">
+                        <div class="text-lg sm:text-2xl mb-1">🗺️</div>
+                        <div class="text-xs sm:text-sm font-medium">Nmap</div>
+                        <div class="text-xs text-gray-400 hidden sm:block" id="scanner-nmap-vuln-status">Checking...</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center" id="scanner-whatweb">
+                        <div class="text-lg sm:text-2xl mb-1">🔍</div>
+                        <div class="text-xs sm:text-sm font-medium">WhatWeb</div>
+                        <div class="text-xs text-gray-400 hidden sm:block" id="scanner-whatweb-status">Checking...</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center" id="scanner-zap">
+                        <div class="text-lg sm:text-2xl mb-1">⚡</div>
+                        <div class="text-xs sm:text-sm font-medium">ZAP</div>
+                        <div class="text-xs text-gray-400 hidden sm:block" id="scanner-zap-status">Checking...</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center bg-gradient-to-br from-red-900 to-slate-800">
+                        <div class="text-lg sm:text-2xl mb-1">🚀</div>
+                        <div class="text-xs sm:text-sm font-medium">Full</div>
+                        <div class="text-xs text-gray-400 hidden sm:block">All scanners</div>
+                    </div>
+                </div>
+
+                <!-- OWASP ZAP Control Panel -->
+                <div class="glass-card p-3 sm:p-4 mb-6" id="zap-control-panel">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                        <h3 class="font-semibold flex items-center text-sm sm:text-base">
+                            <span class="text-lg sm:text-xl mr-2">⚡</span>
+                            OWASP ZAP Web Scanner
+                        </h3>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs px-2 py-1 rounded-full" id="zap-daemon-status">
+                                Checking...
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                        <!-- ZAP Daemon Control -->
+                        <div class="bg-slate-700 bg-opacity-50 rounded-lg p-2 sm:p-3">
+                            <div class="text-xs sm:text-sm text-gray-400 mb-2">Daemon Control</div>
+                            <div class="flex gap-2">
+                                <button onclick="startZapDaemon()" class="flex-1 px-2 sm:px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-xs sm:text-sm rounded-lg transition-colors" id="zap-start-btn">
+                                    Start
+                                </button>
+                                <button onclick="stopZapDaemon()" class="flex-1 px-2 sm:px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-xs sm:text-sm rounded-lg transition-colors" id="zap-stop-btn">
+                                    Stop
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- ZAP Stats -->
+                        <div class="bg-slate-700 bg-opacity-50 rounded-lg p-2 sm:p-3">
+                            <div class="text-xs sm:text-sm text-gray-400 mb-2">Session Stats</div>
+                            <div class="grid grid-cols-2 gap-2 text-center">
+                                <div>
+                                    <div class="text-base sm:text-lg font-bold text-cyan-400" id="zap-hosts-count">0</div>
+                                    <div class="text-xs text-gray-500">Hosts</div>
+                                </div>
+                                <div>
+                                    <div class="text-base sm:text-lg font-bold text-orange-400" id="zap-alerts-count">0</div>
+                                    <div class="text-xs text-gray-500">Alerts</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Actions -->
+                        <div class="bg-slate-700 bg-opacity-50 rounded-lg p-2 sm:p-3">
+                            <div class="text-xs sm:text-sm text-gray-400 mb-2">Quick Actions</div>
+                            <div class="flex gap-2">
+                                <button onclick="zapClearSession()" class="flex-1 px-2 sm:px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white text-xs sm:text-sm rounded-lg transition-colors">
+                                    Clear Session
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Download Report -->
+                        <div class="bg-slate-700 bg-opacity-50 rounded-lg p-2 sm:p-3">
+                            <div class="text-xs sm:text-sm text-gray-400 mb-2">Download Report</div>
+                            <div class="flex gap-2">
+                                <select id="zap-report-format" class="flex-1 px-2 py-2 bg-slate-600 border border-slate-500 rounded text-xs sm:text-sm">
+                                    <option value="html">HTML</option>
+                                    <option value="xml">XML</option>
+                                    <option value="json">JSON</option>
+                                </select>
+                                <button onclick="downloadZapReport(document.getElementById('zap-report-format').value)" class="px-2 sm:px-3 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-xs sm:text-sm rounded-lg transition-colors">
+                                    Get
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Second row for OpenAPI -->
+                    <div class="grid grid-cols-1 gap-3 sm:gap-4 mt-4">
+                        <!-- OpenAPI Import -->
+                        <div class="bg-slate-700 bg-opacity-50 rounded-lg p-2 sm:p-3">
+                            <div class="text-xs sm:text-sm text-gray-400 mb-2">Import OpenAPI</div>
+                            <div class="flex gap-2">
+                                <input type="text" id="zap-openapi-url" placeholder="Swagger/OpenAPI URL"
+                                       class="flex-1 px-2 py-1 bg-slate-600 border border-slate-500 rounded text-xs sm:text-sm">
+                                <button onclick="zapImportOpenAPI()" class="px-2 sm:px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm rounded transition-colors">
+                                    Import
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ZAP Authentication Status Banner -->
+                    <div id="zap-auth-status-banner" class="hidden mt-4 p-3 rounded-lg border">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span id="zap-auth-status-icon">🔐</span>
+                                <span id="zap-auth-status-text" class="text-sm">Checking authentication status...</span>
+                            </div>
+                            <button id="zap-clear-auth-btn" onclick="zapClearAuthentication()"
+                                    class="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors hidden">
+                                Clear Auth
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- ZAP Authentication Config (Collapsible) -->
+                    <details class="mt-4">
+                        <summary class="cursor-pointer text-xs sm:text-sm text-gray-400 hover:text-gray-300">
+                            🔐 Configure Authentication (for authenticated scanning)
+                        </summary>
+                        <div class="mt-3 p-2 sm:p-3 bg-slate-700 bg-opacity-50 rounded-lg">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                                <div>
+                                    <label class="block text-xs text-gray-400 mb-1">Authentication Type</label>
+                                    <select id="zap-auth-type" onchange="toggleScanAuthFields()" class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                                        <option value="">None (Unauthenticated)</option>
+                                        <option value="form">Form-based Login</option>
+                                        <option value="http_basic">HTTP Basic Auth</option>
+                                        <option value="bearer_token">Bearer Token (API)</option>
+                                        <option value="api_key">API Key (Header)</option>
+                                        <option value="cookie">Cookie Auth</option>
+                                    </select>
+                                </div>
+                                <div id="zap-login-url-container">
+                                    <label class="block text-xs text-gray-400 mb-1">Login URL</label>
+                                    <input type="text" id="zap-login-url" placeholder="https://target.com/login"
+                                           class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                                </div>
+                                <div id="zap-username-container">
+                                    <label class="block text-xs text-gray-400 mb-1">Username</label>
+                                    <input type="text" id="zap-username" placeholder="admin"
+                                           class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                                </div>
+                                <div id="zap-password-container">
+                                    <label class="block text-xs text-gray-400 mb-1">Password</label>
+                                    <input type="password" id="zap-password" placeholder="••••••••"
+                                           class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                                </div>
+                                <!-- Bearer Token Field -->
+                                <div id="zap-bearer-token-container" class="hidden sm:col-span-2">
+                                    <label class="block text-xs text-gray-400 mb-1">Bearer Token</label>
+                                    <input type="password" id="zap-bearer-token" placeholder="eyJhbGciOiJIUzI1NiIs..."
+                                           class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm font-mono">
+                                    <p class="text-xs text-gray-500 mt-1">JWT or OAuth token (Authorization: Bearer)</p>
+                                </div>
+                                <!-- API Key Fields -->
+                                <div id="zap-api-key-container" class="hidden">
+                                    <label class="block text-xs text-gray-400 mb-1">API Key</label>
+                                    <input type="password" id="zap-api-key" placeholder="sk-xxxxxxxxxxxx"
+                                           class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm font-mono">
+                                </div>
+                                <div id="zap-api-key-header-container" class="hidden">
+                                    <label class="block text-xs text-gray-400 mb-1">Header Name</label>
+                                    <input type="text" id="zap-api-key-header" placeholder="X-API-Key" value="X-API-Key"
+                                           class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                                </div>
+                                <!-- Cookie Field -->
+                                <div id="zap-cookie-container" class="hidden sm:col-span-2">
+                                    <label class="block text-xs text-gray-400 mb-1">Cookie String</label>
+                                    <input type="text" id="zap-cookie-value" placeholder="session=abc123; token=xyz789"
+                                           class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm font-mono">
+                                    <p class="text-xs text-gray-500 mt-1">Full cookie string (name=value; name2=value2)</p>
+                                </div>
+                            </div>
+                            <div id="zap-login-data-container" class="mt-3">
+                                <label class="block text-xs text-gray-400 mb-1">Login Request Data (for form auth)</label>
+                                <input type="text" id="zap-login-data" placeholder="username={%username%}&password={%password%}"
+                                       class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                            </div>
+                            <div class="mt-3 flex justify-end">
+                                <button onclick="zapSetAuthentication()" class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg transition-colors">
+                                    Configure Authentication
+                                </button>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- New Scan Form -->
+                <div class="glass-card p-3 sm:p-4 mb-6">
+                    <h3 class="font-semibold mb-4 text-sm sm:text-base">Start New Scan</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs sm:text-sm text-gray-400 mb-1">Target (IP/URL)</label>
+                            <div class="relative">
+                                <input type="text" id="adv-vuln-target" placeholder="192.168.1.1 or https://example.com"
+                                       oninput="checkTargetCredentials(this.value)"
+                                       onchange="checkTargetCredentials(this.value)"
+                                       class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-Ragnar-500 pr-24 text-sm">
+                                <!-- Credential status badge -->
+                                <div id="target-cred-badge" class="absolute right-2 top-1/2 -translate-y-1/2 hidden">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-600 text-white cursor-pointer"
+                                          onclick="showCredentialsModal()" title="Click to manage credentials">
+                                        <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
+                                        </svg>
+                                        Auth
+                                    </span>
+                                </div>
+                            </div>
+                            <!-- Credential info line -->
+                            <div id="target-cred-info" class="hidden mt-1 text-xs text-green-400">
+                                <span id="target-cred-text"></span>
+                                <button onclick="showCredentialsModal()" class="ml-2 text-blue-400 hover:text-blue-300 underline">Manage</button>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs sm:text-sm text-gray-400 mb-1">Scanner</label>
+                            <select id="adv-vuln-scanner" class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-Ragnar-500 text-sm">
+                                <optgroup label="Traditional Scanners">
+                                    <option value="nuclei">Nuclei (Templates)</option>
+                                    <option value="nikto">Nikto (Web Server)</option>
+                                    <option value="sqlmap">SQLMap (SQL Injection)</option>
+                                    <option value="nmap_vuln">Nmap Vuln Scripts</option>
+                                    <option value="whatweb">WhatWeb (Fingerprint)</option>
+                                </optgroup>
+                                <optgroup label="OWASP ZAP">
+                                    <option value="zap_spider">ZAP Spider (Discovery)</option>
+                                    <option value="zap_active">ZAP Active Scan</option>
+                                    <option value="zap_full">ZAP Full Scan (Recommended)</option>
+                                </optgroup>
+                                <optgroup label="Combined">
+                                    <option value="full">Full Scan (All Tools)</option>
+                                </optgroup>
+                            </select>
+                        </div>
+                        <div class="flex items-end sm:col-span-2 lg:col-span-1">
+                            <button onclick="startAdvancedScan()" class="w-full px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm sm:text-base">
+                                <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                </svg>
+                                Start Scan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Vulnerability Summary with Risk Score -->
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2 sm:gap-3 mb-6">
+                    <!-- Risk Score Card -->
+                    <div class="glass-card p-2 sm:p-3 text-center col-span-2 sm:col-span-1 lg:col-span-2 bg-gradient-to-br from-slate-800 to-slate-900">
+                        <div class="text-2xl sm:text-3xl font-bold" id="vuln-risk-score">0</div>
+                        <div class="text-xs text-gray-400">Risk Score</div>
+                        <div class="mt-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                            <div id="vuln-risk-bar" class="h-full bg-green-500 transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <!-- Severity Counts (clickable to filter) -->
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-red-600 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('critical')">
+                        <div class="text-lg sm:text-2xl font-bold text-red-400" id="vuln-critical-count">0</div>
+                        <div class="text-xs text-gray-400 hidden sm:block">Critical</div>
+                        <div class="text-xs text-gray-400 sm:hidden">Crit</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-orange-500 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('high')">
+                        <div class="text-lg sm:text-2xl font-bold text-orange-400" id="vuln-high-count">0</div>
+                        <div class="text-xs text-gray-400">High</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-yellow-500 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('medium')">
+                        <div class="text-lg sm:text-2xl font-bold text-yellow-400" id="vuln-medium-count">0</div>
+                        <div class="text-xs text-gray-400 hidden sm:block">Medium</div>
+                        <div class="text-xs text-gray-400 sm:hidden">Med</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-blue-500 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('low')">
+                        <div class="text-lg sm:text-2xl font-bold text-blue-400" id="vuln-low-count">0</div>
+                        <div class="text-xs text-gray-400">Low</div>
+                    </div>
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-gray-500 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('info')">
+                        <div class="text-lg sm:text-2xl font-bold text-gray-400" id="vuln-info-count">0</div>
+                        <div class="text-xs text-gray-400">Info</div>
+                    </div>
+                </div>
+
+                <!-- Quick Stats Bar -->
+                <div class="glass-card p-3 mb-6">
+                    <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+                        <div class="flex items-center gap-4">
+                            <span class="text-gray-400">Total Findings: <span class="text-white font-semibold" id="vuln-total-findings">0</span></span>
+                            <span class="text-gray-400">Hosts Scanned: <span class="text-cyan-400 font-semibold" id="vuln-hosts-count">0</span></span>
+                            <span class="text-gray-400">Total Scans: <span class="text-green-400 font-semibold" id="vuln-total-scans">0</span></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400 text-xs">Last scan:</span>
+                            <span class="text-xs text-gray-300" id="vuln-last-scan-time">Never</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Scans & Findings -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                    <!-- Active Scans -->
+                    <div class="glass-card p-3 sm:p-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="font-semibold flex items-center text-sm sm:text-base">
+                                <svg id="adv-vuln-scans-spinner" class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                </svg>
+                                Scans
+                            </h3>
+                            <button onclick="deleteAllAdvScans()" class="text-xs text-gray-400 hover:text-red-400 flex items-center gap-1">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                </svg>
+                                <span class="hidden sm:inline">Clear All</span>
+                            </button>
+                        </div>
+                        <div id="adv-vuln-active-scans" class="space-y-2 max-h-48 sm:max-h-60 overflow-y-auto scrollbar-thin">
+                            <p class="text-gray-400 text-center py-4 text-sm">No active scans</p>
+                        </div>
+                    </div>
+
+                    <!-- Recent Findings -->
+                    <div class="glass-card p-3 sm:p-4">
+                        <h3 class="font-semibold mb-4 flex items-center text-sm sm:text-base">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                            </svg>
+                            Recent Findings
+                        </h3>
+                        <div id="adv-vuln-findings" class="space-y-2 max-h-48 sm:max-h-60 overflow-y-auto scrollbar-thin">
+                            <p class="text-gray-400 text-center py-4 text-sm">No findings yet</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detailed Findings Table -->
+                <div class="glass-card p-3 sm:p-4 mt-6">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                        <h3 class="font-semibold text-sm sm:text-base">All Findings</h3>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <!-- Severity Filter Buttons -->
+                            <div class="flex flex-wrap gap-1" id="severity-filter-buttons">
+                                <button onclick="filterFindingsBySeverity('all')" class="vuln-filter-btn active px-2 py-1 text-xs rounded bg-slate-600 hover:bg-slate-500 transition-colors" data-severity="all">All</button>
+                                <button onclick="filterFindingsBySeverity('critical')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300 transition-colors" data-severity="critical">Critical</button>
+                                <button onclick="filterFindingsBySeverity('high')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-orange-900 hover:bg-orange-800 text-orange-300 transition-colors" data-severity="high">High</button>
+                                <button onclick="filterFindingsBySeverity('medium')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-yellow-900 hover:bg-yellow-800 text-yellow-300 transition-colors" data-severity="medium">Medium</button>
+                                <button onclick="filterFindingsBySeverity('low')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-blue-900 hover:bg-blue-800 text-blue-300 transition-colors" data-severity="low">Low</button>
+                                <button onclick="filterFindingsBySeverity('info')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-gray-300 transition-colors" data-severity="info">Info</button>
+                            </div>
+                            <!-- Host Filter -->
+                            <select id="host-filter-select" onchange="filterFindingsByHost(this.value)"
+                                    class="px-2 py-1 text-xs bg-slate-700 border border-slate-600 rounded focus:ring-2 focus:ring-blue-500">
+                                <option value="all">All Hosts</option>
+                            </select>
+                            <!-- Scanner Filter -->
+                            <select id="scanner-filter-select" onchange="filterFindingsByScanner(this.value)"
+                                    class="px-2 py-1 text-xs bg-slate-700 border border-slate-600 rounded focus:ring-2 focus:ring-blue-500">
+                                <option value="all">All Scanners</option>
+                            </select>
+                            <!-- View Toggle -->
+                            <div class="flex gap-1 border-l border-slate-600 pl-2">
+                                <button onclick="setFindingsView('table')" id="view-table-btn" class="p-1.5 rounded bg-slate-600 hover:bg-slate-500 transition-colors" title="Table View">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
+                                </button>
+                                <button onclick="setFindingsView('grouped')" id="view-grouped-btn" class="p-1.5 rounded hover:bg-slate-500 transition-colors" title="Group by Host">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                                </button>
+                            </div>
+                            <!-- Export Button -->
+                            <button onclick="exportFindingsCSV()" class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-green-700 hover:bg-green-600 text-white transition-colors" title="Export to CSV">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                CSV
+                            </button>
+                            <!-- Dedupe Toggle -->
+                            <label class="flex items-center gap-1 text-xs text-gray-300 cursor-pointer" title="Show only unique vulnerabilities (dedupe by host+title)">
+                                <input type="checkbox" id="dedupe-findings-toggle" onchange="toggleDeduplication(this.checked)"
+                                       class="w-3 h-3 rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500">
+                                Unique
+                            </label>
+                            <!-- Clear Filters -->
+                            <button onclick="clearAllFilters()" class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-gray-300 transition-colors" title="Clear all filters">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Table View -->
+                    <div id="findings-table-view" class="overflow-x-auto -mx-3 px-3 sm:mx-0 sm:px-0">
+                        <table class="w-full text-xs sm:text-sm min-w-[500px]">
+                            <thead>
+                                <tr class="text-left text-gray-400 border-b border-slate-700">
+                                    <th class="pb-2 pr-2 cursor-pointer hover:text-white" onclick="sortFindings('severity')">
+                                        Severity <span class="sort-indicator" data-col="severity"></span>
+                                    </th>
+                                    <th class="pb-2 pr-2 cursor-pointer hover:text-white" onclick="sortFindings('title')">
+                                        Title <span class="sort-indicator" data-col="title"></span>
+                                    </th>
+                                    <th class="pb-2 pr-2 hidden sm:table-cell cursor-pointer hover:text-white" onclick="sortFindings('host')">
+                                        Host <span class="sort-indicator" data-col="host"></span>
+                                    </th>
+                                    <th class="pb-2 pr-2 hidden md:table-cell cursor-pointer hover:text-white" onclick="sortFindings('scanner')">
+                                        Scanner <span class="sort-indicator" data-col="scanner"></span>
+                                    </th>
+                                    <th class="pb-2">CVEs</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adv-vuln-table-body">
+                                <tr>
+                                    <td colspan="5" class="text-center py-8 text-gray-400">No findings to display</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- Grouped View (Hidden by default) -->
+                    <div id="findings-grouped-view" class="hidden space-y-4">
+                        <!-- Populated by JS -->
+                    </div>
+                    <!-- Findings Count -->
+                    <div class="mt-3 text-xs text-gray-500 flex justify-between items-center">
+                        <span id="findings-count-text">Showing 0 findings</span>
+                        <span id="findings-filter-text" class="text-cyan-400 hidden">Filtered</span>
+                    </div>
+                </div>
+
+                <!-- Finding Detail Modal -->
+                <div id="finding-detail-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50 p-2 sm:p-4">
+                    <div class="glass rounded-xl p-4 sm:p-6 max-w-2xl w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-xl font-bold" id="finding-modal-title">Finding Details</h3>
+                            <button onclick="closeFindingDetailModal()" class="text-gray-400 hover:text-white">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="finding-modal-content" class="space-y-4">
+                            <!-- Content populated by JS -->
+                        </div>
+                        <div class="mt-6 flex justify-between items-center gap-3">
+                            <button onclick="copyCurrentFinding()" class="flex items-center gap-2 bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded-lg transition-colors text-sm">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
+                                </svg>
+                                Copy Finding
+                            </button>
+                            <button onclick="closeFindingDetailModal()" class="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded-lg transition-colors">
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ZAP Credentials Modal -->
+                <div id="zap-credentials-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50 p-2 sm:p-4">
+                    <div class="glass rounded-xl p-4 sm:p-6 max-w-3xl w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-xl font-bold">Target Credentials</h3>
+                            <button onclick="closeCredentialsModal()" class="text-gray-400 hover:text-white">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- Add/Edit Credentials Form -->
+                        <div class="mb-6 p-4 bg-slate-800 rounded-lg">
+                            <h4 class="font-semibold mb-3 text-green-400">Save Credentials for Target</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm text-gray-400 mb-1">Target Host/IP *</label>
+                                    <input type="text" id="cred-target-host" placeholder="192.168.1.1 or example.com"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-400 mb-1">Auth Type *</label>
+                                    <select id="cred-auth-type" onchange="toggleCredentialFields()"
+                                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                        <option value="form">Form-based Login</option>
+                                        <option value="http_basic">HTTP Basic Auth</option>
+                                        <option value="bearer_token">Bearer Token (API)</option>
+                                        <option value="api_key">API Key (Header)</option>
+                                        <option value="cookie">Cookie Auth</option>
+                                        <option value="none">None (Clear auth for target)</option>
+                                    </select>
+                                </div>
+                                <div id="cred-login-url-container">
+                                    <label class="block text-sm text-gray-400 mb-1">Login URL</label>
+                                    <input type="text" id="cred-login-url" placeholder="https://target.com/login"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                </div>
+                                <div id="cred-realm-container" class="hidden">
+                                    <label class="block text-sm text-gray-400 mb-1">HTTP Realm</label>
+                                    <input type="text" id="cred-http-realm" placeholder="Secure Area"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                </div>
+                                <div id="cred-username-container">
+                                    <label class="block text-sm text-gray-400 mb-1">Username *</label>
+                                    <input type="text" id="cred-username" placeholder="admin"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                </div>
+                                <div id="cred-password-container">
+                                    <label class="block text-sm text-gray-400 mb-1">Password *</label>
+                                    <input type="password" id="cred-password" placeholder="********"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                </div>
+                                <!-- Bearer Token Field -->
+                                <div id="cred-bearer-token-container" class="hidden md:col-span-2">
+                                    <label class="block text-sm text-gray-400 mb-1">Bearer Token *</label>
+                                    <input type="password" id="cred-bearer-token" placeholder="eyJhbGciOiJIUzI1NiIs..."
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500 font-mono text-sm">
+                                    <p class="text-xs text-gray-500 mt-1">JWT or OAuth token (sent as Authorization: Bearer &lt;token&gt;)</p>
+                                </div>
+                                <!-- API Key Fields -->
+                                <div id="cred-api-key-container" class="hidden">
+                                    <label class="block text-sm text-gray-400 mb-1">API Key *</label>
+                                    <input type="password" id="cred-api-key" placeholder="sk-xxxxxxxxxxxx"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500 font-mono text-sm">
+                                </div>
+                                <div id="cred-api-key-header-container" class="hidden">
+                                    <label class="block text-sm text-gray-400 mb-1">Header Name</label>
+                                    <input type="text" id="cred-api-key-header" placeholder="X-API-Key" value="X-API-Key"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                    <p class="text-xs text-gray-500 mt-1">Common headers: X-API-Key, Api-Key, Authorization</p>
+                                </div>
+                                <!-- Cookie Fields -->
+                                <div id="cred-cookie-container" class="hidden md:col-span-2">
+                                    <label class="block text-sm text-gray-400 mb-1">Cookie String *</label>
+                                    <input type="text" id="cred-cookie-value" placeholder="session=abc123; token=xyz789"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500 font-mono text-sm">
+                                    <p class="text-xs text-gray-500 mt-1">Full cookie string (name=value; name2=value2)</p>
+                                </div>
+                                <div id="cred-login-data-container" class="md:col-span-2">
+                                    <label class="block text-sm text-gray-400 mb-1">Login Request Data (optional)</label>
+                                    <input type="text" id="cred-login-data" placeholder="username={%username%}&password={%password%}"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                    <p class="text-xs text-gray-500 mt-1">Use {%username%} and {%password%} as placeholders</p>
+                                </div>
+                                <div class="md:col-span-2">
+                                    <label class="block text-sm text-gray-400 mb-1">Notes (optional)</label>
+                                    <input type="text" id="cred-notes" placeholder="e.g., Test account for staging"
+                                           class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
+                                </div>
+                            </div>
+                            <div class="mt-4 flex justify-end gap-2">
+                                <button onclick="clearCredentialForm()" class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-colors">
+                                    Clear Form
+                                </button>
+                                <button onclick="saveTargetCredentials()" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+                                    <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                    Save Credentials
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Saved Credentials List -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-blue-400">Saved Credentials</h4>
+                            <div id="saved-credentials-list" class="space-y-2">
+                                <div class="text-gray-400 text-sm text-center py-4">Loading saved credentials...</div>
+                            </div>
+                        </div>
+
+                        <div class="mt-6 flex justify-end">
+                            <button onclick="closeCredentialsModal()" class="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded-lg transition-colors">
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Server Mode Notice -->
+                <div id="adv-vuln-not-available" class="hidden mt-6 p-4 bg-yellow-900 bg-opacity-30 border border-yellow-600 rounded-lg">
+                    <div class="flex items-start">
+                        <svg class="w-6 h-6 text-yellow-500 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <h4 class="font-semibold text-yellow-400">Server Mode Required</h4>
+                            <p class="text-gray-300 text-sm mt-1">
+                                Advanced vulnerability scanning requires Server Mode (AMD64/ARM64 with 8GB+ RAM).
+                                This feature provides Nuclei, Nikto, SQLMap, and other enterprise-grade scanners.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
         
         <!-- Config Tab -->
         <div id="config-tab" class="tab-content hidden">
@@ -2431,6 +3477,19 @@
                                 <button id="pwn-swap-to-pwn-btn" class="bg-fuchsia-600 hover:bg-fuchsia-700 text-white py-2 px-4 rounded-lg transition-colors w-full">
                                     Switch to Pwnagotchi
                                 </button>
+                            </div>
+                            <!-- Swap Progress Indicator -->
+                            <div id="pwn-swap-progress" class="hidden mt-4 p-4 bg-slate-900/80 border border-fuchsia-500/50 rounded-lg">
+                                <div class="flex items-center gap-3">
+                                    <div class="animate-spin h-5 w-5 border-2 border-fuchsia-400 border-t-transparent rounded-full"></div>
+                                    <div class="flex-1">
+                                        <p id="pwn-swap-progress-text" class="text-sm font-medium text-fuchsia-200">Preparing to switch...</p>
+                                        <p id="pwn-swap-progress-detail" class="text-xs text-gray-400 mt-1">Starting Pwnagotchi service</p>
+                                    </div>
+                                </div>
+                                <div class="mt-3 h-2 bg-slate-800 rounded-full overflow-hidden">
+                                    <div id="pwn-swap-progress-bar" class="h-full bg-fuchsia-500 transition-all duration-500" style="width: 0%"></div>
+                                </div>
                             </div>
                             <p id="pwn-swap-hint" class="text-xs text-gray-500 mt-3">Ragnar UI becomes unavailable once the service stops. Keep SSH access handy before swapping.</p>
                         </div>

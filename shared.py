@@ -464,7 +464,7 @@ class SharedData:
             self.config['ref_height'] = profile['ref_height']
             changed = True
 
-        needs_orientation = set_orientation_if_missing or 'screen_reversed' not in self.config
+        needs_orientation = set_orientation_if_missing and 'screen_reversed' not in self.config
         if needs_orientation:
             desired_orientation = profile.get('default_flip', False)
             if self.config.get('screen_reversed') != desired_orientation:
