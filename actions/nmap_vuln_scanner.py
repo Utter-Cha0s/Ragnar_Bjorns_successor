@@ -585,22 +585,35 @@ class NmapVulnScanner:
         severity = "medium"
 
         cve_match = re.search(r"(CVE-\d{4}-\d+)", vulnerability_text)
-        score_match = re.search(r"(\d+\.\d+|\d+)", vulnerability_text)
+        
+        # Look for CVSS score AFTER the CVE ID to avoid matching the year in CVE-YYYY-NNNNN
+        # CVSS scores are typically 0.0-10.0, so we look for patterns like "7.5" or standalone decimals
+        # that appear after any CVE ID in the text
+        score_match = None
+        if cve_match:
+            # Search for score only in the text AFTER the CVE ID
+            text_after_cve = vulnerability_text[cve_match.end():]
+            score_match = re.search(r'(\d{1,2}\.\d+)', text_after_cve)
+        else:
+            # No CVE, look for a decimal score pattern anywhere (CVSS scores have decimals)
+            score_match = re.search(r'(\d{1,2}\.\d+)', vulnerability_text)
 
         if cve_match:
             normalized_text = cve_match.group(1)
             if score_match:
-                normalized_text = f"{normalized_text} (Score: {score_match.group(1)})"
                 try:
                     score_value = float(score_match.group(1))
-                    if score_value >= 9.0:
-                        severity = "critical"
-                    elif score_value >= 7.0:
-                        severity = "high"
-                    elif score_value >= 4.0:
-                        severity = "medium"
-                    else:
-                        severity = "low"
+                    # Only use the score if it's in valid CVSS range (0.0 - 10.0)
+                    if 0.0 <= score_value <= 10.0:
+                        normalized_text = f"{normalized_text} (Score: {score_match.group(1)})"
+                        if score_value >= 9.0:
+                            severity = "critical"
+                        elif score_value >= 7.0:
+                            severity = "high"
+                        elif score_value >= 4.0:
+                            severity = "medium"
+                        else:
+                            severity = "low"
                 except ValueError:
                     severity = "medium"
         elif "*EXPLOIT*" in vulnerability_text.upper():
