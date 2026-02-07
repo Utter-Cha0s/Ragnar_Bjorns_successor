@@ -11049,12 +11049,29 @@ def get_advanced_vuln_debug():
         if not scanner:
             return jsonify({'error': 'Scanner not available'})
         
+        # ZAP diagnostic info
+        zap_info = {
+            'zap_base_url': scanner._zap_base_url,
+            'zap_port': scanner._zap_port,
+            'zap_api_key_set': bool(scanner._zap_api_key),
+            'zap_running': scanner._is_zap_running(),
+        }
+        # Try to get ZAP version
+        try:
+            version_resp = scanner._zap_api_call('JSON/core/view/version')
+            zap_info['zap_version'] = version_resp.get('version', 'unknown')
+            zap_info['zap_api_key_valid'] = True
+        except Exception as e:
+            zap_info['zap_api_key_valid'] = False
+            zap_info['zap_api_error'] = str(e)
+
         debug_info = {
             'tool_paths': scanner._tool_paths,
             'total_scans': len(scanner.scan_history),
             'active_scans': len(scanner.active_scans),
             'scan_results_keys': list(scanner.scan_results.keys()),
             'scan_results_counts': {k: len(v) for k, v in scanner.scan_results.items()},
+            'zap': zap_info,
             'scan_history': [
                 {
                     'scan_id': s.scan_id,
@@ -11096,26 +11113,29 @@ def start_advanced_vuln_scan():
         if not target:
             return jsonify({'success': False, 'error': 'Target is required'}), 400
 
-        # Auto-inject stored credentials if not already provided in options
-        if not options.get('http_basic_auth') and not options.get('bearer_token') and not options.get('api_key') and not options.get('cookie_value'):
-            try:
-                from db_manager import get_db
-                db = get_db()
-                creds = db.get_zap_credentials_for_url(target)
-                if creds:
-                    auth_type = creds.get('auth_type')
-                    if auth_type == 'http_basic' and creds.get('username') and creds.get('password'):
-                        options['http_basic_auth'] = f"{creds['username']}:{creds['password']}"
-                    elif auth_type == 'bearer_token' and creds.get('bearer_token'):
-                        options['bearer_token'] = creds['bearer_token']
-                    elif auth_type == 'api_key' and creds.get('api_key'):
-                        options['api_key'] = creds['api_key']
-                        options['api_key_header'] = creds.get('api_key_header', 'X-API-Key')
-                    elif auth_type == 'cookie' and creds.get('cookie_value'):
-                        options['cookie_value'] = creds['cookie_value']
-                    logger.info(f"Using stored {auth_type} credentials for scan target: {target}")
-            except Exception as e:
-                logger.warning(f"Failed to fetch stored credentials for {target}: {e}")
+        # Extract auth from options.auth_params if provided (inline auth for this scan)
+        auth_type = options.get('auth_type')
+        auth_params = options.get('auth_params', {})
+        
+        if auth_type and auth_params:
+            # Map auth_params to options format expected by scanner
+            if auth_type == 'http_basic' and auth_params.get('http_basic_auth'):
+                options['http_basic_auth'] = auth_params['http_basic_auth']
+            elif auth_type == 'bearer_token' and auth_params.get('bearer_token'):
+                options['bearer_token'] = auth_params['bearer_token']
+            elif auth_type == 'api_key' and auth_params.get('api_key'):
+                options['api_key'] = auth_params['api_key']
+                options['api_key_header'] = auth_params.get('api_key_header', 'X-API-Key')
+            elif auth_type == 'cookie' and auth_params.get('cookie_value'):
+                options['cookie_value'] = auth_params['cookie_value']
+            elif auth_type == 'form' and auth_params.get('username'):
+                options['form_auth'] = auth_params
+            elif auth_type == 'oauth2_bba' and auth_params.get('username'):
+                options['oauth2_bba'] = auth_params
+            elif auth_type == 'script_auth' and auth_params.get('username'):
+                options['script_auth'] = auth_params
+            
+            logger.info(f"Using inline {auth_type} auth for scan target: {target}")
 
         # Map string to enum
         from advanced_vuln_scanner import ScanType
@@ -11563,6 +11583,7 @@ def start_zap_scan():
                 if saved_creds and saved_creds.get('auth_type') != 'none':
                     # Apply saved credentials to ZAP
                     logger.info(f"Found saved credentials for {target}, applying to ZAP...")
+                    cred_auth_type = saved_creds.get('auth_type')
 
                     auth_params = {
                         'login_url': saved_creds.get('login_url') or target,
@@ -11573,9 +11594,16 @@ def start_zap_scan():
                         'password_field': saved_creds.get('password_field', 'password'),
                     }
 
-                    if saved_creds.get('auth_type') == 'http_basic':
+                    if cred_auth_type == 'http_basic':
                         auth_params['hostname'] = saved_creds.get('target_host')
                         auth_params['realm'] = saved_creds.get('http_realm')
+                    elif cred_auth_type == 'bearer_token':
+                        auth_params['bearer_token'] = saved_creds.get('bearer_token', '')
+                    elif cred_auth_type == 'api_key':
+                        auth_params['api_key'] = saved_creds.get('api_key', '')
+                        auth_params['api_key_header'] = saved_creds.get('api_key_header', 'X-API-Key')
+                    elif cred_auth_type == 'cookie':
+                        auth_params['cookie_value'] = saved_creds.get('cookie_value', '')
 
                     success, error = scanner.zap_set_authentication(
                         'default',
@@ -11704,7 +11732,7 @@ def zap_set_authentication():
         auth_params = data.get('auth_params', {})
 
         if not auth_type:
-            return jsonify({'success': False, 'error': 'auth_type required (form, http_basic)'}), 400
+            return jsonify({'success': False, 'error': 'auth_type required (form, http_basic, oauth2_bba, script_auth, bearer_token, api_key, cookie)'}), 400
 
         success, error_message = scanner.zap_set_authentication(context_name, auth_type, auth_params)
 
