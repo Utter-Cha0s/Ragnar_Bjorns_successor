@@ -365,22 +365,6 @@ document.addEventListener('DOMContentLoaded', function() {
     initializePwnagotchiVisibility();
     handleHeadlessMode();
 
-    // Close finding detail modal with Escape key
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            closeFindingDetailModal();
-        }
-    });
-
-    // Close finding detail modal when clicking outside
-    const findingModal = document.getElementById('finding-detail-modal');
-    if (findingModal) {
-        findingModal.addEventListener('click', function(e) {
-            if (e.target === findingModal) {
-                closeFindingDetailModal();
-            }
-        });
-    }
 });
 
 
@@ -12232,10 +12216,10 @@ async function loadAdvancedVulnData() {
         hideAdvVulnNotAvailable();
         updateScannerStatus(data.scanners);
         updateVulnSummary(data.summary);
-        updateActiveScans(data.active_scans);
 
-        // Load findings
+        // Load findings first so scans can show severity breakdowns
         await loadAdvVulnFindings();
+        updateActiveScans(data.active_scans);
 
         // Update stats after findings are loaded
         updateVulnStats(data.active_scans, advVulnFindingsCache);
@@ -12246,78 +12230,109 @@ async function loadAdvancedVulnData() {
     }
 }
 
-function updateActiveScans(scans) {
+function updateActiveScans(scans, options = {}) {
     const container = document.getElementById('adv-vuln-active-scans');
     if (!container) return;
 
+    advVulnScansCache = scans || [];
+
     // Control the spinner animation based on running scans
     const spinner = document.getElementById('adv-vuln-scans-spinner');
-    const hasRunningScans = scans && scans.some(scan => scan.status === 'running');
+    const hasRunningScans = advVulnScansCache.some(scan => scan.status === 'running');
     if (spinner) {
-        if (hasRunningScans) {
-            spinner.classList.add('animate-spin');
-        } else {
-            spinner.classList.remove('animate-spin');
-        }
+        spinner.classList.toggle('animate-spin', hasRunningScans);
     }
 
-    if (!scans || scans.length === 0) {
+    if (!advVulnScansCache.length) {
         container.innerHTML = '<p class="text-gray-400 text-center py-4 text-sm">No active scans</p>';
+        updateScansToggleButton(0);
+        renderAdvVulnScanDetails();
         return;
     }
 
-    const statusColors = {
-        'running': 'border-blue-500 bg-blue-900',
-        'completed': 'border-green-500 bg-green-900',
-        'failed': 'border-red-500 bg-red-900',
-        'cancelled': 'border-gray-500 bg-gray-800'
+    const scanFindingsMap = buildAdvVulnScanFindingsMap(advVulnScansCache);
+    advVulnScanFindingsMap = scanFindingsMap;
+
+    if (!options.preserveSelection) {
+        const hasSelected = advVulnSelectedScanId && advVulnScansCache.some(scan => scan.scan_id === advVulnSelectedScanId);
+        if (!hasSelected) {
+            advVulnSelectedScanId = advVulnScansCache[0]?.scan_id || null;
+        }
+    }
+
+    const scansToRender = advVulnShowAllScans ? advVulnScansCache : advVulnScansCache.slice(0, 3);
+    updateScansToggleButton(advVulnScansCache.length);
+
+    const statusLabels = {
+        running: 'Running',
+        completed: 'Completed',
+        failed: 'Failed',
+        cancelled: 'Cancelled'
     };
 
-    const statusIcons = {
-        'running': '<div class="animate-spin h-4 w-4 border-2 border-blue-400 border-t-transparent rounded-full"></div>',
-        'completed': '<svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>',
-        'failed': '<svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>',
-        'cancelled': '<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg>'
+    const severityBadgeClasses = {
+        critical: 'bg-red-600 text-white',
+        high: 'bg-orange-500 text-white',
+        medium: 'bg-yellow-500 text-black',
+        low: 'bg-blue-500 text-white'
     };
 
-    container.innerHTML = scans.map(scan => {
-        const colorClass = statusColors[scan.status] || 'border-gray-500 bg-gray-800';
-        const icon = statusIcons[scan.status] || '';
-        // Fix: backend sends progress_percent and current_check, not progress and current_phase
+    container.innerHTML = scansToRender.map(scan => {
+        const scanId = scan.scan_id;
+        const mapEntry = scanFindingsMap.get(scanId) || { findings: [], counts: {} };
+        const counts = mapEntry.counts || {};
+        const findingsCount = mapEntry.findings.length || scan.findings_count || 0;
+        const durationSeconds = getScanDurationSeconds(scan);
+        const status = scan.status || 'unknown';
         const progress = scan.progress_percent || scan.progress || 0;
         const currentPhase = scan.current_check || scan.current_phase || 'Processing...';
         const errorMessage = scan.error_message || '';
-        
-        // Auth info from scan
         const authType = scan.auth_type || '';
         const authStatus = scan.auth_status || '';
+        const performedAt = scan.completed_at || scan.started_at;
+        const performedLabel = scan.completed_at ? 'Completed' : 'Started';
+        const isSelected = advVulnSelectedScanId === scanId;
 
         return `
-            <div class="p-3 ${colorClass} bg-opacity-30 border-l-4 rounded-lg">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-2">
-                        ${icon}
-                        <span class="font-medium text-sm">${escapeHtml(scan.scan_type || 'Unknown')}</span>
+            <div class="p-4 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-700/70 transition cursor-pointer ${isSelected ? 'ring-2 ring-cyan-500' : ''}"
+                 onclick="selectAdvVulnScan('${scanId}')">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <div class="text-sm font-semibold text-white">${escapeHtml(formatScanType(scan.scan_type))}</div>
+                        <div class="text-xs text-gray-400 mt-1">${escapeHtml(scan.target || 'Unknown target')}</div>
                     </div>
-                    <span class="text-xs text-gray-400 uppercase">${escapeHtml(scan.status)}</span>
+                    <span class="text-[11px] uppercase px-2 py-1 rounded-full bg-slate-700 text-gray-300">${escapeHtml(statusLabels[status] || status)}</span>
                 </div>
-                <div class="flex items-center justify-between text-xs text-gray-300 mt-1">
-                    <span class="truncate">${escapeHtml(scan.target)}</span>
-                    ${scan.duration_seconds ? `<span class="text-gray-500 ml-2">${formatDuration(scan.duration_seconds)}</span>` : ''}
+
+                <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-300">
+                    <div>${performedLabel}: <span class="text-gray-100">${performedAt ? escapeHtml(formatScanTimestamp(performedAt)) : 'N/A'}</span></div>
+                    <div>Duration: <span class="text-gray-100">${durationSeconds ? formatDuration(durationSeconds) : 'N/A'}</span></div>
+                    <div>Findings: <span class="text-cyan-300 font-semibold">${findingsCount}</span></div>
+                    <div>Method: <span class="text-gray-100">${escapeHtml(formatScanType(scan.scan_type))}</span></div>
                 </div>
+
+                <div class="mt-3 flex flex-wrap gap-2 text-[11px]">
+                    ${['critical', 'high', 'medium', 'low'].map(severity => `
+                        <span class="px-2 py-0.5 rounded ${severityBadgeClasses[severity]}">
+                            ${severity.toUpperCase()}: ${counts[severity] || 0}
+                        </span>
+                    `).join('')}
+                </div>
+
                 ${authType ? `
-                    <div class="flex items-center gap-1 text-xs mt-1">
+                    <div class="flex items-center gap-1 text-xs mt-2">
                         <span class="px-1.5 py-0.5 rounded ${
-                            authStatus.startsWith('verified') ? 'bg-green-900 text-green-400' : 
-                            authStatus.startsWith('failed') ? 'bg-red-900 text-red-400' : 
+                            authStatus.startsWith('verified') ? 'bg-green-900 text-green-400' :
+                            authStatus.startsWith('failed') ? 'bg-red-900 text-red-400' :
                             'bg-yellow-900 text-yellow-400'
                         }">
                             ${authStatus.startsWith('verified') ? '✓' : authStatus.startsWith('failed') ? '✗' : '🔐'} ${escapeHtml(authType)} ${authStatus ? `- ${escapeHtml(authStatus)}` : ''}
                         </span>
                     </div>
                 ` : ''}
-                ${scan.status === 'running' ? `
-                    <div class="mt-2">
+
+                ${status === 'running' ? `
+                    <div class="mt-3">
                         <div class="flex justify-between text-xs text-gray-400 mb-1">
                             <span>${escapeHtml(currentPhase)}</span>
                             <span>${progress}%</span>
@@ -12327,23 +12342,23 @@ function updateActiveScans(scans) {
                         </div>
                     </div>
                 ` : ''}
-                ${errorMessage ? `<div class="text-xs text-red-400 mt-1">${escapeHtml(errorMessage)}</div>` : ''}
-                ${scan.status === 'completed' && scan.findings_count === 0 && !errorMessage ? `
-                    <div class="text-xs text-yellow-400 mt-1">0 findings - check server logs for details</div>
+                ${errorMessage ? `<div class="text-xs text-red-400 mt-2">${escapeHtml(errorMessage)}</div>` : ''}
+                ${status === 'completed' && findingsCount === 0 && !errorMessage ? `
+                    <div class="text-xs text-yellow-400 mt-2">0 findings - check server logs for details</div>
                 ` : ''}
-                ${scan.findings_count > 0 ? `<div class="text-xs text-cyan-400 mt-1">${scan.findings_count} findings</div>` : ''}
-                <div class="mt-2 flex gap-2 flex-wrap">
-                    ${scan.status === 'running' ? `
-                        <button onclick="cancelAdvScan('${scan.scan_id}')" class="text-xs text-red-400 hover:text-red-300 flex items-center gap-1">
+
+                <div class="mt-3 flex gap-3 flex-wrap text-xs">
+                    ${status === 'running' ? `
+                        <button onclick="event.stopPropagation(); cancelAdvScan('${scanId}')" class="text-red-400 hover:text-red-300 flex items-center gap-1">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                             Cancel
                         </button>
                     ` : `
-                        <button onclick="downloadScanReport('${scan.scan_id}')" class="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
+                        <button onclick="event.stopPropagation(); downloadScanReport('${scanId}')" class="text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                             Report
                         </button>
-                        <button onclick="deleteAdvScan('${scan.scan_id}')" class="text-xs text-gray-400 hover:text-red-400 flex items-center gap-1">
+                        <button onclick="event.stopPropagation(); deleteAdvScan('${scanId}')" class="text-gray-400 hover:text-red-400 flex items-center gap-1">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                             Delete
                         </button>
@@ -12352,6 +12367,217 @@ function updateActiveScans(scans) {
             </div>
         `;
     }).join('');
+
+    renderAdvVulnScanDetails();
+}
+
+function toggleAdvVulnScansExpanded() {
+    advVulnShowAllScans = !advVulnShowAllScans;
+    updateActiveScans(advVulnScansCache, { preserveSelection: true });
+}
+
+function updateScansToggleButton(totalScans) {
+    const toggleBtn = document.getElementById('adv-vuln-scans-toggle');
+    const toggleIcon = document.getElementById('adv-vuln-scans-toggle-icon');
+    if (!toggleBtn) return;
+
+    if (totalScans <= 3) {
+        toggleBtn.classList.add('hidden');
+        return;
+    }
+
+    toggleBtn.classList.remove('hidden');
+    toggleBtn.querySelector('span').textContent = advVulnShowAllScans ? 'Show fewer scans' : `Show all scans (${totalScans})`;
+    if (toggleIcon) {
+        toggleIcon.classList.toggle('rotate-180', advVulnShowAllScans);
+    }
+}
+
+function buildAdvVulnScanFindingsMap(scans) {
+    const scanIds = scans.map(scan => scan.scan_id).filter(Boolean);
+    const map = new Map();
+
+    scans.forEach(scan => {
+        map.set(scan.scan_id, {
+            findings: [],
+            counts: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
+        });
+    });
+
+    advVulnFindingsCache.forEach(finding => {
+        const scanId = getFindingScanId(finding, scanIds);
+        if (!scanId || !map.has(scanId)) return;
+        const entry = map.get(scanId);
+        entry.findings.push(finding);
+        if (entry.counts.hasOwnProperty(finding.severity)) {
+            entry.counts[finding.severity]++;
+        }
+    });
+
+    return map;
+}
+
+function getFindingScanId(finding, scanIds = []) {
+    if (!finding) return null;
+    if (finding.scan_id) return finding.scan_id;
+    if (!finding.finding_id) return null;
+    return scanIds.find(scanId => finding.finding_id.startsWith(`${scanId}-`)) || null;
+}
+
+function formatScanType(scanType) {
+    if (!scanType) return 'Unknown';
+    return scanType
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, match => match.toUpperCase());
+}
+
+function formatScanTimestamp(timestamp) {
+    if (!timestamp) return 'N/A';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return timestamp;
+    return date.toLocaleString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+    });
+}
+
+function getScanDurationSeconds(scan) {
+    if (!scan) return 0;
+    if (scan.duration_seconds) return scan.duration_seconds;
+    if (!scan.started_at) return 0;
+    const started = new Date(scan.started_at);
+    if (Number.isNaN(started.getTime())) return 0;
+    return Math.max(0, (Date.now() - started.getTime()) / 1000);
+}
+
+function selectAdvVulnScan(scanId, options = {}) {
+    advVulnSelectedScanId = scanId;
+    advVulnHighlightedFindingId = options.highlightFindingId || null;
+    updateActiveScans(advVulnScansCache, { preserveSelection: true });
+    const detailsSection = document.getElementById('adv-vuln-scan-details');
+    detailsSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderAdvVulnScanDetails() {
+    const container = document.getElementById('adv-vuln-scan-details-content');
+    if (!container) return;
+
+    if (!advVulnSelectedScanId) {
+        container.innerHTML = 'Select a scan above to view all findings and detailed information.';
+        return;
+    }
+
+    const scan = advVulnScansCache.find(item => item.scan_id === advVulnSelectedScanId);
+    if (!scan) {
+        container.innerHTML = 'Select a scan above to view all findings and detailed information.';
+        return;
+    }
+
+    const mapEntry = advVulnScanFindingsMap.get(advVulnSelectedScanId) || { findings: [], counts: {} };
+    const findings = mapEntry.findings || [];
+    const counts = mapEntry.counts || {};
+    const performedAt = scan.completed_at || scan.started_at;
+    const durationSeconds = getScanDurationSeconds(scan);
+
+    const severityBadgeClasses = {
+        critical: 'bg-red-600 text-white',
+        high: 'bg-orange-500 text-white',
+        medium: 'bg-yellow-500 text-black',
+        low: 'bg-blue-500 text-white',
+        info: 'bg-gray-500 text-white'
+    };
+
+    const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+    const sortedFindings = [...findings].sort((a, b) => {
+        return (severityOrder[a.severity] || 5) - (severityOrder[b.severity] || 5);
+    });
+
+    const findingsHtml = sortedFindings.length ? sortedFindings.map(finding => {
+        const highlight = advVulnHighlightedFindingId && finding.finding_id === advVulnHighlightedFindingId;
+        const timestamp = finding.timestamp ? formatScanTimestamp(finding.timestamp) : 'N/A';
+        const detailsJson = finding.details ? JSON.stringify(finding.details, null, 2) : '';
+
+        return `
+            <div class="p-4 rounded-lg border border-slate-700 bg-slate-800/60 ${highlight ? 'ring-2 ring-cyan-500' : ''}">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                        <span class="px-2 py-1 rounded text-xs uppercase ${severityBadgeClasses[finding.severity] || 'bg-gray-600 text-white'}">
+                            ${escapeHtml(finding.severity || 'info')}
+                        </span>
+                        <span class="text-sm font-semibold text-white">${escapeHtml(finding.title || 'Untitled Finding')}</span>
+                    </div>
+                    <span class="text-xs text-gray-400">${timestamp}</span>
+                </div>
+                <div class="mt-2 text-xs text-gray-300 flex flex-wrap gap-3">
+                    <span>Host: <span class="font-mono text-gray-100">${escapeHtml(finding.host || 'N/A')}${finding.port ? ':' + finding.port : ''}</span></span>
+                    <span>Scanner: <span class="text-gray-100">${escapeHtml(finding.scanner || 'Unknown')}</span></span>
+                    ${finding.cvss_score ? `<span>CVSS: <span class="text-gray-100">${escapeHtml(finding.cvss_score)}</span></span>` : ''}
+                    ${finding.matched_at ? `<span>URL: <span class="text-gray-100 break-all">${escapeHtml(finding.matched_at)}</span></span>` : ''}
+                </div>
+                ${finding.description ? `<div class="mt-3 text-sm text-gray-200">${escapeHtml(finding.description)}</div>` : ''}
+                ${finding.remediation ? `<div class="mt-3 text-sm text-yellow-200"><span class="font-semibold">Remediation:</span> ${escapeHtml(finding.remediation)}</div>` : ''}
+                ${finding.evidence ? `
+                    <div class="mt-3">
+                        <div class="text-xs text-cyan-300 font-semibold">Evidence</div>
+                        <pre class="mt-1 text-xs text-green-300 bg-slate-900/80 rounded p-3 overflow-x-auto whitespace-pre-wrap">${escapeHtml(finding.evidence)}</pre>
+                    </div>
+                ` : ''}
+                ${finding.cve_ids?.length || finding.cwe_ids?.length ? `
+                    <div class="mt-3 text-xs text-gray-300 flex flex-wrap gap-2">
+                        ${finding.cve_ids?.length ? `<span>CVEs: ${finding.cve_ids.map(cve => `<span class="text-cyan-300">${escapeHtml(cve)}</span>`).join(', ')}</span>` : ''}
+                        ${finding.cwe_ids?.length ? `<span>CWEs: ${finding.cwe_ids.map(cwe => `<span class="text-cyan-300">${escapeHtml(cwe)}</span>`).join(', ')}</span>` : ''}
+                    </div>
+                ` : ''}
+                ${finding.references?.length ? `
+                    <div class="mt-3 text-xs text-gray-300">
+                        <div class="text-cyan-300 font-semibold mb-1">References</div>
+                        <ul class="space-y-1">
+                            ${finding.references.map(ref => `<li><a href="${escapeHtml(ref)}" target="_blank" class="text-blue-400 hover:underline break-all">${escapeHtml(ref)}</a></li>`).join('')}
+                        </ul>
+                    </div>
+                ` : ''}
+                ${finding.tags?.length ? `
+                    <div class="mt-3 text-xs text-gray-400">Tags: ${finding.tags.map(tag => `<span class="px-2 py-0.5 bg-slate-700 rounded">${escapeHtml(tag)}</span>`).join(' ')}</div>
+                ` : ''}
+                ${detailsJson ? `
+                    <div class="mt-3">
+                        <div class="text-xs text-cyan-300 font-semibold">Details</div>
+                        <pre class="mt-1 text-xs text-gray-300 bg-slate-900/80 rounded p-3 overflow-x-auto whitespace-pre-wrap">${escapeHtml(detailsJson)}</pre>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }).join('') : '<p class="text-gray-400 text-sm">No findings for this scan yet.</p>';
+
+    container.innerHTML = `
+        <div class="mb-4 p-3 rounded-lg bg-slate-800/70 border border-slate-700">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <div class="text-sm font-semibold text-white">${escapeHtml(formatScanType(scan.scan_type))} scan on <span class="font-mono">${escapeHtml(scan.target || 'Unknown')}</span></div>
+                    <div class="text-xs text-gray-400 mt-1">Scan ID: ${escapeHtml(scan.scan_id || 'N/A')}</div>
+                </div>
+                <div class="text-xs text-gray-300">
+                    ${performedAt ? `Performed: ${escapeHtml(formatScanTimestamp(performedAt))}` : 'Performed: N/A'}
+                </div>
+            </div>
+            <div class="mt-2 flex flex-wrap gap-2 text-xs">
+                ${['critical', 'high', 'medium', 'low', 'info'].map(severity => `
+                    <span class="px-2 py-0.5 rounded ${severityBadgeClasses[severity]}">
+                        ${severity.toUpperCase()}: ${counts[severity] || 0}
+                    </span>
+                `).join('')}
+                <span class="px-2 py-0.5 rounded bg-slate-700 text-gray-200">Findings: ${findings.length}</span>
+                <span class="px-2 py-0.5 rounded bg-slate-700 text-gray-200">Duration: ${durationSeconds ? formatDuration(durationSeconds) : 'N/A'}</span>
+                <span class="px-2 py-0.5 rounded bg-slate-700 text-gray-200">Status: ${escapeHtml(scan.status || 'unknown')}</span>
+            </div>
+        </div>
+        <div class="space-y-3">
+            ${findingsHtml}
+        </div>
+    `;
 }
 
 async function deleteAdvScan(scanId) {
@@ -12559,6 +12785,11 @@ let advVulnCurrentScannerFilter = 'all';
 let advVulnDedupeEnabled = false;
 let advVulnCurrentSort = { column: 'severity', ascending: false };
 let advVulnCurrentView = 'table';
+let advVulnShowAllScans = false;
+let advVulnSelectedScanId = null;
+let advVulnHighlightedFindingId = null;
+let advVulnScansCache = [];
+let advVulnScanFindingsMap = new Map();
 
 async function loadAdvVulnFindings() {
     try {
@@ -12576,7 +12807,7 @@ async function loadAdvVulnFindings() {
         updateScannerFilterOptions();
 
         applyFindingsFilterAndSort();
-        updateAdvVulnRecentFindings(data.findings?.slice(0, 10));
+        renderAdvVulnScanDetails();
 
     } catch (error) {
         console.error('Error loading vuln findings:', error);
@@ -13084,147 +13315,12 @@ function showFindingDetail(index) {
     // Use filtered array for detail view to match displayed order
     const finding = advVulnFindingsFiltered[index] || advVulnFindingsCache[index];
     if (!finding) return;
-
-    // Store for copy function
-    currentDisplayedFinding = finding;
-
-    const modal = document.getElementById('finding-detail-modal');
-    const titleEl = document.getElementById('finding-modal-title');
-    const contentEl = document.getElementById('finding-modal-content');
-
-    if (!modal || !contentEl) return;
-
-    titleEl.textContent = finding.title;
-
-    const severityColors = {
-        'critical': 'bg-red-600',
-        'high': 'bg-orange-500',
-        'medium': 'bg-yellow-500',
-        'low': 'bg-blue-500',
-        'info': 'bg-gray-500'
-    };
-
-    // Format evidence (URLs from spider, etc.)
-    let evidenceHtml = '';
-    if (finding.evidence) {
-        const lines = finding.evidence.split('\n').filter(l => l.trim());
-        if (lines.length > 0) {
-            evidenceHtml = `
-                <div class="mt-4">
-                    <h4 class="font-semibold text-cyan-400 mb-2">Evidence / Discovered URLs</h4>
-                    <div class="bg-slate-800 rounded-lg p-3 max-h-60 overflow-y-auto scrollbar-thin">
-                        <ul class="space-y-1 text-sm font-mono">
-                            ${lines.map(url => `<li class="text-green-400 break-all">${escapeHtml(url)}</li>`).join('')}
-                        </ul>
-                    </div>
-                </div>
-            `;
-        }
-    }
-
-    // Format references
-    let refsHtml = '';
-    if (finding.references?.length) {
-        refsHtml = `
-            <div class="mt-4">
-                <h4 class="font-semibold text-cyan-400 mb-2">References</h4>
-                <ul class="space-y-1 text-sm">
-                    ${finding.references.map(ref => `<li><a href="${escapeHtml(ref)}" target="_blank" class="text-blue-400 hover:underline break-all">${escapeHtml(ref)}</a></li>`).join('')}
-                </ul>
-            </div>
-        `;
-    }
-
-    contentEl.innerHTML = `
-        <div class="space-y-3">
-            <div class="flex items-center gap-3">
-                <span class="px-3 py-1 ${severityColors[finding.severity] || 'bg-gray-500'} text-white text-sm rounded uppercase font-semibold">
-                    ${escapeHtml(finding.severity)}
-                </span>
-                <span class="text-gray-400">|</span>
-                <span class="text-gray-300">${escapeHtml(finding.scanner)}</span>
-            </div>
-
-            <div class="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                    <span class="text-gray-400">Host:</span>
-                    <span class="font-mono ml-2">${escapeHtml(finding.host)}${finding.port ? ':' + finding.port : ''}</span>
-                </div>
-                ${finding.matched_at ? `
-                <div>
-                    <span class="text-gray-400">URL:</span>
-                    <span class="font-mono ml-2 break-all">${escapeHtml(finding.matched_at)}</span>
-                </div>
-                ` : ''}
-            </div>
-
-            ${(() => {
-                const uniqueCves = [...new Set((finding.cve_ids || []).filter(cve => cve && cve.startsWith('CVE-')))];
-                return uniqueCves.length ? `
-                    <div class="flex items-center flex-wrap gap-2">
-                        <span class="text-gray-400">CVEs (${uniqueCves.length}):</span>
-                        ${uniqueCves.map(cve => `<a href="https://nvd.nist.gov/vuln/detail/${cve}" target="_blank" class="text-cyan-400 hover:underline">${cve}</a>`).join('')}
-                        <button onclick="copyToClipboard('${uniqueCves.join(', ')}')" class="ml-2 px-2 py-0.5 bg-slate-600 hover:bg-slate-500 text-xs rounded transition-colors" title="Copy CVEs">
-                            Copy
-                        </button>
-                    </div>
-                ` : '';
-            })()}
-
-            ${finding.cwe_ids?.length ? `
-            <div>
-                <span class="text-gray-400">CWEs:</span>
-                ${finding.cwe_ids.map(cwe => `<span class="text-orange-400 ml-2">${escapeHtml(cwe)}</span>`).join('')}
-            </div>
-            ` : ''}
-
-            ${finding.cvss_score ? `
-            <div>
-                <span class="text-gray-400">CVSS Score:</span>
-                <span class="text-yellow-400 ml-2 font-semibold">${finding.cvss_score}</span>
-            </div>
-            ` : ''}
-
-            <div class="mt-4">
-                <h4 class="font-semibold text-cyan-400 mb-2">Description</h4>
-                <p class="text-gray-300 text-sm">${escapeHtml(finding.description || 'No description available')}</p>
-            </div>
-
-            ${evidenceHtml}
-
-            ${finding.remediation ? `
-            <div class="mt-4">
-                <h4 class="font-semibold text-cyan-400 mb-2">Remediation</h4>
-                <p class="text-gray-300 text-sm">${escapeHtml(finding.remediation)}</p>
-            </div>
-            ` : ''}
-
-            ${refsHtml}
-
-            ${finding.tags?.length ? `
-            <div class="mt-4">
-                <h4 class="font-semibold text-cyan-400 mb-2">Tags</h4>
-                <div class="flex flex-wrap gap-2">
-                    ${finding.tags.map(tag => `<span class="px-2 py-1 bg-slate-600 text-xs rounded">${escapeHtml(tag)}</span>`).join('')}
-                </div>
-            </div>
-            ` : ''}
-
-            <div class="mt-4 text-xs text-gray-500">
-                Finding ID: ${escapeHtml(finding.finding_id)} | Timestamp: ${finding.timestamp || 'N/A'}
-            </div>
-        </div>
-    `;
-
-    modal.classList.remove('hidden');
-    modal.classList.add('flex');
-}
-
-function closeFindingDetailModal() {
-    const modal = document.getElementById('finding-detail-modal');
-    if (modal) {
-        modal.classList.add('hidden');
-        modal.classList.remove('flex');
+    const scanId = getFindingScanId(finding, advVulnScansCache.map(scan => scan.scan_id));
+    if (scanId) {
+        selectAdvVulnScan(scanId, { highlightFindingId: finding.finding_id });
+    } else {
+        advVulnHighlightedFindingId = finding.finding_id;
+        renderAdvVulnScanDetails();
     }
 }
 
@@ -13255,42 +13351,6 @@ async function copyToClipboard(text) {
         document.body.removeChild(textarea);
         showNotification('Copied to clipboard', 'success');
     }
-}
-
-// Store current finding for copy
-let currentDisplayedFinding = null;
-
-function copyCurrentFinding() {
-    if (!currentDisplayedFinding) {
-        showNotification('No finding to copy', 'warning');
-        return;
-    }
-
-    const f = currentDisplayedFinding;
-    const uniqueCves = [...new Set((f.cve_ids || []).filter(cve => cve && cve.startsWith('CVE-')))];
-
-    const text = `VULNERABILITY FINDING
-=====================
-Title: ${f.title}
-Severity: ${f.severity?.toUpperCase() || 'UNKNOWN'}
-Host: ${f.host}${f.port ? ':' + f.port : ''}
-Scanner: ${f.scanner}
-${uniqueCves.length ? 'CVEs: ' + uniqueCves.join(', ') : ''}
-${f.cvss_score ? 'CVSS: ' + f.cvss_score : ''}
-
-DESCRIPTION
------------
-${f.description || 'No description available'}
-
-${f.remediation ? 'REMEDIATION\n-----------\n' + f.remediation : ''}
-
-${f.evidence ? 'EVIDENCE\n--------\n' + f.evidence : ''}
-
-Finding ID: ${f.finding_id}
-Timestamp: ${f.timestamp || 'N/A'}
-`;
-
-    copyToClipboard(text);
 }
 
 async function startAdvancedScan() {
@@ -14172,6 +14232,8 @@ window.closeTrafficPortModal = closeTrafficPortModal;
 window.loadAdvancedVulnData = loadAdvancedVulnData;
 window.startAdvancedScan = startAdvancedScan;
 window.refreshAdvVulnData = refreshAdvVulnData;
+window.toggleAdvVulnScansExpanded = toggleAdvVulnScansExpanded;
+window.selectAdvVulnScan = selectAdvVulnScan;
 window.cancelAdvScan = cancelAdvScan;
 window.startZapDaemon = startZapDaemon;
 window.stopZapDaemon = stopZapDaemon;
@@ -14191,4 +14253,3 @@ window.clearCredentialForm = clearCredentialForm;
 window.loadSavedCredentialsList = loadSavedCredentialsList;
 window.editTargetCredential = editTargetCredential;
 window.deleteTargetCredential = deleteTargetCredential;
-
