@@ -2733,20 +2733,7 @@
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                        <!-- ZAP Daemon Control -->
-                        <div class="bg-slate-700 bg-opacity-50 rounded-lg p-2 sm:p-3">
-                            <div class="text-xs sm:text-sm text-gray-400 mb-2">Daemon Control</div>
-                            <div class="flex gap-2">
-                                <button onclick="startZapDaemon()" class="flex-1 px-2 sm:px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-xs sm:text-sm rounded-lg transition-colors" id="zap-start-btn">
-                                    Start
-                                </button>
-                                <button onclick="stopZapDaemon()" class="flex-1 px-2 sm:px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-xs sm:text-sm rounded-lg transition-colors" id="zap-stop-btn">
-                                    Stop
-                                </button>
-                            </div>
-                        </div>
-
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                         <!-- ZAP Stats -->
                         <div class="bg-slate-700 bg-opacity-50 rounded-lg p-2 sm:p-3">
                             <div class="text-xs sm:text-sm text-gray-400 mb-2">Session Stats</div>
@@ -2803,49 +2790,106 @@
                         </div>
                     </div>
 
-                    <!-- ZAP Authentication Status Banner -->
-                    <div id="zap-auth-status-banner" class="hidden mt-4 p-3 rounded-lg border">
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-2">
-                                <span id="zap-auth-status-icon">🔐</span>
-                                <span id="zap-auth-status-text" class="text-sm">Checking authentication status...</span>
-                            </div>
-                            <button id="zap-clear-auth-btn" onclick="zapClearAuthentication()"
-                                    class="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors hidden">
-                                Clear Auth
-                            </button>
-                        </div>
-                    </div>
+                    <!-- New Scan -->
+                    <div class="mt-4 pt-4 border-t border-slate-600">
+                        <h4 class="text-sm font-medium text-gray-300 mb-3 flex items-center">
+                            <svg class="w-4 h-4 mr-2 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                            New Scan
+                        </h4>
 
-                    <!-- ZAP Authentication Config (Collapsible) -->
-                    <details class="mt-4">
-                        <summary class="cursor-pointer text-xs sm:text-sm text-gray-400 hover:text-gray-300">
-                            🔐 Configure Authentication (for authenticated scanning)
-                        </summary>
-                        <div class="mt-3 p-2 sm:p-3 bg-slate-700 bg-opacity-50 rounded-lg">
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                                <div>
-                                    <label class="block text-xs text-gray-400 mb-1">Authentication Type</label>
-                                    <select id="zap-auth-type" onchange="toggleScanAuthFields()" class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
-                                        <option value="">None (Unauthenticated)</option>
-                                        <option value="form">Form-based Login</option>
-                                        <option value="http_basic">HTTP Basic Auth</option>
-                                        <option value="bearer_token">Bearer Token (API)</option>
-                                        <option value="api_key">API Key (Header)</option>
-                                        <option value="cookie">Cookie Auth</option>
-                                    </select>
+                        <!-- Target URL (full width) -->
+                        <div class="mb-3">
+                            <label class="block text-xs sm:text-sm text-gray-400 mb-1">Target (IP/URL)</label>
+                            <div class="relative">
+                                <input type="text" id="adv-vuln-target" placeholder="192.168.1.1 or https://example.com"
+                                       oninput="checkTargetCredentials(this.value)"
+                                       onchange="checkTargetCredentials(this.value)"
+                                       class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-Ragnar-500 pr-24 text-sm">
+                                <!-- Credential status badge -->
+                                <div id="target-cred-badge" class="absolute right-2 top-1/2 -translate-y-1/2 hidden">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-600 text-white cursor-pointer"
+                                          onclick="showCredentialsModal()" title="Click to manage credentials">
+                                        <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
+                                        </svg>
+                                        Auth
+                                    </span>
                                 </div>
-                                <div id="zap-login-url-container">
+                            </div>
+                            <!-- Credential info line -->
+                            <div id="target-cred-info" class="hidden mt-1 text-xs text-green-400">
+                                <span id="target-cred-text"></span>
+                                <button onclick="showCredentialsModal()" class="ml-2 text-blue-400 hover:text-blue-300 underline">Manage</button>
+                            </div>
+                        </div>
+
+                        <!-- Scanner + Auth Type row -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-3">
+                            <div>
+                                <label class="block text-xs sm:text-sm text-gray-400 mb-1">Scanner</label>
+                                <select id="adv-vuln-scanner" class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-Ragnar-500 text-sm">
+                                    <optgroup label="Traditional Scanners">
+                                        <option value="nuclei">Nuclei (Templates)</option>
+                                        <option value="nikto">Nikto (Web Server)</option>
+                                        <option value="sqlmap">SQLMap (SQL Injection)</option>
+                                        <option value="nmap_vuln">Nmap Vuln Scripts</option>
+                                        <option value="whatweb">WhatWeb (Fingerprint)</option>
+                                    </optgroup>
+                                    <optgroup label="OWASP ZAP">
+                                        <option value="zap_spider">ZAP Spider (Discovery)</option>
+                                        <option value="zap_active">ZAP Active Scan</option>
+                                        <option value="zap_full">ZAP Full Scan (Recommended)</option>
+                                    </optgroup>
+                                    <optgroup label="Combined">
+                                        <option value="full">Full Scan (All Tools)</option>
+                                    </optgroup>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs sm:text-sm text-gray-400 mb-1">Authentication Type</label>
+                                <select id="zap-auth-type" onchange="toggleScanAuthFields()" class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-Ragnar-500 text-sm">
+                                    <option value="">None (Unauthenticated)</option>
+                                    <option value="form">Form-based Login</option>
+                                    <option value="http_basic">HTTP Basic Auth</option>
+                                    <option value="oauth2_bba">OAuth2 / Microsoft Login (BBA)</option>
+                                    <option value="script_auth">Script-Based Auth (Advanced)</option>
+                                    <option value="bearer_token">Bearer Token (API)</option>
+                                    <option value="api_key">API Key (Header)</option>
+                                    <option value="cookie">Cookie Auth</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- ZAP Authentication Status Banner -->
+                        <div id="zap-auth-status-banner" class="hidden mb-3 p-3 rounded-lg border">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <span id="zap-auth-status-icon">🔐</span>
+                                    <span id="zap-auth-status-text" class="text-sm">Checking authentication status...</span>
+                                </div>
+                                <button id="zap-clear-auth-btn" onclick="zapClearAuthentication()"
+                                        class="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors hidden">
+                                    Clear Auth
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Dynamic auth fields (shown based on auth type selection) -->
+                        <div id="zap-auth-fields-wrapper" class="hidden mb-3 p-2 sm:p-3 bg-slate-700 bg-opacity-50 rounded-lg">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                                <div id="zap-login-url-container" class="hidden">
                                     <label class="block text-xs text-gray-400 mb-1">Login URL</label>
                                     <input type="text" id="zap-login-url" placeholder="https://target.com/login"
                                            class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
                                 </div>
-                                <div id="zap-username-container">
+                                <div id="zap-username-container" class="hidden">
                                     <label class="block text-xs text-gray-400 mb-1">Username</label>
                                     <input type="text" id="zap-username" placeholder="admin"
                                            class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
                                 </div>
-                                <div id="zap-password-container">
+                                <div id="zap-password-container" class="hidden">
                                     <label class="block text-xs text-gray-400 mb-1">Password</label>
                                     <input type="password" id="zap-password" placeholder="••••••••"
                                            class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
@@ -2871,81 +2915,59 @@
                                 <!-- Cookie Field -->
                                 <div id="zap-cookie-container" class="hidden sm:col-span-2">
                                     <label class="block text-xs text-gray-400 mb-1">Cookie String</label>
-                                    <input type="text" id="zap-cookie-value" placeholder="session=abc123; token=xyz789"
+                                    <input type="text" id="zap-cookie-value" placeholder="AppServiceAuthSession=eyJ...; .AspNetCore.Cookies=CfD..."
                                            class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm font-mono">
-                                    <p class="text-xs text-gray-500 mt-1">Full cookie string (name=value; name2=value2)</p>
+                                    <p class="text-xs text-gray-500 mt-1">Full cookie string from browser (name=value; name2=value2)</p>
+                                </div>
+                                <!-- OAuth2/BBA Fields -->
+                                <div id="zap-oauth2-bba-container" class="hidden sm:col-span-2">
+                                    <div class="p-2 bg-blue-900 bg-opacity-30 border border-blue-700 rounded mb-2">
+                                        <p class="text-xs text-blue-300"><strong>OAuth2 / Microsoft Login (BBA)</strong></p>
+                                        <p class="text-xs text-blue-400 mt-1">Browser-Based Authentication drives a real browser to handle complex OAuth flows including Microsoft Online login sequences with multi-step screens (username, password, consent, "Stay signed in?").</p>
+                                    </div>
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                                        <div>
+                                            <label class="block text-xs text-gray-400 mb-1">Wait-for URL (Optional)</label>
+                                            <input type="text" id="zap-wait-for-url" placeholder="https://myapp.com/dashboard"
+                                                   class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                                            <p class="text-xs text-gray-500 mt-1">URL pattern indicating successful login</p>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-400 mb-1">Login Page Wait (seconds)</label>
+                                            <input type="number" id="zap-login-page-wait" value="5" min="1" max="60"
+                                                   class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                                            <p class="text-xs text-gray-500 mt-1">Time to wait for login page to load</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Script-Based Auth Fields -->
+                                <div id="zap-script-auth-container" class="hidden sm:col-span-2">
+                                    <div class="p-2 bg-purple-900 bg-opacity-30 border border-purple-700 rounded mb-2">
+                                        <p class="text-xs text-purple-300"><strong>Script-Based Authentication</strong></p>
+                                        <p class="text-xs text-purple-400 mt-1">For complex authentication flows that require custom scripts. If no script name is provided, falls back to browser-based authentication with extended wait times.</p>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-400 mb-1">Script Name (Optional)</label>
+                                        <input type="text" id="zap-script-name" placeholder="custom-oauth-script"
+                                               class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
+                                        <p class="text-xs text-gray-500 mt-1">Name of ZAP authentication script (leave empty for auto BBA)</p>
+                                    </div>
                                 </div>
                             </div>
-                            <div id="zap-login-data-container" class="mt-3">
+                            <div id="zap-login-data-container" class="hidden mt-3">
                                 <label class="block text-xs text-gray-400 mb-1">Login Request Data (for form auth)</label>
                                 <input type="text" id="zap-login-data" placeholder="username={%username%}&password={%password%}"
                                        class="w-full px-2 py-1 bg-slate-600 border border-slate-500 rounded text-sm">
                             </div>
-                            <div class="mt-3 flex justify-end">
-                                <button onclick="zapSetAuthentication()" class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg transition-colors">
-                                    Configure Authentication
-                                </button>
-                            </div>
                         </div>
-                    </details>
-                </div>
 
-                <!-- New Scan Form -->
-                <div class="glass-card p-3 sm:p-4 mb-6">
-                    <h3 class="font-semibold mb-4 text-sm sm:text-base">Start New Scan</h3>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                        <div class="sm:col-span-2">
-                            <label class="block text-xs sm:text-sm text-gray-400 mb-1">Target (IP/URL)</label>
-                            <div class="relative">
-                                <input type="text" id="adv-vuln-target" placeholder="192.168.1.1 or https://example.com"
-                                       oninput="checkTargetCredentials(this.value)"
-                                       onchange="checkTargetCredentials(this.value)"
-                                       class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-Ragnar-500 pr-24 text-sm">
-                                <!-- Credential status badge -->
-                                <div id="target-cred-badge" class="absolute right-2 top-1/2 -translate-y-1/2 hidden">
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-600 text-white cursor-pointer"
-                                          onclick="showCredentialsModal()" title="Click to manage credentials">
-                                        <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
-                                        </svg>
-                                        Auth
-                                    </span>
-                                </div>
-                            </div>
-                            <!-- Credential info line -->
-                            <div id="target-cred-info" class="hidden mt-1 text-xs text-green-400">
-                                <span id="target-cred-text"></span>
-                                <button onclick="showCredentialsModal()" class="ml-2 text-blue-400 hover:text-blue-300 underline">Manage</button>
-                            </div>
-                        </div>
-                        <div>
-                            <label class="block text-xs sm:text-sm text-gray-400 mb-1">Scanner</label>
-                            <select id="adv-vuln-scanner" class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-Ragnar-500 text-sm">
-                                <optgroup label="Traditional Scanners">
-                                    <option value="nuclei">Nuclei (Templates)</option>
-                                    <option value="nikto">Nikto (Web Server)</option>
-                                    <option value="sqlmap">SQLMap (SQL Injection)</option>
-                                    <option value="nmap_vuln">Nmap Vuln Scripts</option>
-                                    <option value="whatweb">WhatWeb (Fingerprint)</option>
-                                </optgroup>
-                                <optgroup label="OWASP ZAP">
-                                    <option value="zap_spider">ZAP Spider (Discovery)</option>
-                                    <option value="zap_active">ZAP Active Scan</option>
-                                    <option value="zap_full">ZAP Full Scan (Recommended)</option>
-                                </optgroup>
-                                <optgroup label="Combined">
-                                    <option value="full">Full Scan (All Tools)</option>
-                                </optgroup>
-                            </select>
-                        </div>
-                        <div class="flex items-end sm:col-span-2 lg:col-span-1">
-                            <button onclick="startAdvancedScan()" class="w-full px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm sm:text-base">
-                                <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                                </svg>
-                                Start Scan
-                            </button>
-                        </div>
+                        <!-- Start Scan button -->
+                        <button onclick="startAdvancedScan()" class="w-full px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm sm:text-base font-medium">
+                            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                            Start Scan
+                        </button>
                     </div>
                 </div>
 
@@ -3180,6 +3202,8 @@
                                             class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
                                         <option value="form">Form-based Login</option>
                                         <option value="http_basic">HTTP Basic Auth</option>
+                                        <option value="oauth2_bba">OAuth2 / Microsoft Login (BBA)</option>
+                                        <option value="script_auth">Script-Based Auth (Advanced)</option>
                                         <option value="bearer_token">Bearer Token (API)</option>
                                         <option value="api_key">API Key (Header)</option>
                                         <option value="cookie">Cookie Auth</option>
@@ -3232,7 +3256,7 @@
                                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500 font-mono text-sm">
                                     <p class="text-xs text-gray-500 mt-1">Full cookie string (name=value; name2=value2)</p>
                                 </div>
-                                <div id="cred-login-data-container" class="md:col-span-2">
+                                <div id="cred-login-data-container" class="hidden md:col-span-2">
                                     <label class="block text-sm text-gray-400 mb-1">Login Request Data (optional)</label>
                                     <input type="text" id="cred-login-data" placeholder="username={%username%}&password={%password%}"
                                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-green-500">
