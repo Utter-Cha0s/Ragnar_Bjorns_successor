@@ -11255,28 +11255,37 @@ def download_scan_report(scan_id):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         severity_colors = {
-            'critical': '#dc2626',
+            'critical': '#ef4444',
             'high': '#f97316',
-            'medium': '#eab308',
+            'medium': '#facc15',
             'low': '#3b82f6',
-            'info': '#6b7280'
+            'info': '#9ca3af'
         }
 
         findings_html = ''
+        severity_badge_bg = {
+            'critical': '#dc2626',
+            'high': '#ea580c',
+            'medium': '#ca8a04',
+            'low': '#2563eb',
+            'info': '#4b5563'
+        }
         for f in findings:
             sev = f.get('severity', 'info')
             color = severity_colors.get(sev, '#6b7280')
+            badge_bg = severity_badge_bg.get(sev, '#4b5563')
+            badge_text = '#000000' if sev == 'medium' else '#ffffff'
             findings_html += f'''
-            <div style="border-left: 4px solid {color}; padding: 15px; margin: 10px 0; background: #1e293b; border-radius: 4px;">
+            <div style="border-left: 4px solid {color}; padding: 15px; margin: 10px 0; background: #1e293b; border-radius: 4px; border: 1px solid #334155; border-left: 4px solid {color};">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="background: {color}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; text-transform: uppercase;">{sev}</span>
-                    <span style="color: #94a3b8; font-size: 12px;">{f.get('scanner', 'unknown')}</span>
+                    <span style="background: {badge_bg}; color: {badge_text}; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase;">{sev}</span>
+                    <span style="color: #cbd5e1; font-size: 12px;">{f.get('scanner', 'unknown')}</span>
                 </div>
-                <h3 style="color: #f1f5f9; margin: 10px 0 5px 0;">{f.get('title', 'Unknown')}</h3>
-                <p style="color: #94a3b8; font-size: 14px;">Host: {f.get('host', 'N/A')}{':' + str(f.get('port')) if f.get('port') else ''}</p>
-                <p style="color: #cbd5e1; font-size: 14px; margin-top: 10px;">{f.get('description', '')}</p>
-                {f'<div style="margin-top: 10px;"><strong style="color: #22d3ee;">Evidence:</strong><pre style="background: #0f172a; padding: 10px; border-radius: 4px; overflow-x: auto; color: #4ade80; font-size: 12px;">{f.get("evidence", "")}</pre></div>' if f.get('evidence') else ''}
-                {f'<p style="color: #fbbf24; margin-top: 10px;"><strong>Remediation:</strong> {f.get("remediation", "")}</p>' if f.get('remediation') else ''}
+                <h3 style="color: #ffffff; margin: 10px 0 5px 0; font-size: 16px;">{f.get('title', 'Unknown')}</h3>
+                <p style="color: #e2e8f0; font-size: 14px;">Host: <span style="color: #ffffff; font-family: monospace;">{f.get('host', 'N/A')}{':' + str(f.get('port')) if f.get('port') else ''}</span></p>
+                <p style="color: #e2e8f0; font-size: 14px; margin-top: 10px; line-height: 1.6;">{f.get('description', '')}</p>
+                {f'<div style="margin-top: 10px;"><strong style="color: #22d3ee;">Evidence:</strong><pre style="background: #0f172a; padding: 10px; border-radius: 4px; overflow-x: auto; color: #4ade80; font-size: 12px; border: 1px solid #1e293b;">{f.get("evidence", "")}</pre></div>' if f.get('evidence') else ''}
+                {f'<p style="color: #fde68a; margin-top: 10px; line-height: 1.6;"><strong>Remediation:</strong> {f.get("remediation", "")}</p>' if f.get('remediation') else ''}
             </div>
             '''
 
@@ -11295,27 +11304,28 @@ def download_scan_report(scan_id):
     <meta charset="UTF-8">
     <title>Ragnar Security Scan Report - {scan_id}</title>
     <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f1f5f9; margin: 0; padding: 20px; }}
         .container {{ max-width: 1200px; margin: 0 auto; }}
-        .header {{ background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 30px; border-radius: 8px; margin-bottom: 20px; }}
-        .header h1 {{ margin: 0; color: #22d3ee; }}
-        .header p {{ color: #94a3b8; margin: 5px 0 0 0; }}
+        .header {{ background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 30px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #334155; }}
+        .header h1 {{ margin: 0; color: #22d3ee; font-size: 28px; }}
+        .header p {{ color: #cbd5e1; margin: 8px 0 0 0; font-size: 14px; }}
         .summary {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; margin-bottom: 20px; }}
-        .summary-card {{ background: #1e293b; padding: 20px; border-radius: 8px; text-align: center; }}
+        .summary-card {{ background: #1e293b; padding: 20px; border-radius: 8px; text-align: center; border: 1px solid #334155; }}
         .summary-card .count {{ font-size: 32px; font-weight: bold; }}
-        .summary-card .label {{ color: #94a3b8; font-size: 12px; text-transform: uppercase; }}
-        .critical .count {{ color: #dc2626; }}
-        .high .count {{ color: #f97316; }}
-        .medium .count {{ color: #eab308; }}
-        .low .count {{ color: #3b82f6; }}
-        .info .count {{ color: #6b7280; }}
-        .scan-info {{ background: #1e293b; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
-        .scan-info h2 {{ color: #22d3ee; margin-top: 0; }}
+        .summary-card .label {{ color: #cbd5e1; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }}
+        .critical .count {{ color: #f87171; }}
+        .high .count {{ color: #fb923c; }}
+        .medium .count {{ color: #facc15; }}
+        .low .count {{ color: #60a5fa; }}
+        .info .count {{ color: #9ca3af; }}
+        .scan-info {{ background: #1e293b; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #334155; }}
+        .scan-info h2 {{ color: #22d3ee; margin-top: 0; font-size: 20px; }}
         .scan-info table {{ width: 100%; border-collapse: collapse; }}
-        .scan-info td {{ padding: 8px 0; border-bottom: 1px solid #334155; }}
-        .scan-info td:first-child {{ color: #94a3b8; width: 150px; }}
-        .findings {{ background: #1e293b; padding: 20px; border-radius: 8px; }}
-        .findings h2 {{ color: #22d3ee; margin-top: 0; }}
+        .scan-info td {{ padding: 10px 12px; border-bottom: 1px solid #334155; font-size: 14px; }}
+        .scan-info td:first-child {{ color: #cbd5e1; width: 160px; font-weight: 500; }}
+        .scan-info td:last-child {{ color: #ffffff; word-break: break-all; }}
+        .findings {{ background: #1e293b; padding: 20px; border-radius: 8px; border: 1px solid #334155; }}
+        .findings h2 {{ color: #22d3ee; margin-top: 0; font-size: 20px; }}
         pre {{ white-space: pre-wrap; word-wrap: break-word; }}
     </style>
 </head>
