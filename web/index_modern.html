@@ -2775,21 +2775,6 @@
                         </div>
                     </div>
 
-                    <!-- Second row for OpenAPI -->
-                    <div class="grid grid-cols-1 gap-3 sm:gap-4 mt-4">
-                        <!-- OpenAPI Import -->
-                        <div class="bg-slate-700 bg-opacity-50 rounded-lg p-2 sm:p-3">
-                            <div class="text-xs sm:text-sm text-gray-400 mb-2">Import OpenAPI</div>
-                            <div class="flex gap-2">
-                                <input type="text" id="zap-openapi-url" placeholder="Swagger/OpenAPI URL"
-                                       class="flex-1 px-2 py-1 bg-slate-600 border border-slate-500 rounded text-xs sm:text-sm">
-                                <button onclick="zapImportOpenAPI()" class="px-2 sm:px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm rounded transition-colors">
-                                    Import
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- New Scan -->
                     <div class="mt-4 pt-4 border-t border-slate-600">
                         <h4 class="text-sm font-medium text-gray-300 mb-3 flex items-center">
@@ -2822,6 +2807,68 @@
                             <div id="target-cred-info" class="hidden mt-1 text-xs text-green-400">
                                 <span id="target-cred-text"></span>
                                 <button onclick="showCredentialsModal()" class="ml-2 text-blue-400 hover:text-blue-300 underline">Manage</button>
+                            </div>
+                        </div>
+
+                        <!-- Scan Mode Toggle -->
+                        <div class="mb-3">
+                            <label class="block text-xs sm:text-sm text-gray-400 mb-1">Scan Mode</label>
+                            <div class="flex gap-1 bg-slate-700 rounded-lg p-1 w-fit">
+                                <button id="scan-mode-web" onclick="toggleScanMode('web')"
+                                        class="px-3 py-1.5 text-xs sm:text-sm rounded-md bg-blue-600 text-white font-medium transition-colors">
+                                    Web Scan
+                                </button>
+                                <button id="scan-mode-api" onclick="toggleScanMode('api')"
+                                        class="px-3 py-1.5 text-xs sm:text-sm rounded-md text-gray-400 hover:text-white transition-colors">
+                                    API Scan
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- API Scan Fields (hidden by default) -->
+                        <div id="api-scan-fields" class="hidden mb-3 p-3 bg-slate-700 bg-opacity-50 rounded-lg space-y-3">
+                            <!-- OpenAPI Import -->
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">OpenAPI / Swagger Spec (Optional)</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="zap-openapi-url" placeholder="https://api.example.com/swagger.json"
+                                           class="flex-1 px-2 py-1.5 bg-slate-600 border border-slate-500 rounded text-sm">
+                                    <button onclick="zapImportOpenAPI()" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm rounded transition-colors">
+                                        Import
+                                    </button>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">Import API spec to discover all endpoints before scanning</p>
+                            </div>
+
+                            <!-- HTTP Method -->
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">HTTP Method</label>
+                                <select id="api-http-method" onchange="toggleRequestBodyField()"
+                                        class="w-full px-3 py-2 bg-slate-600 border border-slate-500 rounded-lg text-sm">
+                                    <option value="GET">GET</option>
+                                    <option value="POST">POST</option>
+                                    <option value="PUT">PUT</option>
+                                    <option value="PATCH">PATCH</option>
+                                    <option value="DELETE">DELETE</option>
+                                    <option value="HEAD">HEAD</option>
+                                    <option value="OPTIONS">OPTIONS</option>
+                                </select>
+                            </div>
+
+                            <!-- Custom Headers -->
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">Custom Headers</label>
+                                <textarea id="api-custom-headers" rows="3" placeholder="Content-Type: application/json&#10;X-Custom-Header: value"
+                                          class="w-full px-2 py-1.5 bg-slate-600 border border-slate-500 rounded text-sm font-mono resize-y"></textarea>
+                                <p class="text-xs text-gray-500 mt-1">One header per line in Key: Value format</p>
+                            </div>
+
+                            <!-- Request Body (shown for POST/PUT/PATCH/DELETE) -->
+                            <div id="api-request-body-container" class="hidden">
+                                <label class="block text-xs text-gray-400 mb-1">Request Body</label>
+                                <textarea id="api-request-body" rows="4" placeholder='{"key": "value"}'
+                                          class="w-full px-2 py-1.5 bg-slate-600 border border-slate-500 rounded text-sm font-mono resize-y"></textarea>
+                                <p class="text-xs text-gray-500 mt-1">JSON, form data, or raw body content</p>
                             </div>
                         </div>
 
@@ -2968,41 +3015,6 @@
                             </svg>
                             Start Scan
                         </button>
-                    </div>
-                </div>
-
-                <!-- Vulnerability Summary with Risk Score -->
-                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2 sm:gap-3 mb-6">
-                    <!-- Risk Score Card -->
-                    <div class="glass-card p-2 sm:p-3 text-center col-span-2 sm:col-span-1 lg:col-span-2 bg-gradient-to-br from-slate-800 to-slate-900">
-                        <div class="text-2xl sm:text-3xl font-bold" id="vuln-risk-score">0</div>
-                        <div class="text-xs text-gray-400">Risk Score</div>
-                        <div class="mt-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                            <div id="vuln-risk-bar" class="h-full bg-green-500 transition-all duration-500" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    <!-- Severity Counts -->
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-red-600">
-                        <div class="text-lg sm:text-2xl font-bold text-red-400" id="vuln-critical-count">0</div>
-                        <div class="text-xs text-gray-400 hidden sm:block">Critical</div>
-                        <div class="text-xs text-gray-400 sm:hidden">Crit</div>
-                    </div>
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-orange-500">
-                        <div class="text-lg sm:text-2xl font-bold text-orange-400" id="vuln-high-count">0</div>
-                        <div class="text-xs text-gray-400">High</div>
-                    </div>
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-yellow-500">
-                        <div class="text-lg sm:text-2xl font-bold text-yellow-400" id="vuln-medium-count">0</div>
-                        <div class="text-xs text-gray-400 hidden sm:block">Medium</div>
-                        <div class="text-xs text-gray-400 sm:hidden">Med</div>
-                    </div>
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-blue-500">
-                        <div class="text-lg sm:text-2xl font-bold text-blue-400" id="vuln-low-count">0</div>
-                        <div class="text-xs text-gray-400">Low</div>
-                    </div>
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-gray-500">
-                        <div class="text-lg sm:text-2xl font-bold text-gray-400" id="vuln-info-count">0</div>
-                        <div class="text-xs text-gray-400">Info</div>
                     </div>
                 </div>
 

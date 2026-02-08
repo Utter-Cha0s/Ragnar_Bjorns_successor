@@ -11137,6 +11137,13 @@ def start_advanced_vuln_scan():
             
             logger.info(f"Using inline {auth_type} auth for scan target: {target}")
 
+        # Log API scan mode if used
+        if options.get('scan_mode') == 'api':
+            logger.info(f"API scan mode: method={options.get('http_method', 'GET')}, "
+                       f"has_headers={bool(options.get('custom_headers'))}, "
+                       f"has_body={bool(options.get('request_body'))}, "
+                       f"openapi_url={options.get('openapi_url', 'none')}")
+
         # Map string to enum
         from advanced_vuln_scanner import ScanType
         try:

@@ -12280,6 +12280,8 @@ function updateActiveScans(scans, options = {}) {
         const mapEntry = scanFindingsMap.get(scanId) || { findings: [], counts: {} };
         const counts = mapEntry.counts || {};
         const findingsCount = mapEntry.findings.length || scan.findings_count || 0;
+        const riskScore = (counts.critical || 0) * 10 + (counts.high || 0) * 7 + (counts.medium || 0) * 4 + (counts.low || 0) * 1;
+        const riskColor = riskScore >= 50 ? 'text-red-400' : riskScore >= 30 ? 'text-orange-400' : riskScore >= 15 ? 'text-yellow-400' : 'text-green-400';
         const durationSeconds = getScanDurationSeconds(scan);
         const status = scan.status || 'unknown';
         const progress = scan.progress_percent || scan.progress || 0;
@@ -12310,12 +12312,13 @@ function updateActiveScans(scans, options = {}) {
                         <div>Method: <span class="text-gray-100">${escapeHtml(formatScanType(scan.scan_type))}</span></div>
                     </div>
 
-                    <div class="mt-3 flex flex-wrap gap-2 text-[11px]">
+                    <div class="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
                         ${['critical', 'high', 'medium', 'low'].map(severity => `
                             <span class="px-2 py-0.5 rounded ${severityBadgeClasses[severity]}">
                                 ${severity.toUpperCase()}: ${counts[severity] || 0}
                             </span>
                         `).join('')}
+                        ${findingsCount > 0 ? `<span class="ml-auto text-xs font-semibold ${riskColor}">Risk: ${riskScore}</span>` : ''}
                     </div>
 
                     ${authType ? `
@@ -12675,39 +12678,6 @@ function updateScannerStatus(scanners) {
 function updateVulnSummary(summary) {
     if (!summary?.severity_counts) return;
 
-    const counts = summary.severity_counts;
-    updateElement('vuln-critical-count', counts.critical || 0);
-    updateElement('vuln-high-count', counts.high || 0);
-    updateElement('vuln-medium-count', counts.medium || 0);
-    updateElement('vuln-low-count', counts.low || 0);
-    updateElement('vuln-info-count', counts.info || 0);
-
-    // Calculate and update risk score (weighted by severity)
-    const riskScore = (counts.critical || 0) * 10 + (counts.high || 0) * 7 +
-                      (counts.medium || 0) * 4 + (counts.low || 0) * 1;
-    const maxRisk = 100; // Normalize to percentage for display
-    const riskPercent = Math.min(riskScore, maxRisk);
-
-    updateElement('vuln-risk-score', riskScore);
-    const riskBar = document.getElementById('vuln-risk-bar');
-    const riskScoreEl = document.getElementById('vuln-risk-score');
-    if (riskBar) {
-        riskBar.style.width = `${riskPercent}%`;
-        // Color based on risk level
-        riskBar.className = 'h-full transition-all duration-500 ' + (
-            riskScore >= 50 ? 'bg-red-500' :
-            riskScore >= 30 ? 'bg-orange-500' :
-            riskScore >= 15 ? 'bg-yellow-500' : 'bg-green-500'
-        );
-    }
-    if (riskScoreEl) {
-        riskScoreEl.className = 'text-2xl sm:text-3xl font-bold ' + (
-            riskScore >= 50 ? 'text-red-400' :
-            riskScore >= 30 ? 'text-orange-400' :
-            riskScore >= 15 ? 'text-yellow-400' : 'text-green-400'
-        );
-    }
-
     // Update total findings and scans
     updateElement('vuln-total-findings', summary.total_findings || 0);
     updateElement('vuln-total-scans', summary.total_scans || 0);
@@ -12881,6 +12851,42 @@ async function copyToClipboard(text) {
     }
 }
 
+let advVulnScanMode = 'web';
+
+function toggleScanMode(mode) {
+    advVulnScanMode = mode;
+    const webBtn = document.getElementById('scan-mode-web');
+    const apiBtn = document.getElementById('scan-mode-api');
+    const apiFields = document.getElementById('api-scan-fields');
+
+    if (mode === 'api') {
+        webBtn?.classList.remove('bg-blue-600', 'text-white', 'font-medium');
+        webBtn?.classList.add('text-gray-400');
+        apiBtn?.classList.add('bg-blue-600', 'text-white', 'font-medium');
+        apiBtn?.classList.remove('text-gray-400');
+        apiFields?.classList.remove('hidden');
+    } else {
+        apiBtn?.classList.remove('bg-blue-600', 'text-white', 'font-medium');
+        apiBtn?.classList.add('text-gray-400');
+        webBtn?.classList.add('bg-blue-600', 'text-white', 'font-medium');
+        webBtn?.classList.remove('text-gray-400');
+        apiFields?.classList.add('hidden');
+    }
+}
+
+function toggleRequestBodyField() {
+    const method = document.getElementById('api-http-method')?.value;
+    const bodyContainer = document.getElementById('api-request-body-container');
+    if (!bodyContainer) return;
+
+    const methodsWithBody = ['POST', 'PUT', 'PATCH', 'DELETE'];
+    if (methodsWithBody.includes(method)) {
+        bodyContainer.classList.remove('hidden');
+    } else {
+        bodyContainer.classList.add('hidden');
+    }
+}
+
 async function startAdvancedScan() {
     const targetInput = document.getElementById('adv-vuln-target');
     const scannerSelect = document.getElementById('adv-vuln-scanner');
@@ -12898,14 +12904,35 @@ async function startAdvancedScan() {
     // Collect auth params directly to send with the scan request
     const authType = document.getElementById('zap-auth-type')?.value;
     const options = {};
-    
+
     if (authType) {
         const authParams = getAuthParams(authType);
         if (authParams === null) return; // Validation failed
-        
+
         // Pass auth params directly in options
         options.auth_type = authType;
         options.auth_params = authParams;
+    }
+
+    // Collect API scan mode params
+    if (advVulnScanMode === 'api') {
+        options.scan_mode = 'api';
+        options.http_method = document.getElementById('api-http-method')?.value || 'GET';
+
+        const headersText = document.getElementById('api-custom-headers')?.value.trim();
+        if (headersText) {
+            options.custom_headers = headersText;
+        }
+
+        const bodyText = document.getElementById('api-request-body')?.value.trim();
+        if (bodyText) {
+            options.request_body = bodyText;
+        }
+
+        const openApiUrl = document.getElementById('zap-openapi-url')?.value.trim();
+        if (openApiUrl) {
+            options.openapi_url = openApiUrl;
+        }
     }
 
     try {
@@ -13759,6 +13786,8 @@ window.showTrafficPortDetail = showTrafficPortDetail;
 window.closeTrafficPortModal = closeTrafficPortModal;
 window.loadAdvancedVulnData = loadAdvancedVulnData;
 window.startAdvancedScan = startAdvancedScan;
+window.toggleScanMode = toggleScanMode;
+window.toggleRequestBodyField = toggleRequestBodyField;
 window.refreshAdvVulnData = refreshAdvVulnData;
 window.toggleAdvVulnScansExpanded = toggleAdvVulnScansExpanded;
 window.toggleAdvVulnScanFindings = toggleAdvVulnScanFindings;
