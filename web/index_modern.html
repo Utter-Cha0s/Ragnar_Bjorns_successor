@@ -2981,26 +2981,26 @@
                             <div id="vuln-risk-bar" class="h-full bg-green-500 transition-all duration-500" style="width: 0%"></div>
                         </div>
                     </div>
-                    <!-- Severity Counts (clickable to filter) -->
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-red-600 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('critical')">
+                    <!-- Severity Counts -->
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-red-600">
                         <div class="text-lg sm:text-2xl font-bold text-red-400" id="vuln-critical-count">0</div>
                         <div class="text-xs text-gray-400 hidden sm:block">Critical</div>
                         <div class="text-xs text-gray-400 sm:hidden">Crit</div>
                     </div>
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-orange-500 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('high')">
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-orange-500">
                         <div class="text-lg sm:text-2xl font-bold text-orange-400" id="vuln-high-count">0</div>
                         <div class="text-xs text-gray-400">High</div>
                     </div>
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-yellow-500 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('medium')">
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-yellow-500">
                         <div class="text-lg sm:text-2xl font-bold text-yellow-400" id="vuln-medium-count">0</div>
                         <div class="text-xs text-gray-400 hidden sm:block">Medium</div>
                         <div class="text-xs text-gray-400 sm:hidden">Med</div>
                     </div>
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-blue-500 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('low')">
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-blue-500">
                         <div class="text-lg sm:text-2xl font-bold text-blue-400" id="vuln-low-count">0</div>
                         <div class="text-xs text-gray-400">Low</div>
                     </div>
-                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-gray-500 cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterFindingsBySeverity('info')">
+                    <div class="glass-card p-2 sm:p-3 text-center border-l-4 border-gray-500">
                         <div class="text-lg sm:text-2xl font-bold text-gray-400" id="vuln-info-count">0</div>
                         <div class="text-xs text-gray-400">Info</div>
                     </div>
@@ -3048,107 +3048,6 @@
                     </button>
                 </div>
 
-                <!-- Scan Details -->
-                <div id="adv-vuln-scan-details" class="glass-card p-3 sm:p-4 mt-4">
-                    <h3 class="font-semibold mb-3 flex items-center text-sm sm:text-base">
-                        <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 6a9 9 0 100 18 9 9 0 000-18z"></path>
-                        </svg>
-                        Scan Findings
-                    </h3>
-                    <div id="adv-vuln-scan-details-content" class="text-sm text-gray-400">
-                        Select a scan above to view all findings and detailed information.
-                    </div>
-                </div>
-
-                <!-- Detailed Findings Table -->
-                <div class="glass-card p-3 sm:p-4 mt-6">
-                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-                        <h3 class="font-semibold text-sm sm:text-base">All Findings</h3>
-                        <div class="flex flex-wrap items-center gap-2">
-                            <!-- Severity Filter Buttons -->
-                            <div class="flex flex-wrap gap-1" id="severity-filter-buttons">
-                                <button onclick="filterFindingsBySeverity('all')" class="vuln-filter-btn active px-2 py-1 text-xs rounded bg-slate-600 hover:bg-slate-500 transition-colors" data-severity="all">All</button>
-                                <button onclick="filterFindingsBySeverity('critical')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300 transition-colors" data-severity="critical">Critical</button>
-                                <button onclick="filterFindingsBySeverity('high')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-orange-900 hover:bg-orange-800 text-orange-300 transition-colors" data-severity="high">High</button>
-                                <button onclick="filterFindingsBySeverity('medium')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-yellow-900 hover:bg-yellow-800 text-yellow-300 transition-colors" data-severity="medium">Medium</button>
-                                <button onclick="filterFindingsBySeverity('low')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-blue-900 hover:bg-blue-800 text-blue-300 transition-colors" data-severity="low">Low</button>
-                                <button onclick="filterFindingsBySeverity('info')" class="vuln-filter-btn px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-gray-300 transition-colors" data-severity="info">Info</button>
-                            </div>
-                            <!-- Host Filter -->
-                            <select id="host-filter-select" onchange="filterFindingsByHost(this.value)"
-                                    class="px-2 py-1 text-xs bg-slate-700 border border-slate-600 rounded focus:ring-2 focus:ring-blue-500">
-                                <option value="all">All Hosts</option>
-                            </select>
-                            <!-- Scanner Filter -->
-                            <select id="scanner-filter-select" onchange="filterFindingsByScanner(this.value)"
-                                    class="px-2 py-1 text-xs bg-slate-700 border border-slate-600 rounded focus:ring-2 focus:ring-blue-500">
-                                <option value="all">All Scanners</option>
-                            </select>
-                            <!-- View Toggle -->
-                            <div class="flex gap-1 border-l border-slate-600 pl-2">
-                                <button onclick="setFindingsView('table')" id="view-table-btn" class="p-1.5 rounded bg-slate-600 hover:bg-slate-500 transition-colors" title="Table View">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
-                                </button>
-                                <button onclick="setFindingsView('grouped')" id="view-grouped-btn" class="p-1.5 rounded hover:bg-slate-500 transition-colors" title="Group by Host">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
-                                </button>
-                            </div>
-                            <!-- Export Button -->
-                            <button onclick="exportFindingsCSV()" class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-green-700 hover:bg-green-600 text-white transition-colors" title="Export to CSV">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                                CSV
-                            </button>
-                            <!-- Dedupe Toggle -->
-                            <label class="flex items-center gap-1 text-xs text-gray-300 cursor-pointer" title="Show only unique vulnerabilities (dedupe by host+title)">
-                                <input type="checkbox" id="dedupe-findings-toggle" onchange="toggleDeduplication(this.checked)"
-                                       class="w-3 h-3 rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500">
-                                Unique
-                            </label>
-                            <!-- Clear Filters -->
-                            <button onclick="clearAllFilters()" class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-gray-300 transition-colors" title="Clear all filters">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                                Clear
-                            </button>
-                        </div>
-                    </div>
-                    <!-- Table View -->
-                    <div id="findings-table-view" class="overflow-x-auto -mx-3 px-3 sm:mx-0 sm:px-0">
-                        <table class="w-full text-xs sm:text-sm min-w-[500px]">
-                            <thead>
-                                <tr class="text-left text-gray-400 border-b border-slate-700">
-                                    <th class="pb-2 pr-2 cursor-pointer hover:text-white" onclick="sortFindings('severity')">
-                                        Severity <span class="sort-indicator" data-col="severity"></span>
-                                    </th>
-                                    <th class="pb-2 pr-2 cursor-pointer hover:text-white" onclick="sortFindings('title')">
-                                        Title <span class="sort-indicator" data-col="title"></span>
-                                    </th>
-                                    <th class="pb-2 pr-2 hidden sm:table-cell cursor-pointer hover:text-white" onclick="sortFindings('host')">
-                                        Host <span class="sort-indicator" data-col="host"></span>
-                                    </th>
-                                    <th class="pb-2 pr-2 hidden md:table-cell cursor-pointer hover:text-white" onclick="sortFindings('scanner')">
-                                        Scanner <span class="sort-indicator" data-col="scanner"></span>
-                                    </th>
-                                    <th class="pb-2">CVEs</th>
-                                </tr>
-                            </thead>
-                            <tbody id="adv-vuln-table-body">
-                                <tr>
-                                    <td colspan="5" class="text-center py-8 text-gray-400">No findings to display</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                    <!-- Grouped View (Hidden by default) -->
-                    <div id="findings-grouped-view" class="hidden space-y-4">
-                        <!-- Populated by JS -->
-                    </div>
-                    <!-- Findings Count -->
-                    <div class="mt-3 text-xs text-gray-500 flex justify-between items-center">
-                        <span id="findings-count-text">Showing 0 findings</span>
-                        <span id="findings-filter-text" class="text-cyan-400 hidden">Filtered</span>
-                    </div>
-                </div>
 
                 <!-- ZAP Credentials Modal -->
                 <div id="zap-credentials-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50 p-2 sm:p-4">
