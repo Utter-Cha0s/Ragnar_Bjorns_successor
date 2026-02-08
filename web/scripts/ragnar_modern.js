@@ -12246,19 +12246,17 @@ function updateActiveScans(scans, options = {}) {
     if (!advVulnScansCache.length) {
         container.innerHTML = '<p class="text-gray-400 text-center py-4 text-sm">No active scans</p>';
         updateScansToggleButton(0);
-        renderAdvVulnScanDetails();
         return;
     }
 
     const scanFindingsMap = buildAdvVulnScanFindingsMap(advVulnScansCache);
     advVulnScanFindingsMap = scanFindingsMap;
 
-    if (!options.preserveSelection) {
-        const hasSelected = advVulnSelectedScanId && advVulnScansCache.some(scan => scan.scan_id === advVulnSelectedScanId);
-        if (!hasSelected) {
-            advVulnSelectedScanId = advVulnScansCache[0]?.scan_id || null;
-        }
-    }
+    // Clean up expanded IDs for scans that no longer exist
+    const validIds = new Set(advVulnScansCache.map(s => s.scan_id));
+    advVulnExpandedScanIds.forEach(id => {
+        if (!validIds.has(id)) advVulnExpandedScanIds.delete(id);
+    });
 
     const scansToRender = advVulnShowAllScans ? advVulnScansCache : advVulnScansCache.slice(0, 3);
     updateScansToggleButton(advVulnScansCache.length);
@@ -12282,6 +12280,8 @@ function updateActiveScans(scans, options = {}) {
         const mapEntry = scanFindingsMap.get(scanId) || { findings: [], counts: {} };
         const counts = mapEntry.counts || {};
         const findingsCount = mapEntry.findings.length || scan.findings_count || 0;
+        const riskScore = (counts.critical || 0) * 10 + (counts.high || 0) * 7 + (counts.medium || 0) * 4 + (counts.low || 0) * 1;
+        const riskColor = riskScore >= 50 ? 'text-red-400' : riskScore >= 30 ? 'text-orange-400' : riskScore >= 15 ? 'text-yellow-400' : 'text-green-400';
         const durationSeconds = getScanDurationSeconds(scan);
         const status = scan.status || 'unknown';
         const progress = scan.progress_percent || scan.progress || 0;
@@ -12291,84 +12291,95 @@ function updateActiveScans(scans, options = {}) {
         const authStatus = scan.auth_status || '';
         const performedAt = scan.completed_at || scan.started_at;
         const performedLabel = scan.completed_at ? 'Completed' : 'Started';
-        const isSelected = advVulnSelectedScanId === scanId;
+        const isExpanded = advVulnExpandedScanIds.has(scanId);
 
         return `
-            <div class="p-4 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-700/70 transition cursor-pointer ${isSelected ? 'ring-2 ring-cyan-500' : ''}"
-                 onclick="selectAdvVulnScan('${scanId}')">
-                <div class="flex items-start justify-between gap-3">
-                    <div>
-                        <div class="text-sm font-semibold text-white">${escapeHtml(formatScanType(scan.scan_type))}</div>
-                        <div class="text-xs text-gray-400 mt-1">${escapeHtml(scan.target || 'Unknown target')}</div>
-                    </div>
-                    <span class="text-[11px] uppercase px-2 py-1 rounded-full bg-slate-700 text-gray-300">${escapeHtml(statusLabels[status] || status)}</span>
-                </div>
-
-                <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-300">
-                    <div>${performedLabel}: <span class="text-gray-100">${performedAt ? escapeHtml(formatScanTimestamp(performedAt)) : 'N/A'}</span></div>
-                    <div>Duration: <span class="text-gray-100">${durationSeconds ? formatDuration(durationSeconds) : 'N/A'}</span></div>
-                    <div>Findings: <span class="text-cyan-300 font-semibold">${findingsCount}</span></div>
-                    <div>Method: <span class="text-gray-100">${escapeHtml(formatScanType(scan.scan_type))}</span></div>
-                </div>
-
-                <div class="mt-3 flex flex-wrap gap-2 text-[11px]">
-                    ${['critical', 'high', 'medium', 'low'].map(severity => `
-                        <span class="px-2 py-0.5 rounded ${severityBadgeClasses[severity]}">
-                            ${severity.toUpperCase()}: ${counts[severity] || 0}
-                        </span>
-                    `).join('')}
-                </div>
-
-                ${authType ? `
-                    <div class="flex items-center gap-1 text-xs mt-2">
-                        <span class="px-1.5 py-0.5 rounded ${
-                            authStatus.startsWith('verified') ? 'bg-green-900 text-green-400' :
-                            authStatus.startsWith('failed') ? 'bg-red-900 text-red-400' :
-                            'bg-yellow-900 text-yellow-400'
-                        }">
-                            ${authStatus.startsWith('verified') ? '✓' : authStatus.startsWith('failed') ? '✗' : '🔐'} ${escapeHtml(authType)} ${authStatus ? `- ${escapeHtml(authStatus)}` : ''}
-                        </span>
-                    </div>
-                ` : ''}
-
-                ${status === 'running' ? `
-                    <div class="mt-3">
-                        <div class="flex justify-between text-xs text-gray-400 mb-1">
-                            <span>${escapeHtml(currentPhase)}</span>
-                            <span>${progress}%</span>
+            <div>
+                <div class="p-4 rounded-lg border ${isExpanded ? 'border-cyan-500/50 rounded-b-none' : 'border-slate-700'} bg-slate-800/60 hover:bg-slate-700/70 transition cursor-pointer"
+                     onclick="toggleAdvVulnScanFindings('${scanId}')">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">${escapeHtml(formatScanType(scan.scan_type))}</div>
+                            <div class="text-xs text-gray-400 mt-1">${escapeHtml(scan.target || 'Unknown target')}</div>
                         </div>
-                        <div class="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                            <div class="h-full bg-blue-500 transition-all duration-500" style="width: ${progress}%"></div>
-                        </div>
+                        <span class="text-[11px] uppercase px-2 py-1 rounded-full bg-slate-700 text-gray-300">${escapeHtml(statusLabels[status] || status)}</span>
                     </div>
-                ` : ''}
-                ${errorMessage ? `<div class="text-xs text-red-400 mt-2">${escapeHtml(errorMessage)}</div>` : ''}
-                ${status === 'completed' && findingsCount === 0 && !errorMessage ? `
-                    <div class="text-xs text-yellow-400 mt-2">0 findings - check server logs for details</div>
-                ` : ''}
 
-                <div class="mt-3 flex gap-3 flex-wrap text-xs">
+                    <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-300">
+                        <div>${performedLabel}: <span class="text-gray-100">${performedAt ? escapeHtml(formatScanTimestamp(performedAt)) : 'N/A'}</span></div>
+                        <div>Duration: <span class="text-gray-100">${durationSeconds ? formatDuration(durationSeconds) : 'N/A'}</span></div>
+                        <div>Findings: <span class="text-cyan-300 font-semibold">${findingsCount}</span></div>
+                        <div>Method: <span class="text-gray-100">${escapeHtml(formatScanType(scan.scan_type))}</span></div>
+                    </div>
+
+                    <div class="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+                        ${['critical', 'high', 'medium', 'low'].map(severity => `
+                            <span class="px-2 py-0.5 rounded ${severityBadgeClasses[severity]}">
+                                ${severity.toUpperCase()}: ${counts[severity] || 0}
+                            </span>
+                        `).join('')}
+                        ${findingsCount > 0 ? `<span class="ml-auto text-xs font-semibold ${riskColor}">Risk: ${riskScore}</span>` : ''}
+                    </div>
+
+                    ${authType ? `
+                        <div class="flex items-center gap-1 text-xs mt-2">
+                            <span class="px-1.5 py-0.5 rounded ${
+                                authStatus.startsWith('verified') ? 'bg-green-900 text-green-400' :
+                                authStatus.startsWith('failed') ? 'bg-red-900 text-red-400' :
+                                'bg-yellow-900 text-yellow-400'
+                            }">
+                                ${authStatus.startsWith('verified') ? '✓' : authStatus.startsWith('failed') ? '✗' : '🔐'} ${escapeHtml(authType)} ${authStatus ? `- ${escapeHtml(authStatus)}` : ''}
+                            </span>
+                        </div>
+                    ` : ''}
+
                     ${status === 'running' ? `
-                        <button onclick="event.stopPropagation(); cancelAdvScan('${scanId}')" class="text-red-400 hover:text-red-300 flex items-center gap-1">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                            Cancel
+                        <div class="mt-3">
+                            <div class="flex justify-between text-xs text-gray-400 mb-1">
+                                <span>${escapeHtml(currentPhase)}</span>
+                                <span>${progress}%</span>
+                            </div>
+                            <div class="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                <div class="h-full bg-blue-500 transition-all duration-500" style="width: ${progress}%"></div>
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${errorMessage ? `<div class="text-xs text-red-400 mt-2">${escapeHtml(errorMessage)}</div>` : ''}
+                    ${status === 'completed' && findingsCount === 0 && !errorMessage ? `
+                        <div class="text-xs text-yellow-400 mt-2">0 findings - check server logs for details</div>
+                    ` : ''}
+
+                    <div class="mt-3 flex items-center justify-between">
+                        <div class="flex gap-3 flex-wrap text-xs">
+                            ${status === 'running' ? `
+                                <button onclick="event.stopPropagation(); cancelAdvScan('${scanId}')" class="text-red-400 hover:text-red-300 flex items-center gap-1">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                    Cancel
+                                </button>
+                            ` : `
+                                <button onclick="event.stopPropagation(); downloadScanReport('${scanId}')" class="text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                                    Report
+                                </button>
+                                <button onclick="event.stopPropagation(); deleteAdvScan('${scanId}')" class="text-gray-400 hover:text-red-400 flex items-center gap-1">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                    Delete
+                                </button>
+                            `}
+                        </div>
+                        <button onclick="event.stopPropagation(); toggleAdvVulnScanFindings('${scanId}')"
+                                class="flex items-center gap-1 text-xs ${isExpanded ? 'text-cyan-400' : 'text-gray-400 hover:text-gray-200'} transition-colors">
+                            <span>${isExpanded ? 'Hide' : 'Show'} Findings</span>
+                            <svg class="w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
                         </button>
-                    ` : `
-                        <button onclick="event.stopPropagation(); downloadScanReport('${scanId}')" class="text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                            Report
-                        </button>
-                        <button onclick="event.stopPropagation(); deleteAdvScan('${scanId}')" class="text-gray-400 hover:text-red-400 flex items-center gap-1">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                            Delete
-                        </button>
-                    `}
+                    </div>
                 </div>
+                ${isExpanded ? renderInlineScanFindings(scanId, scan) : ''}
             </div>
         `;
     }).join('');
-
-    renderAdvVulnScanDetails();
 }
 
 function toggleAdvVulnScansExpanded() {
@@ -12453,34 +12464,18 @@ function getScanDurationSeconds(scan) {
     return Math.max(0, (Date.now() - started.getTime()) / 1000);
 }
 
-function selectAdvVulnScan(scanId, options = {}) {
-    advVulnSelectedScanId = scanId;
-    advVulnHighlightedFindingId = options.highlightFindingId || null;
+function toggleAdvVulnScanFindings(scanId) {
+    if (advVulnExpandedScanIds.has(scanId)) {
+        advVulnExpandedScanIds.delete(scanId);
+    } else {
+        advVulnExpandedScanIds.add(scanId);
+    }
     updateActiveScans(advVulnScansCache, { preserveSelection: true });
-    const detailsSection = document.getElementById('adv-vuln-scan-details');
-    detailsSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function renderAdvVulnScanDetails() {
-    const container = document.getElementById('adv-vuln-scan-details-content');
-    if (!container) return;
-
-    if (!advVulnSelectedScanId) {
-        container.innerHTML = 'Select a scan above to view all findings and detailed information.';
-        return;
-    }
-
-    const scan = advVulnScansCache.find(item => item.scan_id === advVulnSelectedScanId);
-    if (!scan) {
-        container.innerHTML = 'Select a scan above to view all findings and detailed information.';
-        return;
-    }
-
-    const mapEntry = advVulnScanFindingsMap.get(advVulnSelectedScanId) || { findings: [], counts: {} };
+function renderInlineScanFindings(scanId, scan) {
+    const mapEntry = advVulnScanFindingsMap.get(scanId) || { findings: [], counts: {} };
     const findings = mapEntry.findings || [];
-    const counts = mapEntry.counts || {};
-    const performedAt = scan.completed_at || scan.started_at;
-    const durationSeconds = getScanDurationSeconds(scan);
 
     const severityBadgeClasses = {
         critical: 'bg-red-600 text-white',
@@ -12496,12 +12491,11 @@ function renderAdvVulnScanDetails() {
     });
 
     const findingsHtml = sortedFindings.length ? sortedFindings.map(finding => {
-        const highlight = advVulnHighlightedFindingId && finding.finding_id === advVulnHighlightedFindingId;
         const timestamp = finding.timestamp ? formatScanTimestamp(finding.timestamp) : 'N/A';
         const detailsJson = finding.details ? JSON.stringify(finding.details, null, 2) : '';
 
         return `
-            <div class="p-4 rounded-lg border border-slate-700 bg-slate-800/60 ${highlight ? 'ring-2 ring-cyan-500' : ''}">
+            <div class="p-4 rounded-lg border border-slate-700 bg-slate-800/60">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <div class="flex items-center gap-2">
                         <span class="px-2 py-1 rounded text-xs uppercase ${severityBadgeClasses[finding.severity] || 'bg-gray-600 text-white'}">
@@ -12550,31 +12544,10 @@ function renderAdvVulnScanDetails() {
                 ` : ''}
             </div>
         `;
-    }).join('') : '<p class="text-gray-400 text-sm">No findings for this scan yet.</p>';
+    }).join('') : '<p class="text-gray-400 text-sm py-2">No findings for this scan yet.</p>';
 
-    container.innerHTML = `
-        <div class="mb-4 p-3 rounded-lg bg-slate-800/70 border border-slate-700">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                    <div class="text-sm font-semibold text-white">${escapeHtml(formatScanType(scan.scan_type))} scan on <span class="font-mono">${escapeHtml(scan.target || 'Unknown')}</span></div>
-                    <div class="text-xs text-gray-400 mt-1">Scan ID: ${escapeHtml(scan.scan_id || 'N/A')}</div>
-                </div>
-                <div class="text-xs text-gray-300">
-                    ${performedAt ? `Performed: ${escapeHtml(formatScanTimestamp(performedAt))}` : 'Performed: N/A'}
-                </div>
-            </div>
-            <div class="mt-2 flex flex-wrap gap-2 text-xs">
-                ${['critical', 'high', 'medium', 'low', 'info'].map(severity => `
-                    <span class="px-2 py-0.5 rounded ${severityBadgeClasses[severity]}">
-                        ${severity.toUpperCase()}: ${counts[severity] || 0}
-                    </span>
-                `).join('')}
-                <span class="px-2 py-0.5 rounded bg-slate-700 text-gray-200">Findings: ${findings.length}</span>
-                <span class="px-2 py-0.5 rounded bg-slate-700 text-gray-200">Duration: ${durationSeconds ? formatDuration(durationSeconds) : 'N/A'}</span>
-                <span class="px-2 py-0.5 rounded bg-slate-700 text-gray-200">Status: ${escapeHtml(scan.status || 'unknown')}</span>
-            </div>
-        </div>
-        <div class="space-y-3">
+    return `
+        <div class="border border-t-0 border-cyan-500/50 rounded-b-lg bg-slate-900/50 p-3 space-y-3 max-h-[600px] overflow-y-auto">
             ${findingsHtml}
         </div>
     `;
@@ -12705,39 +12678,6 @@ function updateScannerStatus(scanners) {
 function updateVulnSummary(summary) {
     if (!summary?.severity_counts) return;
 
-    const counts = summary.severity_counts;
-    updateElement('vuln-critical-count', counts.critical || 0);
-    updateElement('vuln-high-count', counts.high || 0);
-    updateElement('vuln-medium-count', counts.medium || 0);
-    updateElement('vuln-low-count', counts.low || 0);
-    updateElement('vuln-info-count', counts.info || 0);
-
-    // Calculate and update risk score (weighted by severity)
-    const riskScore = (counts.critical || 0) * 10 + (counts.high || 0) * 7 +
-                      (counts.medium || 0) * 4 + (counts.low || 0) * 1;
-    const maxRisk = 100; // Normalize to percentage for display
-    const riskPercent = Math.min(riskScore, maxRisk);
-
-    updateElement('vuln-risk-score', riskScore);
-    const riskBar = document.getElementById('vuln-risk-bar');
-    const riskScoreEl = document.getElementById('vuln-risk-score');
-    if (riskBar) {
-        riskBar.style.width = `${riskPercent}%`;
-        // Color based on risk level
-        riskBar.className = 'h-full transition-all duration-500 ' + (
-            riskScore >= 50 ? 'bg-red-500' :
-            riskScore >= 30 ? 'bg-orange-500' :
-            riskScore >= 15 ? 'bg-yellow-500' : 'bg-green-500'
-        );
-    }
-    if (riskScoreEl) {
-        riskScoreEl.className = 'text-2xl sm:text-3xl font-bold ' + (
-            riskScore >= 50 ? 'text-red-400' :
-            riskScore >= 30 ? 'text-orange-400' :
-            riskScore >= 15 ? 'text-yellow-400' : 'text-green-400'
-        );
-    }
-
     // Update total findings and scans
     updateElement('vuln-total-findings', summary.total_findings || 0);
     updateElement('vuln-total-scans', summary.total_scans || 0);
@@ -12778,16 +12718,8 @@ function updateVulnStats(scans, findings) {
 
 // Store findings globally for detail view
 let advVulnFindingsCache = [];
-let advVulnFindingsFiltered = [];
-let advVulnCurrentFilter = 'all';
-let advVulnCurrentHostFilter = 'all';
-let advVulnCurrentScannerFilter = 'all';
-let advVulnDedupeEnabled = false;
-let advVulnCurrentSort = { column: 'severity', ascending: false };
-let advVulnCurrentView = 'table';
 let advVulnShowAllScans = false;
-let advVulnSelectedScanId = null;
-let advVulnHighlightedFindingId = null;
+let advVulnExpandedScanIds = new Set();
 let advVulnScansCache = [];
 let advVulnScanFindingsMap = new Map();
 
@@ -12798,358 +12730,11 @@ async function loadAdvVulnFindings() {
 
         if (!data.success) return;
 
-        // Cache findings for detail view
         advVulnFindingsCache = data.findings || [];
-        advVulnFindingsFiltered = [...advVulnFindingsCache];
-
-        // Update filter dropdowns
-        updateHostFilterOptions();
-        updateScannerFilterOptions();
-
-        applyFindingsFilterAndSort();
-        renderAdvVulnScanDetails();
 
     } catch (error) {
         console.error('Error loading vuln findings:', error);
     }
-}
-
-function filterFindingsBySeverity(severity) {
-    advVulnCurrentFilter = severity;
-
-    // Update button states
-    document.querySelectorAll('.vuln-filter-btn').forEach(btn => {
-        btn.classList.remove('active', 'ring-2', 'ring-white');
-        if (btn.dataset.severity === severity) {
-            btn.classList.add('active', 'ring-2', 'ring-white');
-        }
-    });
-
-    applyFindingsFilterAndSort();
-}
-
-function filterFindingsByHost(host) {
-    advVulnCurrentHostFilter = host;
-    applyFindingsFilterAndSort();
-}
-
-function updateHostFilterOptions() {
-    const select = document.getElementById('host-filter-select');
-    if (!select) return;
-
-    // Get unique hosts
-    const hosts = [...new Set(advVulnFindingsCache.map(f => f.host).filter(Boolean))].sort();
-
-    // Build options
-    let html = '<option value="all">All Hosts (' + advVulnFindingsCache.length + ')</option>';
-    hosts.forEach(host => {
-        const count = advVulnFindingsCache.filter(f => f.host === host).length;
-        const selected = advVulnCurrentHostFilter === host ? ' selected' : '';
-        html += `<option value="${escapeHtml(host)}"${selected}>${escapeHtml(host)} (${count})</option>`;
-    });
-
-    select.innerHTML = html;
-}
-
-function updateScannerFilterOptions() {
-    const select = document.getElementById('scanner-filter-select');
-    if (!select) return;
-
-    // Get unique scanners
-    const scanners = [...new Set(advVulnFindingsCache.map(f => f.scanner).filter(Boolean))].sort();
-
-    // Build options
-    let html = '<option value="all">All Scanners</option>';
-    scanners.forEach(scanner => {
-        const count = advVulnFindingsCache.filter(f => f.scanner === scanner).length;
-        const selected = advVulnCurrentScannerFilter === scanner ? ' selected' : '';
-        html += `<option value="${escapeHtml(scanner)}"${selected}>${escapeHtml(scanner)} (${count})</option>`;
-    });
-
-    select.innerHTML = html;
-}
-
-function filterFindingsByScanner(scanner) {
-    advVulnCurrentScannerFilter = scanner;
-    applyFindingsFilterAndSort();
-}
-
-function sortFindings(column) {
-    if (advVulnCurrentSort.column === column) {
-        advVulnCurrentSort.ascending = !advVulnCurrentSort.ascending;
-    } else {
-        advVulnCurrentSort.column = column;
-        advVulnCurrentSort.ascending = column === 'title' || column === 'host';
-    }
-
-    // Update sort indicators
-    document.querySelectorAll('.sort-indicator').forEach(el => {
-        el.textContent = '';
-    });
-    const indicator = document.querySelector(`.sort-indicator[data-col="${column}"]`);
-    if (indicator) {
-        indicator.textContent = advVulnCurrentSort.ascending ? ' ▲' : ' ▼';
-    }
-
-    applyFindingsFilterAndSort();
-}
-
-function clearAllFilters() {
-    advVulnCurrentFilter = 'all';
-    advVulnCurrentHostFilter = 'all';
-    advVulnCurrentScannerFilter = 'all';
-    advVulnDedupeEnabled = false;
-    advVulnCurrentSort = { column: 'severity', ascending: false };
-
-    // Reset UI elements
-    document.querySelectorAll('.vuln-filter-btn').forEach(btn => {
-        btn.classList.remove('active', 'ring-2', 'ring-white');
-        if (btn.dataset.severity === 'all') {
-            btn.classList.add('active', 'ring-2', 'ring-white');
-        }
-    });
-
-    const hostSelect = document.getElementById('host-filter-select');
-    if (hostSelect) hostSelect.value = 'all';
-
-    const scannerSelect = document.getElementById('scanner-filter-select');
-    if (scannerSelect) scannerSelect.value = 'all';
-
-    const dedupeToggle = document.getElementById('dedupe-findings-toggle');
-    if (dedupeToggle) dedupeToggle.checked = false;
-
-    document.querySelectorAll('.sort-indicator').forEach(el => {
-        el.textContent = '';
-    });
-
-    applyFindingsFilterAndSort();
-    showNotification('Filters cleared', 'info');
-}
-
-function toggleDeduplication(enabled) {
-    advVulnDedupeEnabled = enabled;
-    applyFindingsFilterAndSort();
-}
-
-function applyFindingsFilterAndSort() {
-    // Start with all findings
-    advVulnFindingsFiltered = [...advVulnFindingsCache];
-
-    // Filter by severity
-    if (advVulnCurrentFilter !== 'all') {
-        advVulnFindingsFiltered = advVulnFindingsFiltered.filter(f => f.severity === advVulnCurrentFilter);
-    }
-
-    // Filter by host
-    if (advVulnCurrentHostFilter !== 'all') {
-        advVulnFindingsFiltered = advVulnFindingsFiltered.filter(f => f.host === advVulnCurrentHostFilter);
-    }
-
-    // Filter by scanner
-    if (advVulnCurrentScannerFilter !== 'all') {
-        advVulnFindingsFiltered = advVulnFindingsFiltered.filter(f => f.scanner === advVulnCurrentScannerFilter);
-    }
-
-    // Deduplicate by host + title + port (keep most recent)
-    if (advVulnDedupeEnabled) {
-        const seen = new Map();
-        advVulnFindingsFiltered.forEach(f => {
-            const key = `${f.host}|${f.title}|${f.port || ''}`;
-            const existing = seen.get(key);
-            if (!existing || new Date(f.timestamp) > new Date(existing.timestamp)) {
-                seen.set(key, f);
-            }
-        });
-        advVulnFindingsFiltered = Array.from(seen.values());
-    }
-
-    // Sort
-    const severityOrder = { 'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4 };
-    advVulnFindingsFiltered.sort((a, b) => {
-        let cmp = 0;
-        switch (advVulnCurrentSort.column) {
-            case 'severity':
-                cmp = (severityOrder[a.severity] || 5) - (severityOrder[b.severity] || 5);
-                break;
-            case 'title':
-                cmp = (a.title || '').localeCompare(b.title || '');
-                break;
-            case 'host':
-                cmp = (a.host || '').localeCompare(b.host || '');
-                break;
-            case 'scanner':
-                cmp = (a.scanner || '').localeCompare(b.scanner || '');
-                break;
-        }
-        return advVulnCurrentSort.ascending ? cmp : -cmp;
-    });
-
-    // Update view
-    if (advVulnCurrentView === 'table') {
-        updateAdvVulnFindingsTable(advVulnFindingsFiltered);
-    } else {
-        updateAdvVulnGroupedView(advVulnFindingsFiltered);
-    }
-
-    // Update count text
-    const countText = document.getElementById('findings-count-text');
-    const filterText = document.getElementById('findings-filter-text');
-    if (countText) {
-        const dedupeText = advVulnDedupeEnabled ? ' (unique)' : '';
-        countText.textContent = `Showing ${advVulnFindingsFiltered.length} of ${advVulnFindingsCache.length} findings${dedupeText}`;
-    }
-    if (filterText) {
-        const hasFilters = advVulnCurrentFilter !== 'all' || advVulnCurrentHostFilter !== 'all' ||
-                          advVulnCurrentScannerFilter !== 'all' || advVulnDedupeEnabled;
-        filterText.classList.toggle('hidden', !hasFilters);
-    }
-
-    // Recalculate severity counts and risk score based on filtered findings
-    if (advVulnDedupeEnabled || advVulnCurrentFilter !== 'all' || advVulnCurrentHostFilter !== 'all' || advVulnCurrentScannerFilter !== 'all') {
-        updateFilteredSeverityCounts(advVulnFindingsFiltered);
-    }
-}
-
-function updateFilteredSeverityCounts(findings) {
-    const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-    findings.forEach(f => {
-        if (counts.hasOwnProperty(f.severity)) {
-            counts[f.severity]++;
-        }
-    });
-
-    // Update UI with filtered counts (with indicator)
-    updateElement('vuln-critical-count', counts.critical);
-    updateElement('vuln-high-count', counts.high);
-    updateElement('vuln-medium-count', counts.medium);
-    updateElement('vuln-low-count', counts.low);
-    updateElement('vuln-info-count', counts.info);
-
-    // Recalculate risk score
-    const riskScore = counts.critical * 10 + counts.high * 7 + counts.medium * 4 + counts.low * 1;
-    const maxRisk = 100;
-    const riskPercent = Math.min(riskScore, maxRisk);
-
-    updateElement('vuln-risk-score', riskScore);
-    const riskBar = document.getElementById('vuln-risk-bar');
-    const riskScoreEl = document.getElementById('vuln-risk-score');
-    if (riskBar) {
-        riskBar.style.width = `${riskPercent}%`;
-        riskBar.className = 'h-full transition-all duration-500 ' + (
-            riskScore >= 50 ? 'bg-red-500' :
-            riskScore >= 30 ? 'bg-orange-500' :
-            riskScore >= 15 ? 'bg-yellow-500' : 'bg-green-500'
-        );
-    }
-    if (riskScoreEl) {
-        riskScoreEl.className = 'text-2xl sm:text-3xl font-bold ' + (
-            riskScore >= 50 ? 'text-red-400' :
-            riskScore >= 30 ? 'text-orange-400' :
-            riskScore >= 15 ? 'text-yellow-400' : 'text-green-400'
-        );
-    }
-}
-
-function setFindingsView(view) {
-    advVulnCurrentView = view;
-
-    const tableView = document.getElementById('findings-table-view');
-    const groupedView = document.getElementById('findings-grouped-view');
-    const tableBtn = document.getElementById('view-table-btn');
-    const groupedBtn = document.getElementById('view-grouped-btn');
-
-    if (view === 'table') {
-        tableView?.classList.remove('hidden');
-        groupedView?.classList.add('hidden');
-        tableBtn?.classList.add('bg-slate-600');
-        groupedBtn?.classList.remove('bg-slate-600');
-        updateAdvVulnFindingsTable(advVulnFindingsFiltered);
-    } else {
-        tableView?.classList.add('hidden');
-        groupedView?.classList.remove('hidden');
-        tableBtn?.classList.remove('bg-slate-600');
-        groupedBtn?.classList.add('bg-slate-600');
-        updateAdvVulnGroupedView(advVulnFindingsFiltered);
-    }
-}
-
-function updateAdvVulnGroupedView(findings) {
-    const container = document.getElementById('findings-grouped-view');
-    if (!container) return;
-
-    if (!findings?.length) {
-        container.innerHTML = '<p class="text-gray-400 text-center py-8">No findings to display</p>';
-        return;
-    }
-
-    // Group by host
-    const grouped = {};
-    findings.forEach(f => {
-        const host = f.host || 'Unknown';
-        if (!grouped[host]) {
-            grouped[host] = { findings: [], severityCounts: { critical: 0, high: 0, medium: 0, low: 0, info: 0 } };
-        }
-        grouped[host].findings.push(f);
-        grouped[host].severityCounts[f.severity] = (grouped[host].severityCounts[f.severity] || 0) + 1;
-    });
-
-    const severityColors = {
-        'critical': 'bg-red-600',
-        'high': 'bg-orange-500',
-        'medium': 'bg-yellow-500',
-        'low': 'bg-blue-500',
-        'info': 'bg-gray-500'
-    };
-
-    container.innerHTML = Object.entries(grouped).map(([host, data]) => {
-        const riskScore = (data.severityCounts.critical * 10 + data.severityCounts.high * 7 +
-                          data.severityCounts.medium * 4 + data.severityCounts.low * 1);
-        const riskColor = riskScore >= 20 ? 'text-red-400' : riskScore >= 10 ? 'text-orange-400' :
-                          riskScore >= 5 ? 'text-yellow-400' : 'text-green-400';
-
-        return `
-            <div class="bg-slate-800 rounded-lg overflow-hidden">
-                <div class="p-3 bg-slate-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div class="flex items-center gap-3">
-                        <span class="font-mono font-semibold">${escapeHtml(host)}</span>
-                        <span class="text-xs text-gray-400">${data.findings.length} finding${data.findings.length !== 1 ? 's' : ''}</span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <div class="flex gap-1">
-                            ${Object.entries(data.severityCounts).filter(([,c]) => c > 0).map(([sev, count]) =>
-                                `<span class="px-2 py-0.5 ${severityColors[sev]} text-white text-xs rounded">${count} ${sev}</span>`
-                            ).join('')}
-                        </div>
-                        <span class="text-xs ${riskColor} font-semibold">Risk: ${riskScore}</span>
-                        <button onclick="quickRescanHost('${escapeHtml(host)}')"
-                                class="ml-2 px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded flex items-center gap-1 transition-colors"
-                                title="Quick rescan this host">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                            </svg>
-                            Rescan
-                        </button>
-                    </div>
-                </div>
-                <div class="p-3 space-y-2 max-h-60 overflow-y-auto scrollbar-thin">
-                    ${data.findings.map((f, idx) => {
-                        const globalIdx = advVulnFindingsFiltered.indexOf(f);
-                        return `
-                            <div class="flex items-start gap-2 p-2 bg-slate-700 bg-opacity-50 rounded hover:bg-slate-600 cursor-pointer"
-                                 onclick="showFindingDetail(${globalIdx})">
-                                <span class="px-2 py-0.5 ${severityColors[f.severity]} text-white text-xs rounded uppercase shrink-0">${f.severity}</span>
-                                <div class="flex-1 min-w-0">
-                                    <div class="text-sm font-medium truncate">${escapeHtml(f.title)}</div>
-                                    <div class="text-xs text-gray-400">${escapeHtml(f.scanner)}${f.port ? ' | Port ' + f.port : ''}</div>
-                                </div>
-                                ${f.cve_ids?.length ? `<span class="text-xs text-cyan-400 shrink-0">${f.cve_ids.length} CVE${f.cve_ids.length !== 1 ? 's' : ''}</span>` : ''}
-                            </div>
-                        `;
-                    }).join('')}
-                </div>
-            </div>
-        `;
-    }).join('');
 }
 
 async function quickRescanHost(host) {
@@ -13175,81 +12760,6 @@ async function quickRescanHost(host) {
         console.error('Error starting rescan:', error);
         showNotification('Failed to start rescan', 'error');
     }
-}
-
-function exportFindingsCSV() {
-    const findings = advVulnFindingsFiltered.length ? advVulnFindingsFiltered : advVulnFindingsCache;
-    if (!findings?.length) {
-        showNotification('No findings to export', 'warning');
-        return;
-    }
-
-    const headers = ['Severity', 'Title', 'Host', 'Port', 'Scanner', 'CVE IDs', 'CVSS Score', 'Description', 'Remediation', 'Timestamp'];
-    const rows = findings.map(f => [
-        f.severity || '',
-        `"${(f.title || '').replace(/"/g, '""')}"`,
-        f.host || '',
-        f.port || '',
-        f.scanner || '',
-        `"${(f.cve_ids || []).join(', ')}"`,
-        f.cvss_score || '',
-        `"${(f.description || '').replace(/"/g, '""').substring(0, 500)}"`,
-        `"${(f.remediation || '').replace(/"/g, '""').substring(0, 500)}"`,
-        f.timestamp || ''
-    ]);
-
-    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `ragnar_findings_${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    showNotification(`Exported ${findings.length} findings to CSV`, 'success');
-}
-
-function updateAdvVulnFindingsTable(findings) {
-    const tbody = document.getElementById('adv-vuln-table-body');
-    if (!tbody) return;
-    
-    if (!findings?.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-gray-400">No findings to display</td></tr>';
-        return;
-    }
-    
-    const severityColors = {
-        'critical': 'bg-red-600',
-        'high': 'bg-orange-500',
-        'medium': 'bg-yellow-500',
-        'low': 'bg-blue-500',
-        'info': 'bg-gray-500'
-    };
-    
-    tbody.innerHTML = findings.map((f, idx) => {
-        // Dedupe CVE IDs and filter only real CVEs
-        const uniqueCves = [...new Set((f.cve_ids || []).filter(cve => cve && cve.startsWith('CVE-')))];
-        return `
-            <tr class="border-b border-slate-700 hover:bg-slate-600 cursor-pointer" onclick="showFindingDetail(${idx})">
-                <td class="py-2">
-                    <span class="px-2 py-1 ${severityColors[f.severity] || 'bg-gray-500'} text-white text-xs rounded uppercase">
-                        ${escapeHtml(f.severity)}
-                    </span>
-                </td>
-                <td class="py-2 max-w-xs truncate" title="${escapeHtml(f.title)}">${escapeHtml(f.title)}</td>
-                <td class="py-2 font-mono text-sm">${escapeHtml(f.host)}${f.port ? ':' + f.port : ''}</td>
-                <td class="py-2 text-gray-400">${escapeHtml(f.scanner)}</td>
-                <td class="py-2 text-xs">
-                    ${uniqueCves.length ? uniqueCves.slice(0, 3).map(cve =>
-                        `<a href="https://nvd.nist.gov/vuln/detail/${cve}" target="_blank" class="text-cyan-400 hover:underline mr-1" onclick="event.stopPropagation()">${cve}</a>`
-                    ).join('') + (uniqueCves.length > 3 ? `<span class="text-gray-500">+${uniqueCves.length - 3}</span>` : '') : '-'}
-                </td>
-            </tr>
-        `;
-    }).join('');
 }
 
 function updateAdvVulnRecentFindings(findings) {
@@ -13290,9 +12800,10 @@ function updateAdvVulnRecentFindings(findings) {
             else timeAgo = `${Math.floor(diffMins / 1440)}d ago`;
         }
 
+        const scanId = getFindingScanId(f, advVulnScansCache.map(s => s.scan_id));
         return `
             <div class="p-2 ${severityBgColors[f.severity] || 'bg-slate-800'} bg-opacity-50 rounded-lg border-l-4 ${severityColors[f.severity] || 'border-gray-500'} cursor-pointer hover:bg-opacity-70 transition-colors"
-                 onclick="showFindingDetail(${idx})">
+                 onclick="${scanId ? `toggleAdvVulnScanFindings('${scanId}')` : ''}"
                 <div class="flex items-start justify-between gap-2">
                     <div class="flex-1 min-w-0">
                         <div class="font-medium text-sm truncate">${escapeHtml(f.title)}</div>
@@ -13309,19 +12820,6 @@ function updateAdvVulnRecentFindings(findings) {
             </div>
         `;
     }).join('');
-}
-
-function showFindingDetail(index) {
-    // Use filtered array for detail view to match displayed order
-    const finding = advVulnFindingsFiltered[index] || advVulnFindingsCache[index];
-    if (!finding) return;
-    const scanId = getFindingScanId(finding, advVulnScansCache.map(scan => scan.scan_id));
-    if (scanId) {
-        selectAdvVulnScan(scanId, { highlightFindingId: finding.finding_id });
-    } else {
-        advVulnHighlightedFindingId = finding.finding_id;
-        renderAdvVulnScanDetails();
-    }
 }
 
 function formatDuration(seconds) {
@@ -13353,6 +12851,42 @@ async function copyToClipboard(text) {
     }
 }
 
+let advVulnScanMode = 'web';
+
+function toggleScanMode(mode) {
+    advVulnScanMode = mode;
+    const webBtn = document.getElementById('scan-mode-web');
+    const apiBtn = document.getElementById('scan-mode-api');
+    const apiFields = document.getElementById('api-scan-fields');
+
+    if (mode === 'api') {
+        webBtn?.classList.remove('bg-blue-600', 'text-white', 'font-medium');
+        webBtn?.classList.add('text-gray-400');
+        apiBtn?.classList.add('bg-blue-600', 'text-white', 'font-medium');
+        apiBtn?.classList.remove('text-gray-400');
+        apiFields?.classList.remove('hidden');
+    } else {
+        apiBtn?.classList.remove('bg-blue-600', 'text-white', 'font-medium');
+        apiBtn?.classList.add('text-gray-400');
+        webBtn?.classList.add('bg-blue-600', 'text-white', 'font-medium');
+        webBtn?.classList.remove('text-gray-400');
+        apiFields?.classList.add('hidden');
+    }
+}
+
+function toggleRequestBodyField() {
+    const method = document.getElementById('api-http-method')?.value;
+    const bodyContainer = document.getElementById('api-request-body-container');
+    if (!bodyContainer) return;
+
+    const methodsWithBody = ['POST', 'PUT', 'PATCH', 'DELETE'];
+    if (methodsWithBody.includes(method)) {
+        bodyContainer.classList.remove('hidden');
+    } else {
+        bodyContainer.classList.add('hidden');
+    }
+}
+
 async function startAdvancedScan() {
     const targetInput = document.getElementById('adv-vuln-target');
     const scannerSelect = document.getElementById('adv-vuln-scanner');
@@ -13370,14 +12904,35 @@ async function startAdvancedScan() {
     // Collect auth params directly to send with the scan request
     const authType = document.getElementById('zap-auth-type')?.value;
     const options = {};
-    
+
     if (authType) {
         const authParams = getAuthParams(authType);
         if (authParams === null) return; // Validation failed
-        
+
         // Pass auth params directly in options
         options.auth_type = authType;
         options.auth_params = authParams;
+    }
+
+    // Collect API scan mode params
+    if (advVulnScanMode === 'api') {
+        options.scan_mode = 'api';
+        options.http_method = document.getElementById('api-http-method')?.value || 'GET';
+
+        const headersText = document.getElementById('api-custom-headers')?.value.trim();
+        if (headersText) {
+            options.custom_headers = headersText;
+        }
+
+        const bodyText = document.getElementById('api-request-body')?.value.trim();
+        if (bodyText) {
+            options.request_body = bodyText;
+        }
+
+        const openApiUrl = document.getElementById('zap-openapi-url')?.value.trim();
+        if (openApiUrl) {
+            options.openapi_url = openApiUrl;
+        }
     }
 
     try {
@@ -14231,9 +13786,11 @@ window.showTrafficPortDetail = showTrafficPortDetail;
 window.closeTrafficPortModal = closeTrafficPortModal;
 window.loadAdvancedVulnData = loadAdvancedVulnData;
 window.startAdvancedScan = startAdvancedScan;
+window.toggleScanMode = toggleScanMode;
+window.toggleRequestBodyField = toggleRequestBodyField;
 window.refreshAdvVulnData = refreshAdvVulnData;
 window.toggleAdvVulnScansExpanded = toggleAdvVulnScansExpanded;
-window.selectAdvVulnScan = selectAdvVulnScan;
+window.toggleAdvVulnScanFindings = toggleAdvVulnScanFindings;
 window.cancelAdvScan = cancelAdvScan;
 window.startZapDaemon = startZapDaemon;
 window.stopZapDaemon = stopZapDaemon;

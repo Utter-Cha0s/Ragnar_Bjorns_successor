@@ -1507,6 +1507,111 @@ class AdvancedVulnScanner:
             logger.warning(f"Failed to set context '{context_name}' in-scope={in_scope}: {e}")
             return False
 
+    def _setup_api_scan(self, target: str, options: Dict, progress):
+        """Set up ZAP for API scanning: import OpenAPI spec, add custom headers, seed request"""
+        # Import OpenAPI spec if provided
+        openapi_url = options.get('openapi_url')
+        if openapi_url:
+            progress.current_check = "Importing OpenAPI specification..."
+            try:
+                self.zap_import_openapi(openapi_url, target)
+                logger.info(f"Imported OpenAPI spec from {openapi_url} for API scan")
+            except Exception as e:
+                logger.warning(f"Failed to import OpenAPI spec: {e}")
+
+        # Add custom headers via Replacer rules
+        custom_headers = options.get('custom_headers', '')
+        if custom_headers:
+            progress.current_check = "Applying custom headers..."
+            for i, line in enumerate(custom_headers.strip().split('\n')):
+                line = line.strip()
+                if not line or ':' not in line:
+                    continue
+                header_name, header_value = line.split(':', 1)
+                header_name = header_name.strip()
+                header_value = header_value.strip()
+                if not header_name:
+                    continue
+                rule_desc = f'ApiScan-Header-{i}'
+                try:
+                    # Remove existing rule with same name
+                    try:
+                        self._zap_api_call('JSON/replacer/action/removeRule', {'description': rule_desc})
+                    except Exception:
+                        pass
+                    self._zap_api_call('JSON/replacer/action/addRule', {
+                        'description': rule_desc,
+                        'enabled': 'true',
+                        'matchType': 'REQ_HEADER',
+                        'matchString': header_name,
+                        'replacement': header_value,
+                        'matchRegex': 'false',
+                        'initiators': ''
+                    })
+                    logger.info(f"Added custom header via Replacer: {header_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to add custom header '{header_name}': {e}")
+
+        # Seed ZAP with a custom HTTP request if method/body specified
+        http_method = options.get('http_method', 'GET')
+        request_body = options.get('request_body', '')
+
+        if http_method != 'GET' or request_body:
+            progress.current_check = f"Seeding {http_method} request to target..."
+            try:
+                # Parse target URL for host header
+                from urllib.parse import urlparse
+                parsed = urlparse(target)
+                host = parsed.netloc or parsed.hostname or target
+
+                # Build raw HTTP request message
+                path = parsed.path or '/'
+                if parsed.query:
+                    path += f'?{parsed.query}'
+
+                # Determine content type from custom headers or default
+                content_type = 'application/json'
+                if custom_headers:
+                    for line in custom_headers.strip().split('\n'):
+                        if ':' in line and line.split(':')[0].strip().lower() == 'content-type':
+                            content_type = line.split(':', 1)[1].strip()
+                            break
+
+                request_lines = [
+                    f'{http_method} {path} HTTP/1.1',
+                    f'Host: {host}',
+                ]
+
+                # Add custom headers to the raw request
+                if custom_headers:
+                    for line in custom_headers.strip().split('\n'):
+                        line = line.strip()
+                        if line and ':' in line:
+                            request_lines.append(line)
+
+                # Add content-type and body for methods that support it
+                if request_body and http_method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+                    has_content_type = any('content-type' in h.lower() for h in request_lines)
+                    if not has_content_type:
+                        request_lines.append(f'Content-Type: {content_type}')
+                    request_lines.append(f'Content-Length: {len(request_body)}')
+                    request_lines.append('')
+                    request_lines.append(request_body)
+                else:
+                    request_lines.append('')
+                    request_lines.append('')
+
+                raw_request = '\r\n'.join(request_lines)
+
+                self._zap_api_call('JSON/core/action/sendRequest', {
+                    'request': raw_request,
+                    'followRedirects': 'true'
+                })
+                logger.info(f"Seeded ZAP with {http_method} request to {target}")
+                time.sleep(2)
+            except Exception as e:
+                logger.warning(f"Failed to seed API request: {e}")
+
     def _run_zap_spider(self, scan_id: str, target: str, options: Dict):
         """Run ZAP spider to discover URLs"""
         if not self._is_zap_running():
@@ -1529,6 +1634,10 @@ class AdvancedVulnScanner:
         is_valid, error_msg = self._validate_target_url(target)
         if not is_valid:
             raise RuntimeError(f"Target URL validation failed: {error_msg}")
+
+        # API scan mode: import OpenAPI spec and/or seed custom request
+        if options.get('scan_mode') == 'api':
+            self._setup_api_scan(target, options, progress)
 
         progress.current_check = "Starting ZAP spider..."
 
@@ -1634,6 +1743,10 @@ class AdvancedVulnScanner:
         is_valid, error_msg = self._validate_target_url(target)
         if not is_valid:
             raise RuntimeError(f"Target URL validation failed: {error_msg}")
+
+        # API scan mode: import OpenAPI spec and/or seed custom request
+        if options.get('scan_mode') == 'api':
+            self._setup_api_scan(target, options, progress)
 
         progress.current_check = "Starting ZAP active scan..."
 
@@ -2049,6 +2162,10 @@ class AdvancedVulnScanner:
             logger.info(f"Using ZAP context ID {context_id} for scan (auth configured: {has_auth})")
         elif has_auth:
             options['_has_auth'] = has_auth
+
+        # API scan mode: import OpenAPI spec and/or seed custom request
+        if options.get('scan_mode') == 'api':
+            self._setup_api_scan(target, options, progress)
 
         alerts_fetched = False
 
