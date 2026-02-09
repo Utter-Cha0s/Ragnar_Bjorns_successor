@@ -1811,7 +1811,10 @@ class AdvancedVulnScanner:
         # API scan mode: import OpenAPI spec and/or seed custom request
         if options.get('scan_mode') == 'api':
             self._setup_api_scan(target, options, progress)
-        else:
+
+        # Auto-discover OpenAPI spec on target when no spec URL was provided.
+        # Runs in EVERY scan mode (Web or API) so endpoints are always seeded.
+        if not options.get('openapi_url'):
             try:
                 self._auto_discover_openapi_spec(target, options, progress)
             except Exception as e:
@@ -1925,7 +1928,10 @@ class AdvancedVulnScanner:
         # API scan mode: import OpenAPI spec and/or seed custom request
         if options.get('scan_mode') == 'api':
             self._setup_api_scan(target, options, progress)
-        else:
+
+        # Auto-discover OpenAPI spec on target when no spec URL was provided.
+        # Runs in EVERY scan mode (Web or API) so endpoints are always seeded.
+        if not options.get('openapi_url'):
             try:
                 self._auto_discover_openapi_spec(target, options, progress)
             except Exception as e:
