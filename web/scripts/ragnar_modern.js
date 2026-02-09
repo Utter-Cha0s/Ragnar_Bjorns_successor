@@ -13214,11 +13214,18 @@ async function zapImportOpenAPI() {
         return;
     }
 
+    const targetInput = document.getElementById('adv-vuln-target');
+    const targetUrl = targetInput ? targetInput.value.trim() : '';
+
     try {
+        const payload = { spec_url: specUrl };
+        if (targetUrl) {
+            payload.target_url = targetUrl;
+        }
         const response = await fetch('/api/zap/import-openapi', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ spec_url: specUrl })
+            body: JSON.stringify(payload)
         });
 
         const data = await response.json();

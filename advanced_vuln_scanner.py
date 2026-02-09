@@ -1517,7 +1517,18 @@ class AdvancedVulnScanner:
                 self.zap_import_openapi(openapi_url, target)
                 logger.info(f"Imported OpenAPI spec from {openapi_url} for API scan")
             except Exception as e:
-                logger.warning(f"Failed to import OpenAPI spec: {e}")
+                logger.warning(f"Failed to import OpenAPI spec via addon: {e}")
+
+            # Always seed endpoints from the spec into ZAP's site tree as a
+            # fallback.  The OpenAPI addon may not be installed, or ZAP may
+            # fail to parse the spec.  Seeding ensures every path and its
+            # parameters appear in the site tree so the active scanner can
+            # fuzz them.
+            progress.current_check = "Seeding API endpoints from spec..."
+            try:
+                self._seed_endpoints_from_spec(openapi_url, target, options)
+            except Exception as e:
+                logger.warning(f"Failed to seed endpoints from spec: {e}")
 
         # Add custom headers via Replacer rules
         custom_headers = options.get('custom_headers', '')
@@ -1611,6 +1622,113 @@ class AdvancedVulnScanner:
                 time.sleep(2)
             except Exception as e:
                 logger.warning(f"Failed to seed API request: {e}")
+
+    def _seed_endpoints_from_spec(self, spec_url: str, target: str, options: Dict):
+        """Fetch an OpenAPI spec and seed ZAP with a request to every endpoint.
+
+        This ensures all paths and their query/body parameters appear in ZAP's
+        site tree even when the OpenAPI addon is missing or fails to parse the
+        spec.  GET endpoints are seeded via ``accessUrl`` (which honours
+        Replacer rules such as auth headers); POST/PUT/PATCH/DELETE endpoints
+        are seeded via ``sendRequest`` with a JSON body built from schema
+        examples.
+        """
+        # Fetch the spec
+        req = urllib.request.Request(spec_url)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            spec = json.loads(response.read().decode('utf-8'))
+
+        # Resolve base URL: prefer the target the user entered, fall back to
+        # the spec's servers list, and finally the spec URL's origin.
+        parsed_target = urllib.parse.urlparse(target)
+        base_url = f"{parsed_target.scheme}://{parsed_target.netloc}"
+
+        servers = spec.get('servers', [])
+        if servers and servers[0].get('url', '').startswith('http'):
+            base_url = servers[0]['url'].rstrip('/')
+
+        paths = spec.get('paths', {})
+        custom_headers = options.get('custom_headers', '')
+        seeded = 0
+
+        for path, methods in paths.items():
+            for method, details in methods.items():
+                if method not in ('get', 'post', 'put', 'patch', 'delete'):
+                    continue
+
+                # Build URL with query-parameter examples
+                url = f"{base_url}{path}"
+                params = details.get('parameters', [])
+                query_parts = {}
+                for param in params:
+                    if param.get('in') == 'query':
+                        name = param.get('name', '')
+                        example = (param.get('schema') or {}).get('example', 'test')
+                        if name:
+                            query_parts[name] = example
+                if query_parts:
+                    url += '?' + urllib.parse.urlencode(query_parts)
+
+                try:
+                    if method == 'get':
+                        self._zap_api_call('JSON/core/action/accessUrl', {
+                            'url': url,
+                            'followRedirects': 'true'
+                        })
+                    else:
+                        # Build a raw HTTP request for non-GET methods
+                        parsed = urllib.parse.urlparse(url)
+                        host = parsed.netloc
+                        req_path = parsed.path or '/'
+                        if parsed.query:
+                            req_path += f'?{parsed.query}'
+
+                        # Construct JSON body from schema examples
+                        body = ''
+                        rb = details.get('requestBody', {})
+                        if rb:
+                            json_schema = (rb.get('content', {})
+                                             .get('application/json', {})
+                                             .get('schema', {}))
+                            props = json_schema.get('properties', {})
+                            if props:
+                                body_obj = {}
+                                for pname, pschema in props.items():
+                                    body_obj[pname] = pschema.get('example', '')
+                                body = json.dumps(body_obj)
+
+                        request_lines = [
+                            f'{method.upper()} {req_path} HTTP/1.1',
+                            f'Host: {host}',
+                            'Content-Type: application/json',
+                        ]
+
+                        # Include custom headers (e.g. auth)
+                        if custom_headers:
+                            for hline in custom_headers.strip().split('\n'):
+                                hline = hline.strip()
+                                if hline and ':' in hline:
+                                    request_lines.append(hline)
+
+                        if body:
+                            request_lines.append(f'Content-Length: {len(body)}')
+                        request_lines.append('')
+                        request_lines.append(body)
+
+                        raw_request = '\r\n'.join(request_lines)
+                        self._zap_api_call('JSON/core/action/sendRequest', {
+                            'request': raw_request,
+                            'followRedirects': 'true'
+                        })
+
+                    seeded += 1
+                    logger.info(f"Seeded endpoint: {method.upper()} {url}")
+                except Exception as e:
+                    logger.warning(f"Failed to seed {method.upper()} {path}: {e}")
+
+                time.sleep(0.3)
+
+        logger.info(f"Seeded {seeded} endpoints from OpenAPI spec")
 
     def _run_zap_spider(self, scan_id: str, target: str, options: Dict):
         """Run ZAP spider to discover URLs"""
