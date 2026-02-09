@@ -1623,29 +1623,84 @@ class AdvancedVulnScanner:
             except Exception as e:
                 logger.warning(f"Failed to seed API request: {e}")
 
-    def _seed_endpoints_from_spec(self, spec_url: str, target: str, options: Dict):
-        """Fetch an OpenAPI spec and seed ZAP with a request to every endpoint.
+    def _auto_discover_openapi_spec(self, target: str, options: Dict, progress):
+        """Auto-discover an OpenAPI/Swagger spec on the target and seed endpoints.
 
-        This ensures all paths and their query/body parameters appear in ZAP's
+        Probes common spec paths on the target host.  When a valid spec is
+        found its endpoints are seeded into ZAP's site tree so the active
+        scanner can fuzz them.  This runs for every scan mode (Web or API)
+        so the user does not need to manually provide a spec URL.
+        """
+        parsed = urllib.parse.urlparse(target)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+
+        common_paths = [
+            '/openapi.json',
+            '/swagger.json',
+            '/v3/api-docs',
+            '/v2/api-docs',
+            '/swagger/v1/swagger.json',
+            '/api/openapi.json',
+            '/api/swagger.json',
+        ]
+
+        for probe_path in common_paths:
+            probe_url = f"{base}{probe_path}"
+            try:
+                probe_req = urllib.request.Request(probe_url, method='GET')
+                probe_req.add_header('Accept', 'application/json')
+                with urllib.request.urlopen(probe_req, timeout=8) as resp:
+                    body = resp.read().decode('utf-8')
+                    spec = json.loads(body)
+                    if 'paths' in spec and spec['paths']:
+                        logger.info(f"Auto-discovered OpenAPI spec at {probe_url} "
+                                    f"({len(spec['paths'])} paths)")
+                        progress.current_check = f"Seeding endpoints from {probe_path}..."
+
+                        # Also try the addon import (best-effort)
+                        try:
+                            self.zap_import_openapi(probe_url, target)
+                        except Exception:
+                            pass
+
+                        self._seed_endpoints_from_spec(spec, target, options)
+                        return True
+            except Exception:
+                continue
+
+        logger.info("No OpenAPI spec auto-discovered on target")
+        return False
+
+    def _seed_endpoints_from_spec(self, spec_or_url, target: str, options: Dict):
+        """Seed ZAP with a request to every endpoint in an OpenAPI spec.
+
+        ``spec_or_url`` may be a parsed spec dict or a URL string.  This
+        ensures all paths and their query/body parameters appear in ZAP's
         site tree even when the OpenAPI addon is missing or fails to parse the
         spec.  GET endpoints are seeded via ``accessUrl`` (which honours
         Replacer rules such as auth headers); POST/PUT/PATCH/DELETE endpoints
         are seeded via ``sendRequest`` with a JSON body built from schema
         examples.
         """
-        # Fetch the spec
-        req = urllib.request.Request(spec_url)
-        with urllib.request.urlopen(req, timeout=15) as response:
-            spec = json.loads(response.read().decode('utf-8'))
+        if isinstance(spec_or_url, dict):
+            spec = spec_or_url
+        else:
+            req = urllib.request.Request(spec_or_url)
+            with urllib.request.urlopen(req, timeout=15) as response:
+                spec = json.loads(response.read().decode('utf-8'))
 
-        # Resolve base URL: prefer the target the user entered, fall back to
-        # the spec's servers list, and finally the spec URL's origin.
+        # Resolve base URL: always use scheme+host+port only — never carry
+        # a path from the target or the spec's servers, because spec paths
+        # are already absolute (e.g. /api/public).
         parsed_target = urllib.parse.urlparse(target)
         base_url = f"{parsed_target.scheme}://{parsed_target.netloc}"
 
         servers = spec.get('servers', [])
         if servers and servers[0].get('url', '').startswith('http'):
-            base_url = servers[0]['url'].rstrip('/')
+            srv_parsed = urllib.parse.urlparse(servers[0]['url'])
+            base_url = f"{srv_parsed.scheme}://{srv_parsed.netloc}"
+
+        logger.info(f"Seeding endpoints with base URL: {base_url}")
 
         paths = spec.get('paths', {})
         custom_headers = options.get('custom_headers', '')
@@ -1756,6 +1811,11 @@ class AdvancedVulnScanner:
         # API scan mode: import OpenAPI spec and/or seed custom request
         if options.get('scan_mode') == 'api':
             self._setup_api_scan(target, options, progress)
+        else:
+            try:
+                self._auto_discover_openapi_spec(target, options, progress)
+            except Exception as e:
+                logger.debug(f"OpenAPI auto-discovery skipped: {e}")
 
         progress.current_check = "Starting ZAP spider..."
 
@@ -1865,6 +1925,11 @@ class AdvancedVulnScanner:
         # API scan mode: import OpenAPI spec and/or seed custom request
         if options.get('scan_mode') == 'api':
             self._setup_api_scan(target, options, progress)
+        else:
+            try:
+                self._auto_discover_openapi_spec(target, options, progress)
+            except Exception as e:
+                logger.debug(f"OpenAPI auto-discovery skipped: {e}")
 
         progress.current_check = "Starting ZAP active scan..."
 
@@ -2284,6 +2349,13 @@ class AdvancedVulnScanner:
         # API scan mode: import OpenAPI spec and/or seed custom request
         if options.get('scan_mode') == 'api':
             self._setup_api_scan(target, options, progress)
+        else:
+            # Auto-discover OpenAPI spec on target so endpoints are seeded
+            # even in Web scan mode.
+            try:
+                self._auto_discover_openapi_spec(target, options, progress)
+            except Exception as e:
+                logger.debug(f"OpenAPI auto-discovery skipped: {e}")
 
         alerts_fetched = False
 
@@ -3066,7 +3138,11 @@ class AdvancedVulnScanner:
         try:
             params = {'url': spec_url}
             if target_url:
-                params['hostOverride'] = target_url
+                # hostOverride must be scheme+host+port only — never include a
+                # path, otherwise ZAP prepends it to every spec path (e.g.
+                # /api + /api/public → /api/api/public).
+                parsed = urllib.parse.urlparse(target_url)
+                params['hostOverride'] = f"{parsed.scheme}://{parsed.netloc}"
 
             self._zap_api_call('JSON/openapi/action/importUrl', params)
             logger.info(f"Imported OpenAPI spec from {spec_url}")
