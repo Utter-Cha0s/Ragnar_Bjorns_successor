@@ -12278,7 +12278,8 @@ function updateActiveScans(scans, options = {}) {
         critical: 'bg-red-600 text-white',
         high: 'bg-orange-500 text-white',
         medium: 'bg-yellow-500 text-black',
-        low: 'bg-blue-500 text-white'
+        low: 'bg-blue-500 text-white',
+        info: 'bg-gray-500 text-white'
     };
 
     // Save log panel scroll positions before re-render
@@ -12294,7 +12295,7 @@ function updateActiveScans(scans, options = {}) {
         const scanId = scan.scan_id;
         const mapEntry = scanFindingsMap.get(scanId) || { findings: [], counts: {} };
         const counts = mapEntry.counts || {};
-        const findingsCount = mapEntry.findings.length || scan.findings_count || 0;
+        const findingsCount = scan.findings_count || mapEntry.findings.length || 0;
         const riskScore = (counts.critical || 0) * 10 + (counts.high || 0) * 7 + (counts.medium || 0) * 4 + (counts.low || 0) * 1;
         const riskColor = riskScore >= 50 ? 'text-red-400' : riskScore >= 30 ? 'text-orange-400' : riskScore >= 15 ? 'text-yellow-400' : 'text-green-400';
         const durationSeconds = getScanDurationSeconds(scan);
@@ -12330,7 +12331,7 @@ function updateActiveScans(scans, options = {}) {
                     </div>
 
                     <div class="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-                        ${['critical', 'high', 'medium', 'low'].map(severity => `
+                        ${['critical', 'high', 'medium', 'low', 'info'].map(severity => `
                             <span class="px-2 py-0.5 rounded ${severityBadgeClasses[severity]}">
                                 ${severity.toUpperCase()}: ${counts[severity] || 0}
                             </span>
@@ -12855,7 +12856,7 @@ let advVulnScanFindingsMap = new Map();
 
 async function loadAdvVulnFindings() {
     try {
-        const response = await fetch('/api/vuln-advanced/findings?limit=200');
+        const response = await fetch('/api/vuln-advanced/findings?limit=1000');
         const data = await response.json();
 
         if (!data.success) return;

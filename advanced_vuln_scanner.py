@@ -3770,10 +3770,13 @@ class AdvancedVulnScanner:
     def get_all_findings(self, severity: str = None, limit: int = 100) -> List[Dict]:
         """Get all findings across all scans (combines memory and database)"""
         all_findings = []
+        finding_scan_map = {}  # finding_id -> scan_id
 
         with self._lock:
-            for findings in self.scan_results.values():
-                all_findings.extend(findings)
+            for scan_id, findings in self.scan_results.items():
+                for f in findings:
+                    all_findings.append(f)
+                    finding_scan_map[f.finding_id] = scan_id
 
         # Also get from database
         if self._db:
@@ -3782,8 +3785,12 @@ class AdvancedVulnScanner:
                 # Merge with memory findings (avoid duplicates by finding_id)
                 memory_ids = {f.finding_id for f in all_findings}
                 for db_finding in db_findings:
-                    if db_finding.get('finding_id') not in memory_ids:
-                        all_findings.append(self._dict_to_finding(db_finding))
+                    fid = db_finding.get('finding_id')
+                    if fid not in memory_ids:
+                        f = self._dict_to_finding(db_finding)
+                        all_findings.append(f)
+                        if db_finding.get('scan_id'):
+                            finding_scan_map[f.finding_id] = db_finding['scan_id']
             except Exception as e:
                 logger.debug(f"Error getting findings from DB: {e}")
 
@@ -3805,7 +3812,12 @@ class AdvancedVulnScanner:
         }
         all_findings.sort(key=lambda f: (severity_order.get(f.severity, 5), f.timestamp), reverse=True)
 
-        return [f.to_dict() for f in all_findings[:limit]]
+        results = []
+        for f in all_findings[:limit]:
+            d = f.to_dict()
+            d['scan_id'] = finding_scan_map.get(f.finding_id, '')
+            results.append(d)
+        return results
     
     def get_summary(self) -> Dict[str, Any]:
         """Get overall vulnerability summary (combines memory and database)"""
