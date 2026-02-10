@@ -11204,6 +11204,27 @@ def cancel_advanced_vuln_scan(scan_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/vuln-advanced/scan/<scan_id>/logs')
+def get_advanced_vuln_scan_logs(scan_id):
+    """Get live log entries for a specific scan"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+
+        since_index = request.args.get('since', 0, type=int)
+        logs = scanner.get_scan_logs(scan_id, since_index)
+
+        return jsonify({
+            'success': True,
+            'logs': logs,
+            'total': since_index + len(logs)
+        })
+    except Exception as e:
+        logger.error(f"Error getting scan logs: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/vuln-advanced/scan/<scan_id>', methods=['DELETE'])
 def delete_advanced_vuln_scan(scan_id):
     """Delete a scan and its findings"""
