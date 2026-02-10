@@ -12281,6 +12281,15 @@ function updateActiveScans(scans, options = {}) {
         low: 'bg-blue-500 text-white'
     };
 
+    // Save log panel scroll positions before re-render
+    const logScrollPositions = new Map();
+    for (const logScanId of advVulnExpandedLogIds) {
+        const logPanel = document.getElementById(`scan-logs-${logScanId}`);
+        if (logPanel) {
+            logScrollPositions.set(logScanId, logPanel.scrollTop);
+        }
+    }
+
     container.innerHTML = scansToRender.map(scan => {
         const scanId = scan.scan_id;
         const mapEntry = scanFindingsMap.get(scanId) || { findings: [], counts: {} };
@@ -12398,6 +12407,14 @@ function updateActiveScans(scans, options = {}) {
             </div>
         `;
     }).join('');
+
+    // Restore log panel scroll positions after re-render
+    for (const [logScanId, scrollTop] of logScrollPositions) {
+        const logPanel = document.getElementById(`scan-logs-${logScanId}`);
+        if (logPanel) {
+            logPanel.scrollTop = scrollTop;
+        }
+    }
 }
 
 function toggleAdvVulnScansExpanded() {
@@ -12600,8 +12617,12 @@ async function fetchScanLogs(scanId) {
             // Update the log panel if it's visible
             const logPanel = document.getElementById(`scan-logs-${scanId}`);
             if (logPanel) {
+                // Only auto-scroll if user is already near the bottom
+                const isNearBottom = (logPanel.scrollHeight - logPanel.scrollTop - logPanel.clientHeight) < 50;
                 logPanel.innerHTML = renderLogEntries(cache.entries);
-                logPanel.scrollTop = logPanel.scrollHeight;
+                if (isNearBottom) {
+                    logPanel.scrollTop = logPanel.scrollHeight;
+                }
             }
         }
     } catch (error) {
