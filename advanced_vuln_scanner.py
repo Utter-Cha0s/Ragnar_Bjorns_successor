@@ -2535,9 +2535,9 @@ class AdvancedVulnScanner:
 
         spider_params = {
             'url': target,
-            'maxChildren': str(options.get('max_children', 10)),
+            'maxChildren': str(options.get('max_children', 20)),
             'recurse': 'true',
-            'subtreeOnly': 'true'
+            'subtreeOnly': 'false' if has_auth else 'true'  # Crawl full domain when authenticated
         }
         # Pass context name if auth is configured
         if has_auth:
@@ -2573,6 +2573,19 @@ class AdvancedVulnScanner:
         if time.time() - spider_start >= spider_timeout:
             self._scan_log(scan_id, 'warning', "Spider phase timed out")
 
+        # Log URLs discovered by spider
+        try:
+            urls_resp = self._zap_api_call('JSON/spider/view/results', {'scanId': spider_id})
+            urls_found = urls_resp.get('results', [])
+            self._scan_log(scan_id, 'info', f"Spider completed - discovered {len(urls_found)} URLs")
+            if urls_found:
+                for url in urls_found[:15]:  # Log first 15
+                    self._scan_log(scan_id, 'debug', f"  URL: {url}")
+                if len(urls_found) > 15:
+                    self._scan_log(scan_id, 'info', f"  ... and {len(urls_found) - 15} more URLs")
+        except Exception as e:
+            self._scan_log(scan_id, 'debug', f"Could not retrieve spider results: {e}")
+
     def _run_zap_ajax_spider_phase(self, scan_id: str, target: str, options: Dict, progress: ScanProgress):
         """Ajax spider phase of full scan"""
         try:
@@ -2591,12 +2604,25 @@ class AdvancedVulnScanner:
                     "No real browser detected - AJAX spider using htmlunit fallback. "
                     "Install Chrome/Chromium or Firefox for better JavaScript rendering.")
 
+            # Use longer duration for authenticated scans (more pages to discover)
+            has_auth = options.get('_context_id') or options.get('_has_auth')
+            max_duration = options.get('ajax_spider_duration', 120 if has_auth else 60)
+
+            # Set max duration option in ZAP before starting
+            try:
+                self._zap_api_call('JSON/ajaxSpider/action/setOptionMaxDuration', {
+                    'Integer': str(max_duration // 60 or 1)  # ZAP expects minutes
+                })
+            except Exception:
+                pass  # Option may not be available in older ZAP versions
+
+            self._scan_log(scan_id, 'info', f"AJAX spider starting with max duration {max_duration}s")
+
             self._zap_api_call('JSON/ajaxSpider/action/scan', {
                 'url': target,
                 'inScope': 'true'
             })
 
-            max_duration = options.get('ajax_spider_duration', 60)  # seconds
             start_time = time.time()
 
             while time.time() - start_time < max_duration:
@@ -2609,8 +2635,18 @@ class AdvancedVulnScanner:
                 progress.progress_percent = 30 + int((elapsed / max_duration) * 20)  # 30-50%
                 time.sleep(3)
 
+            elapsed_total = int(time.time() - start_time)
+
             # Stop ajax spider if still running
             self._zap_api_call('JSON/ajaxSpider/action/stop')
+
+            # Log results
+            try:
+                results_resp = self._zap_api_call('JSON/ajaxSpider/view/numberOfResults')
+                ajax_results = results_resp.get('numberOfResults', '0')
+                self._scan_log(scan_id, 'info', f"AJAX spider completed in {elapsed_total}s - found {ajax_results} resources")
+            except Exception:
+                self._scan_log(scan_id, 'info', f"AJAX spider completed in {elapsed_total}s")
 
         except Exception as e:
             self._scan_log(scan_id, 'warning', f"Ajax spider phase error (continuing): {e}")
@@ -2663,11 +2699,11 @@ class AdvancedVulnScanner:
                 if scan_progress >= 100:
                     break
 
-                # Check for stalled scan
+                # Check for stalled scan (some vuln checks like timing-based SQLi take time)
                 if scan_progress == last_progress:
                     stall_count += 1
-                    if stall_count >= 12:  # 60 seconds of no progress
-                        self._scan_log(scan_id, 'warning', f"Active scan phase stalled at {scan_progress}%, stopping active scan...")
+                    if stall_count >= 24:  # 120 seconds of no progress
+                        self._scan_log(scan_id, 'warning', f"Active scan phase stalled at {scan_progress}% for 2 minutes, stopping...")
                         break
                 else:
                     stall_count = 0
