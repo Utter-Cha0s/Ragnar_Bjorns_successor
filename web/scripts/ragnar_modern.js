@@ -12224,6 +12224,12 @@ async function loadAdvancedVulnData() {
         // Update stats after findings are loaded
         updateVulnStats(data.active_scans, advVulnFindingsCache);
 
+        // Auto-start polling if any scans are running (handles page refresh / tab switch)
+        const hasRunning = (data.active_scans || []).some(s => s.status === 'running');
+        if (hasRunning && !advVulnRefreshInterval) {
+            startAdvVulnPolling();
+        }
+
     } catch (error) {
         console.error('Error loading advanced vuln data:', error);
         showAdvVulnNotAvailable();
@@ -12272,14 +12278,24 @@ function updateActiveScans(scans, options = {}) {
         critical: 'bg-red-600 text-white',
         high: 'bg-orange-500 text-white',
         medium: 'bg-yellow-500 text-black',
-        low: 'bg-blue-500 text-white'
+        low: 'bg-blue-500 text-white',
+        info: 'bg-gray-500 text-white'
     };
+
+    // Save log panel scroll positions before re-render
+    const logScrollPositions = new Map();
+    for (const logScanId of advVulnExpandedLogIds) {
+        const logPanel = document.getElementById(`scan-logs-${logScanId}`);
+        if (logPanel) {
+            logScrollPositions.set(logScanId, logPanel.scrollTop);
+        }
+    }
 
     container.innerHTML = scansToRender.map(scan => {
         const scanId = scan.scan_id;
         const mapEntry = scanFindingsMap.get(scanId) || { findings: [], counts: {} };
         const counts = mapEntry.counts || {};
-        const findingsCount = mapEntry.findings.length || scan.findings_count || 0;
+        const findingsCount = scan.findings_count || mapEntry.findings.length || 0;
         const riskScore = (counts.critical || 0) * 10 + (counts.high || 0) * 7 + (counts.medium || 0) * 4 + (counts.low || 0) * 1;
         const riskColor = riskScore >= 50 ? 'text-red-400' : riskScore >= 30 ? 'text-orange-400' : riskScore >= 15 ? 'text-yellow-400' : 'text-green-400';
         const durationSeconds = getScanDurationSeconds(scan);
@@ -12292,10 +12308,12 @@ function updateActiveScans(scans, options = {}) {
         const performedAt = scan.completed_at || scan.started_at;
         const performedLabel = scan.completed_at ? 'Completed' : 'Started';
         const isExpanded = advVulnExpandedScanIds.has(scanId);
+        const isLogsExpanded = advVulnExpandedLogIds.has(scanId);
+        const hasExpandedPanel = isExpanded || isLogsExpanded;
 
         return `
             <div>
-                <div class="p-4 rounded-lg border ${isExpanded ? 'border-cyan-500/50 rounded-b-none' : 'border-slate-700'} bg-slate-800/60 hover:bg-slate-700/70 transition cursor-pointer"
+                <div class="p-4 rounded-lg border ${hasExpandedPanel ? (isExpanded ? 'border-cyan-500/50' : 'border-green-500/50') + ' rounded-b-none' : 'border-slate-700'} bg-slate-800/60 hover:bg-slate-700/70 transition cursor-pointer"
                      onclick="toggleAdvVulnScanFindings('${scanId}')">
                     <div class="flex items-start justify-between gap-3">
                         <div>
@@ -12313,7 +12331,7 @@ function updateActiveScans(scans, options = {}) {
                     </div>
 
                     <div class="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-                        ${['critical', 'high', 'medium', 'low'].map(severity => `
+                        ${['critical', 'high', 'medium', 'low', 'info'].map(severity => `
                             <span class="px-2 py-0.5 rounded ${severityBadgeClasses[severity]}">
                                 ${severity.toUpperCase()}: ${counts[severity] || 0}
                             </span>
@@ -12340,7 +12358,7 @@ function updateActiveScans(scans, options = {}) {
                                 <span>${progress}%</span>
                             </div>
                             <div class="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                                <div class="h-full bg-blue-500 transition-all duration-500" style="width: ${progress}%"></div>
+                                <div class="h-full bg-blue-500 transition-all duration-500 ${progress === 0 ? 'animate-pulse !w-full opacity-30' : ''}" style="${progress > 0 ? `width: ${progress}%` : ''}"></div>
                             </div>
                         </div>
                     ` : ''}
@@ -12367,19 +12385,37 @@ function updateActiveScans(scans, options = {}) {
                                 </button>
                             `}
                         </div>
-                        <button onclick="event.stopPropagation(); toggleAdvVulnScanFindings('${scanId}')"
-                                class="flex items-center gap-1 text-xs ${isExpanded ? 'text-cyan-400' : 'text-gray-400 hover:text-gray-200'} transition-colors">
-                            <span>${isExpanded ? 'Hide' : 'Show'} Findings</span>
-                            <svg class="w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                            </svg>
-                        </button>
+                        <div class="flex items-center gap-3">
+                            <button onclick="event.stopPropagation(); toggleAdvVulnScanLogs('${scanId}')"
+                                    class="flex items-center gap-1 text-xs ${advVulnExpandedLogIds.has(scanId) ? 'text-green-400' : 'text-gray-400 hover:text-gray-200'} transition-colors">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                </svg>
+                                <span>${advVulnExpandedLogIds.has(scanId) ? 'Hide' : 'Show'} Logs</span>
+                            </button>
+                            <button onclick="event.stopPropagation(); toggleAdvVulnScanFindings('${scanId}')"
+                                    class="flex items-center gap-1 text-xs ${isExpanded ? 'text-cyan-400' : 'text-gray-400 hover:text-gray-200'} transition-colors">
+                                <span>${isExpanded ? 'Hide' : 'Show'} Findings</span>
+                                <svg class="w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                 </div>
+                ${isLogsExpanded ? renderInlineScanLogs(scanId, isExpanded) : ''}
                 ${isExpanded ? renderInlineScanFindings(scanId, scan) : ''}
             </div>
         `;
     }).join('');
+
+    // Restore log panel scroll positions after re-render
+    for (const [logScanId, scrollTop] of logScrollPositions) {
+        const logPanel = document.getElementById(`scan-logs-${logScanId}`);
+        if (logPanel) {
+            logPanel.scrollTop = scrollTop;
+        }
+    }
 }
 
 function toggleAdvVulnScansExpanded() {
@@ -12553,6 +12589,81 @@ function renderInlineScanFindings(scanId, scan) {
     `;
 }
 
+// ============================================================================
+// SCAN LIVE LOGS FUNCTIONS
+// ============================================================================
+
+function toggleAdvVulnScanLogs(scanId) {
+    if (advVulnExpandedLogIds.has(scanId)) {
+        advVulnExpandedLogIds.delete(scanId);
+    } else {
+        advVulnExpandedLogIds.add(scanId);
+        // Immediately fetch logs
+        fetchScanLogs(scanId);
+    }
+    updateActiveScans(advVulnScansCache, { preserveSelection: true });
+}
+
+async function fetchScanLogs(scanId) {
+    try {
+        const cache = advVulnLogCache.get(scanId) || { entries: [], lastIndex: 0 };
+        const response = await fetch(`/api/vuln-advanced/scan/${scanId}/logs?since=${cache.lastIndex}`);
+        const data = await response.json();
+
+        if (data.success && data.logs.length > 0) {
+            cache.entries = cache.entries.concat(data.logs);
+            cache.lastIndex = data.total;
+            advVulnLogCache.set(scanId, cache);
+
+            // Update the log panel if it's visible
+            const logPanel = document.getElementById(`scan-logs-${scanId}`);
+            if (logPanel) {
+                // Only auto-scroll if user is already near the bottom
+                const isNearBottom = (logPanel.scrollHeight - logPanel.scrollTop - logPanel.clientHeight) < 50;
+                logPanel.innerHTML = renderLogEntries(cache.entries);
+                if (isNearBottom) {
+                    logPanel.scrollTop = logPanel.scrollHeight;
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error fetching scan logs:', error);
+    }
+}
+
+function renderLogEntries(entries) {
+    if (!entries.length) {
+        return '<p class="text-gray-500 text-xs font-mono">Waiting for log entries...</p>';
+    }
+
+    const levelColors = {
+        'info': 'text-blue-400',
+        'warning': 'text-yellow-400',
+        'error': 'text-red-400',
+        'debug': 'text-gray-500'
+    };
+
+    return entries.map(entry => {
+        const time = new Date(entry.timestamp).toLocaleTimeString();
+        const levelClass = levelColors[entry.level] || 'text-gray-300';
+        return `<div class="text-xs font-mono py-0.5 leading-relaxed">
+            <span class="text-gray-500">${escapeHtml(time)}</span>
+            <span class="${levelClass} uppercase font-semibold">[${escapeHtml(entry.level)}]</span>
+            <span class="text-gray-200">${escapeHtml(entry.message)}</span>
+        </div>`;
+    }).join('');
+}
+
+function renderInlineScanLogs(scanId, findingsAlsoExpanded = false) {
+    const cache = advVulnLogCache.get(scanId) || { entries: [] };
+    return `
+        <div class="border border-t-0 border-green-500/50 ${findingsAlsoExpanded ? '' : 'rounded-b-lg'} bg-slate-950/80 p-3 max-h-[300px] overflow-y-auto scrollbar-thin"
+             id="scan-logs-${scanId}">
+            ${renderLogEntries(cache.entries)}
+        </div>
+    `;
+}
+
 async function deleteAdvScan(scanId) {
     if (!confirm('Delete this scan and its findings?')) return;
 
@@ -12673,6 +12784,24 @@ function updateScannerStatus(scanners) {
 
     // Update ZAP control panel visibility and status
     updateZapControlPanel(scanners);
+
+    // Show AJAX spider browser warning if no real browser detected
+    const browserWarning = document.getElementById('ajax-spider-browser-warning');
+    if (browserWarning) {
+        if (!scanners.ajax_spider_browser || scanners.ajax_spider_browser === 'htmlunit') {
+            browserWarning.classList.remove('hidden');
+            browserWarning.innerHTML = `
+                <div class="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-700/30 rounded px-3 py-2 mt-3">
+                    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                    </svg>
+                    <span>No browser detected for AJAX spider. Install Chrome/Chromium or Firefox for better JavaScript crawling during scans. On Raspberry Pi, Chromium is usually pre-installed.</span>
+                </div>
+            `;
+        } else {
+            browserWarning.classList.add('hidden');
+        }
+    }
 }
 
 function updateVulnSummary(summary) {
@@ -12720,12 +12849,14 @@ function updateVulnStats(scans, findings) {
 let advVulnFindingsCache = [];
 let advVulnShowAllScans = false;
 let advVulnExpandedScanIds = new Set();
+let advVulnExpandedLogIds = new Set();
+let advVulnLogCache = new Map(); // Map<scanId, {entries: [], lastIndex: 0}>
 let advVulnScansCache = [];
 let advVulnScanFindingsMap = new Map();
 
 async function loadAdvVulnFindings() {
     try {
-        const response = await fetch('/api/vuln-advanced/findings?limit=200');
+        const response = await fetch('/api/vuln-advanced/findings?limit=1000');
         const data = await response.json();
 
         if (!data.success) return;
@@ -13065,6 +13196,18 @@ function startAdvVulnPolling() {
             return;
         }
         await refreshAdvVulnData();
+
+        // Fetch logs for any expanded log panels
+        for (const scanId of advVulnExpandedLogIds) {
+            fetchScanLogs(scanId);
+        }
+
+        // Auto-stop polling if no scans are running anymore
+        const stillRunning = (advVulnScansCache || []).some(s => s.status === 'running');
+        if (!stillRunning) {
+            clearInterval(advVulnRefreshInterval);
+            advVulnRefreshInterval = null;
+        }
     }, 2000);
 }
 
@@ -13798,6 +13941,7 @@ window.toggleRequestBodyField = toggleRequestBodyField;
 window.refreshAdvVulnData = refreshAdvVulnData;
 window.toggleAdvVulnScansExpanded = toggleAdvVulnScansExpanded;
 window.toggleAdvVulnScanFindings = toggleAdvVulnScanFindings;
+window.toggleAdvVulnScanLogs = toggleAdvVulnScanLogs;
 window.cancelAdvScan = cancelAdvScan;
 window.startZapDaemon = startZapDaemon;
 window.stopZapDaemon = stopZapDaemon;

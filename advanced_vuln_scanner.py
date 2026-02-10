@@ -132,7 +132,8 @@ class ScanProgress:
     error_message: str = ""
     auth_type: str = ""  # Auth type used for this scan (cookie, bearer_token, etc.)
     auth_status: str = ""  # Auth validation status (applied, verified, failed)
-    
+    log_entries: List[Dict[str, str]] = field(default_factory=list)  # Buffered scan log entries
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'scan_id': self.scan_id,
@@ -444,6 +445,30 @@ class AdvancedVulnScanner:
         # Persist progress to database
         self._save_scan_to_db(scan_id, progress)
 
+    def _scan_log(self, scan_id: str, level: str, message: str):
+        """Log a message and buffer it for the scan's live log feed"""
+        log_func = getattr(logger, level, logger.info)
+        log_func(f"[{scan_id}] {message}")
+
+        progress = self.active_scans.get(scan_id)
+        if progress:
+            entry = {
+                'timestamp': datetime.now().isoformat(),
+                'level': level,
+                'message': message
+            }
+            progress.log_entries.append(entry)
+            # Cap log buffer to prevent memory bloat
+            if len(progress.log_entries) > 500:
+                progress.log_entries = progress.log_entries[-500:]
+
+    def get_scan_logs(self, scan_id: str, since_index: int = 0) -> List[Dict]:
+        """Get log entries for a scan, optionally starting from an index"""
+        progress = self.active_scans.get(scan_id)
+        if progress:
+            return progress.log_entries[since_index:]
+        return []
+
     def _generate_api_key(self) -> str:
         """Generate a random API key for ZAP"""
         import secrets
@@ -506,6 +531,65 @@ class AdvancedVulnScanner:
             self._tool_paths['zap'] = None
             logger.debug("OWASP ZAP not found")
 
+        # Detect browser for AJAX spider (chromium/chrome preferred, then firefox, fallback htmlunit)
+        self._detected_browser = None
+
+        if is_windows:
+            # Check common Windows Chrome paths
+            chrome_paths = [
+                os.path.join(os.environ.get('PROGRAMFILES', 'C:\\Program Files'), 'Google', 'Chrome', 'Application', 'chrome.exe'),
+                os.path.join(os.environ.get('PROGRAMFILES(X86)', 'C:\\Program Files (x86)'), 'Google', 'Chrome', 'Application', 'chrome.exe'),
+                os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            ]
+            firefox_paths = [
+                os.path.join(os.environ.get('PROGRAMFILES', 'C:\\Program Files'), 'Mozilla Firefox', 'firefox.exe'),
+                os.path.join(os.environ.get('PROGRAMFILES(X86)', 'C:\\Program Files (x86)'), 'Mozilla Firefox', 'firefox.exe'),
+            ]
+
+            for path in chrome_paths:
+                if os.path.exists(path):
+                    self._detected_browser = 'chrome-headless'
+                    logger.info(f"Found Chrome for AJAX spider at {path}")
+                    break
+
+            if not self._detected_browser:
+                for exe in ['chrome', 'chromium']:
+                    if shutil.which(exe):
+                        self._detected_browser = 'chrome-headless'
+                        logger.info(f"Found {exe} in PATH for AJAX spider")
+                        break
+
+            if not self._detected_browser:
+                for path in firefox_paths:
+                    if os.path.exists(path):
+                        self._detected_browser = 'firefox-headless'
+                        logger.info(f"Found Firefox for AJAX spider at {path}")
+                        break
+
+            if not self._detected_browser and shutil.which('firefox'):
+                self._detected_browser = 'firefox-headless'
+                logger.info("Found Firefox in PATH for AJAX spider")
+        else:
+            # Linux/Mac - check in priority order (Raspberry Pi has chromium-browser)
+            browser_checks = [
+                ('chrome-headless', ['chromium-browser', 'chromium', 'google-chrome', 'google-chrome-stable']),
+                ('firefox-headless', ['firefox', 'firefox-esr']),
+            ]
+
+            for browser_id, executables in browser_checks:
+                for exe in executables:
+                    if shutil.which(exe):
+                        self._detected_browser = browser_id
+                        logger.info(f"Found {exe} for AJAX spider (browser ID: {browser_id})")
+                        break
+                if self._detected_browser:
+                    break
+
+        if not self._detected_browser:
+            logger.warning("No browser detected for AJAX spider - will use htmlunit fallback. "
+                           "Install Chrome/Chromium or Firefox for better JavaScript crawling.")
+            self._detected_browser = 'htmlunit'
+
     def is_available(self) -> bool:
         """Check if advanced vuln scanning is available"""
         return get_server_capabilities().capabilities.advanced_vuln_enabled
@@ -522,6 +606,7 @@ class AdvancedVulnScanner:
             'whatweb': self._tool_paths.get('whatweb') is not None,
             'zap': zap_available,
             'zap_running': zap_running,
+            'ajax_spider_browser': getattr(self, '_detected_browser', None),
         }
     
     def start_scan(self, target: str, scan_type: ScanType = ScanType.NUCLEI,
@@ -567,6 +652,7 @@ class AdvancedVulnScanner:
 
         progress.status = 'running'
         progress.started_at = datetime.now()
+        self._scan_log(scan_id, 'info', f"Starting {scan_type.value} scan against {target}")
 
         # Save running status to database
         self._save_scan_to_db(scan_id, progress, options)
@@ -593,9 +679,10 @@ class AdvancedVulnScanner:
 
             progress.status = 'completed'
             progress.progress_percent = 100
+            self._scan_log(scan_id, 'info', f"Scan completed successfully with {len(self.scan_results.get(scan_id, []))} findings")
 
         except Exception as e:
-            logger.error(f"Scan {scan_id} failed: {e}")
+            self._scan_log(scan_id, 'error', f"Scan failed: {e}")
             progress.status = 'failed'
             progress.error_message = str(e)
         finally:
@@ -2302,9 +2389,9 @@ class AdvancedVulnScanner:
         progress.current_check = "Clearing previous ZAP session..."
         try:
             self._zap_api_call('JSON/core/action/newSession', {'overwrite': 'true'})
-            logger.info("ZAP session cleared before full scan")
+            self._scan_log(scan_id, 'info', "ZAP session cleared before full scan")
         except Exception as e:
-            logger.warning(f"Could not clear ZAP session: {e}")
+            self._scan_log(scan_id, 'warning', f"Could not clear ZAP session: {e}")
 
         progress.current_check = "Validating target URL..."
 
@@ -2328,11 +2415,11 @@ class AdvancedVulnScanner:
             if auth_verified:
                 progress.auth_status = f"verified (HTTP {http_status})"
                 progress.current_check = f"Auth verified: {auth_type} (HTTP {http_status})"
-                logger.info(f"Auth verification successful: HTTP {http_status}")
+                self._scan_log(scan_id, 'info', f"Auth verification successful: HTTP {http_status}")
             else:
                 progress.auth_status = f"failed (HTTP {http_status})"
                 progress.current_check = f"Auth may have failed: {auth_type} (HTTP {http_status})"
-                logger.warning(f"Auth verification warning: HTTP {http_status}")
+                self._scan_log(scan_id, 'warning', f"Auth verification warning: HTTP {http_status}")
         
         # Get or create context ID if auth is configured
         context_id = self._get_zap_context_id('default')
@@ -2341,14 +2428,14 @@ class AdvancedVulnScanner:
             try:
                 self._zap_api_call('JSON/context/action/newContext', {'contextName': 'default'})
                 context_id = self._get_zap_context_id('default')
-                logger.info(f"Created 'default' context for authenticated scan (ID: {context_id})")
+                self._scan_log(scan_id, 'info', f"Created 'default' context for authenticated scan (ID: {context_id})")
             except Exception as e:
-                logger.warning(f"Could not create default context: {e}")
+                self._scan_log(scan_id, 'warning', f"Could not create default context: {e}")
         
         if context_id:
             options['_context_id'] = context_id
             options['_has_auth'] = has_auth
-            logger.info(f"Using ZAP context ID {context_id} for scan (auth configured: {has_auth})")
+            self._scan_log(scan_id, 'info', f"Using ZAP context ID {context_id} for scan (auth configured: {has_auth})")
         elif has_auth:
             options['_has_auth'] = has_auth
 
@@ -2368,15 +2455,18 @@ class AdvancedVulnScanner:
         try:
             # Phase 1: Spider
             progress.current_check = "Phase 1/3: Running spider..."
+            self._scan_log(scan_id, 'info', "Phase 1/3: Starting spider crawl...")
             self._run_zap_spider_phase(scan_id, target, options, progress)
 
             # Phase 2: Ajax Spider (if enabled)
             if options.get('ajax_spider', True):
                 progress.current_check = "Phase 2/3: Running Ajax spider..."
+                self._scan_log(scan_id, 'info', "Phase 2/3: Starting AJAX spider...")
                 self._run_zap_ajax_spider_phase(scan_id, target, options, progress)
 
             # Phase 3: Active Scan (this now fetches alerts if it stalls)
             progress.current_check = "Phase 3/3: Running active scan..."
+            self._scan_log(scan_id, 'info', "Phase 3/3: Starting active vulnerability scan...")
             self._run_zap_active_scan_phase(scan_id, target, options, progress)
 
             # Final: Fetch all alerts (in case active scan completed normally)
@@ -2385,30 +2475,30 @@ class AdvancedVulnScanner:
                 self._fetch_zap_alerts(scan_id, target)
                 alerts_fetched = True
             except Exception as fetch_err:
-                logger.error(f"Failed to fetch alerts after scan phases: {fetch_err}")
+                self._scan_log(scan_id, 'error', f"Failed to fetch alerts after scan phases: {fetch_err}")
                 progress.error_message = f"Scan phases completed but alert fetching failed: {fetch_err}"
 
             findings_count = len(self.scan_results.get(scan_id, []))
-            logger.info(f"ZAP full scan completed with {findings_count} findings")
+            self._scan_log(scan_id, 'info', f"ZAP full scan completed with {findings_count} findings")
 
             if findings_count == 0 and not alerts_fetched:
-                logger.warning(f"ZAP scan {scan_id} completed with 0 findings - alert fetching may have failed")
+                self._scan_log(scan_id, 'warning', f"ZAP scan completed with 0 findings - alert fetching may have failed")
 
         except Exception as e:
-            logger.error(f"ZAP full scan error: {e}")
+            self._scan_log(scan_id, 'error', f"ZAP full scan error: {e}")
             # Try to fetch alerts even on error - don't lose findings
             if not alerts_fetched:
                 try:
-                    logger.info("Attempting to fetch ZAP alerts after error...")
+                    self._scan_log(scan_id, 'info', "Attempting to fetch ZAP alerts after error...")
                     self._fetch_zap_alerts(scan_id, target)
                 except Exception as fetch_error:
-                    logger.error(f"Failed to fetch alerts after error: {fetch_error}")
+                    self._scan_log(scan_id, 'error', f"Failed to fetch alerts after error: {fetch_error}")
             raise RuntimeError(str(e))
         finally:
             # Clean up scan-specific auth rules
             if auth_applied:
                 self._clear_scan_auth()
-                logger.info("Cleared scan auth rules")
+                self._scan_log(scan_id, 'info', "Cleared scan auth rules")
 
     def _run_zap_spider_phase(self, scan_id: str, target: str, options: Dict, progress: ScanProgress):
         """Spider phase of full scan"""
@@ -2425,9 +2515,9 @@ class AdvancedVulnScanner:
                     'regex': include_regex
                 })
                 self._zap_set_context_in_scope('default', True)
-                logger.info(f"Added {include_regex} to auth context 'default'")
+                self._scan_log(scan_id, 'info', f"Added {include_regex} to auth context 'default'")
             except Exception as e:
-                logger.warning(f"Could not add target to auth context: {e}")
+                self._scan_log(scan_id, 'warning', f"Could not add target to auth context: {e}")
                 # Fall back to creating new scope
                 self._zap_add_to_scope(target)
         else:
@@ -2445,9 +2535,9 @@ class AdvancedVulnScanner:
 
         spider_params = {
             'url': target,
-            'maxChildren': str(options.get('max_children', 10)),
+            'maxChildren': str(options.get('max_children', 20)),
             'recurse': 'true',
-            'subtreeOnly': 'true'
+            'subtreeOnly': 'false' if has_auth else 'true'  # Crawl full domain when authenticated
         }
         # Pass context name if auth is configured
         if has_auth:
@@ -2456,8 +2546,10 @@ class AdvancedVulnScanner:
         spider_id = spider_resp.get('scan')
 
         if not spider_id:
-            logger.warning("Failed to start spider phase, continuing...")
+            self._scan_log(scan_id, 'warning', "Failed to start spider phase, continuing...")
             return
+
+        self._scan_log(scan_id, 'info', f"Spider started with ID: {spider_id}")
 
         # Spider with timeout
         spider_start = time.time()
@@ -2473,23 +2565,64 @@ class AdvancedVulnScanner:
                 if spider_progress >= 100:
                     break
             except Exception as e:
-                logger.warning(f"Spider status error: {e}")
+                self._scan_log(scan_id, 'warning', f"Spider status error: {e}")
                 break
 
             time.sleep(2)
 
         if time.time() - spider_start >= spider_timeout:
-            logger.warning("Spider phase timed out")
+            self._scan_log(scan_id, 'warning', "Spider phase timed out")
+
+        # Log URLs discovered by spider
+        try:
+            urls_resp = self._zap_api_call('JSON/spider/view/results', {'scanId': spider_id})
+            urls_found = urls_resp.get('results', [])
+            self._scan_log(scan_id, 'info', f"Spider completed - discovered {len(urls_found)} URLs")
+            if urls_found:
+                for url in urls_found[:15]:  # Log first 15
+                    self._scan_log(scan_id, 'debug', f"  URL: {url}")
+                if len(urls_found) > 15:
+                    self._scan_log(scan_id, 'info', f"  ... and {len(urls_found) - 15} more URLs")
+        except Exception as e:
+            self._scan_log(scan_id, 'debug', f"Could not retrieve spider results: {e}")
 
     def _run_zap_ajax_spider_phase(self, scan_id: str, target: str, options: Dict, progress: ScanProgress):
         """Ajax spider phase of full scan"""
         try:
+            # Configure browser for AJAX spider based on detection
+            browser_id = getattr(self, '_detected_browser', None)
+            if browser_id and browser_id != 'htmlunit':
+                try:
+                    self._zap_api_call('JSON/ajaxSpider/action/setOptionBrowserId', {
+                        'String': browser_id
+                    })
+                    self._scan_log(scan_id, 'info', f"AJAX spider using browser: {browser_id}")
+                except Exception as e:
+                    self._scan_log(scan_id, 'warning', f"Failed to set AJAX spider browser to {browser_id}: {e}")
+            elif browser_id == 'htmlunit':
+                self._scan_log(scan_id, 'warning',
+                    "No real browser detected - AJAX spider using htmlunit fallback. "
+                    "Install Chrome/Chromium or Firefox for better JavaScript rendering.")
+
+            # Use longer duration for authenticated scans (more pages to discover)
+            has_auth = options.get('_context_id') or options.get('_has_auth')
+            max_duration = options.get('ajax_spider_duration', 120 if has_auth else 60)
+
+            # Set max duration option in ZAP before starting
+            try:
+                self._zap_api_call('JSON/ajaxSpider/action/setOptionMaxDuration', {
+                    'Integer': str(max_duration // 60 or 1)  # ZAP expects minutes
+                })
+            except Exception:
+                pass  # Option may not be available in older ZAP versions
+
+            self._scan_log(scan_id, 'info', f"AJAX spider starting with max duration {max_duration}s")
+
             self._zap_api_call('JSON/ajaxSpider/action/scan', {
                 'url': target,
                 'inScope': 'true'
             })
 
-            max_duration = options.get('ajax_spider_duration', 60)  # seconds
             start_time = time.time()
 
             while time.time() - start_time < max_duration:
@@ -2502,11 +2635,21 @@ class AdvancedVulnScanner:
                 progress.progress_percent = 30 + int((elapsed / max_duration) * 20)  # 30-50%
                 time.sleep(3)
 
+            elapsed_total = int(time.time() - start_time)
+
             # Stop ajax spider if still running
             self._zap_api_call('JSON/ajaxSpider/action/stop')
 
+            # Log results
+            try:
+                results_resp = self._zap_api_call('JSON/ajaxSpider/view/numberOfResults')
+                ajax_results = results_resp.get('numberOfResults', '0')
+                self._scan_log(scan_id, 'info', f"AJAX spider completed in {elapsed_total}s - found {ajax_results} resources")
+            except Exception:
+                self._scan_log(scan_id, 'info', f"AJAX spider completed in {elapsed_total}s")
+
         except Exception as e:
-            logger.warning(f"Ajax spider phase error (continuing): {e}")
+            self._scan_log(scan_id, 'warning', f"Ajax spider phase error (continuing): {e}")
 
     def _run_zap_active_scan_phase(self, scan_id: str, target: str, options: Dict, progress: ScanProgress):
         """Active scan phase of full scan"""
@@ -2528,8 +2671,10 @@ class AdvancedVulnScanner:
         ascan_id = scan_resp.get('scan')
 
         if not ascan_id:
-            logger.warning("Failed to start active scan phase, continuing to alert fetch...")
+            self._scan_log(scan_id, 'warning', "Failed to start active scan phase, continuing to alert fetch...")
             return
+
+        self._scan_log(scan_id, 'info', f"Active scan started with ID: {ascan_id}")
 
         # Active scan with timeout and stall detection
         scan_start = time.time()
@@ -2554,24 +2699,24 @@ class AdvancedVulnScanner:
                 if scan_progress >= 100:
                     break
 
-                # Check for stalled scan
+                # Check for stalled scan (some vuln checks like timing-based SQLi take time)
                 if scan_progress == last_progress:
                     stall_count += 1
-                    if stall_count >= 12:  # 60 seconds of no progress
-                        logger.warning(f"Active scan phase stalled at {scan_progress}%, stopping active scan...")
+                    if stall_count >= 24:  # 120 seconds of no progress
+                        self._scan_log(scan_id, 'warning', f"Active scan phase stalled at {scan_progress}% for 2 minutes, stopping...")
                         break
                 else:
                     stall_count = 0
                     last_progress = scan_progress
 
             except Exception as e:
-                logger.warning(f"Active scan status error: {e}")
+                self._scan_log(scan_id, 'warning', f"Active scan status error: {e}")
                 break
 
             time.sleep(5)
 
         if time.time() - scan_start >= scan_timeout:
-            logger.warning("Active scan phase timed out")
+            self._scan_log(scan_id, 'warning', "Active scan phase timed out")
 
     def _fetch_zap_alerts(self, scan_id: str, target: str):
         """Fetch all ZAP alerts and convert to VulnerabilityFinding"""
@@ -2583,13 +2728,13 @@ class AdvancedVulnScanner:
             target_no_slash = target.rstrip('/')
 
             # Always fetch ALL alerts - ZAP's baseurl filtering is unreliable
-            logger.info(f"Fetching all ZAP alerts (target: {target}, host: {target_host})")
+            self._scan_log(scan_id, 'info', f"Fetching all ZAP alerts (target: {target}, host: {target_host})")
             alerts_resp = self._zap_api_call('JSON/core/view/alerts', {
                 'start': '0',
                 'count': '5000'
             })
             all_alerts = alerts_resp.get('alerts', [])
-            logger.info(f"Total alerts in ZAP: {len(all_alerts)}")
+            self._scan_log(scan_id, 'info', f"Total alerts in ZAP: {len(all_alerts)}")
 
             # Filter alerts matching this target by host
             alerts = []
@@ -2609,9 +2754,9 @@ class AdvancedVulnScanner:
 
             if all_alerts and not alerts:
                 sample_urls = [a.get('url', 'N/A') for a in all_alerts[:5]]
-                logger.warning(f"Found {len(all_alerts)} total alerts but none matched host '{target_host}'. Sample alert URLs: {sample_urls}")
+                self._scan_log(scan_id, 'warning', f"Found {len(all_alerts)} total alerts but none matched host '{target_host}'. Sample URLs: {sample_urls}")
 
-            logger.info(f"Matched {len(alerts)} of {len(all_alerts)} alerts for {target}")
+            self._scan_log(scan_id, 'info', f"Matched {len(alerts)} of {len(all_alerts)} alerts for {target}")
 
             for alert in alerts:
                 finding = self._parse_zap_alert(alert, scan_id)
@@ -2619,7 +2764,7 @@ class AdvancedVulnScanner:
                     self.scan_results[scan_id].append(finding)
 
         except Exception as e:
-            logger.error(f"Error fetching ZAP alerts: {e}", exc_info=True)
+            self._scan_log(scan_id, 'error', f"Error fetching ZAP alerts: {e}")
             # Propagate the error so callers know alert fetching failed
             raise RuntimeError(f"Failed to fetch ZAP alerts: {e}") from e
 
@@ -3625,10 +3770,13 @@ class AdvancedVulnScanner:
     def get_all_findings(self, severity: str = None, limit: int = 100) -> List[Dict]:
         """Get all findings across all scans (combines memory and database)"""
         all_findings = []
+        finding_scan_map = {}  # finding_id -> scan_id
 
         with self._lock:
-            for findings in self.scan_results.values():
-                all_findings.extend(findings)
+            for scan_id, findings in self.scan_results.items():
+                for f in findings:
+                    all_findings.append(f)
+                    finding_scan_map[f.finding_id] = scan_id
 
         # Also get from database
         if self._db:
@@ -3637,8 +3785,12 @@ class AdvancedVulnScanner:
                 # Merge with memory findings (avoid duplicates by finding_id)
                 memory_ids = {f.finding_id for f in all_findings}
                 for db_finding in db_findings:
-                    if db_finding.get('finding_id') not in memory_ids:
-                        all_findings.append(self._dict_to_finding(db_finding))
+                    fid = db_finding.get('finding_id')
+                    if fid not in memory_ids:
+                        f = self._dict_to_finding(db_finding)
+                        all_findings.append(f)
+                        if db_finding.get('scan_id'):
+                            finding_scan_map[f.finding_id] = db_finding['scan_id']
             except Exception as e:
                 logger.debug(f"Error getting findings from DB: {e}")
 
@@ -3660,7 +3812,12 @@ class AdvancedVulnScanner:
         }
         all_findings.sort(key=lambda f: (severity_order.get(f.severity, 5), f.timestamp), reverse=True)
 
-        return [f.to_dict() for f in all_findings[:limit]]
+        results = []
+        for f in all_findings[:limit]:
+            d = f.to_dict()
+            d['scan_id'] = finding_scan_map.get(f.finding_id, '')
+            results.append(d)
+        return results
     
     def get_summary(self) -> Dict[str, Any]:
         """Get overall vulnerability summary (combines memory and database)"""
