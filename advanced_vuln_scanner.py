@@ -1884,9 +1884,9 @@ class AdvancedVulnScanner:
         progress.current_check = "Clearing previous ZAP session..."
         try:
             self._zap_api_call('JSON/core/action/newSession', {'overwrite': 'true'})
-            logger.info("ZAP session cleared before spider scan")
+            self._scan_log(scan_id, 'info', "ZAP session cleared before spider scan")
         except Exception as e:
-            logger.warning(f"Could not clear ZAP session: {e}")
+            self._scan_log(scan_id, 'warning', f"Could not clear ZAP session: {e}")
 
         progress.current_check = "Validating target URL..."
 
@@ -1894,6 +1894,9 @@ class AdvancedVulnScanner:
         is_valid, error_msg = self._validate_target_url(target)
         if not is_valid:
             raise RuntimeError(f"Target URL validation failed: {error_msg}")
+
+        # Apply auth if provided
+        self._apply_and_verify_auth(scan_id, target, options, progress)
 
         # API scan mode: import OpenAPI spec and/or seed custom request
         if options.get('scan_mode') == 'api':
@@ -2001,9 +2004,9 @@ class AdvancedVulnScanner:
         progress.current_check = "Clearing previous ZAP session..."
         try:
             self._zap_api_call('JSON/core/action/newSession', {'overwrite': 'true'})
-            logger.info("ZAP session cleared before active scan")
+            self._scan_log(scan_id, 'info', "ZAP session cleared before active scan")
         except Exception as e:
-            logger.warning(f"Could not clear ZAP session: {e}")
+            self._scan_log(scan_id, 'warning', f"Could not clear ZAP session: {e}")
 
         progress.current_check = "Validating target URL..."
 
@@ -2011,6 +2014,9 @@ class AdvancedVulnScanner:
         is_valid, error_msg = self._validate_target_url(target)
         if not is_valid:
             raise RuntimeError(f"Target URL validation failed: {error_msg}")
+
+        # Apply auth if provided
+        self._apply_and_verify_auth(scan_id, target, options, progress)
 
         # API scan mode: import OpenAPI spec and/or seed custom request
         if options.get('scan_mode') == 'api':
@@ -2219,6 +2225,53 @@ class AdvancedVulnScanner:
             logger.warning(f"Auth verification failed: {e}")
             return True  # Don't block scan on verification failure
 
+    def _apply_and_verify_auth(self, scan_id: str, target: str, options: Dict, progress: 'ScanProgress'):
+        """Apply auth and verify it works. Sets progress.auth_type/auth_status and options._context_id."""
+        auth_applied, auth_type = self._apply_scan_auth(options)
+        has_auth = auth_applied
+
+        if auth_type:
+            progress.auth_type = auth_type
+            progress.auth_status = "applied"
+            progress.current_check = f"Verifying {auth_type} auth..."
+
+            oauth2_token_acquired = options.get('_oauth2_token_acquired', False)
+            self._scan_log(scan_id, 'info', f"Sending authenticated request to {target}...")
+            auth_verified, http_status = self._verify_auth_request(target)
+
+            if auth_verified or oauth2_token_acquired:
+                if 200 <= http_status < 400:
+                    progress.auth_status = f"verified (HTTP {http_status})"
+                    self._scan_log(scan_id, 'info', f"AUTH VERIFIED: Target responded HTTP {http_status} with {auth_type} credentials")
+                elif oauth2_token_acquired:
+                    progress.auth_status = f"verified (token acquired)"
+                    self._scan_log(scan_id, 'info', f"AUTH VERIFIED: OAuth2 token acquired successfully (target returned HTTP {http_status} which is an endpoint issue, not auth)")
+                else:
+                    progress.auth_status = f"applied (HTTP {http_status})"
+                    self._scan_log(scan_id, 'info', f"Auth applied - endpoint returned HTTP {http_status} (not an auth error, scan will continue)")
+                progress.current_check = f"Auth {progress.auth_status}"
+            else:
+                progress.auth_status = f"failed (HTTP {http_status})"
+                progress.current_check = f"Auth failed: {auth_type} (HTTP {http_status})"
+                self._scan_log(scan_id, 'warning', f"Auth verification FAILED: HTTP {http_status} - credentials may be invalid")
+
+        # Get or create context ID if auth is configured
+        context_id = self._get_zap_context_id('default')
+        if has_auth and not context_id:
+            try:
+                self._zap_api_call('JSON/context/action/newContext', {'contextName': 'default'})
+                context_id = self._get_zap_context_id('default')
+                self._scan_log(scan_id, 'info', f"Created 'default' context for authenticated scan (ID: {context_id})")
+            except Exception as e:
+                self._scan_log(scan_id, 'warning', f"Could not create default context: {e}")
+
+        if context_id:
+            options['_context_id'] = context_id
+            options['_has_auth'] = has_auth
+            self._scan_log(scan_id, 'info', f"Using ZAP context ID {context_id} for scan (auth configured: {has_auth})")
+        elif has_auth:
+            options['_has_auth'] = has_auth
+
     def _apply_scan_auth(self, options: Dict) -> Tuple[bool, str]:
         """Apply authentication for this scan using ZAP Replacer rules.
         Returns (auth_applied: bool, auth_type: str)."""
@@ -2382,6 +2435,51 @@ class AdvancedVulnScanner:
                 logger.error(f"Failed to apply HTTP Basic auth: {e}")
                 return (False, "http_basic (failed)")
         
+        # Form-based auth - uses ZAP context authentication
+        if options.get('form_auth'):
+            fa = options['form_auth']
+            try:
+                success, err = self.zap_set_authentication('default', 'form', fa)
+                if success:
+                    logger.info("Applied form-based auth for scan")
+                    auth_type = "form"
+                else:
+                    logger.error(f"Failed to apply form auth: {err}")
+                    return (False, f"form ({err})")
+            except Exception as e:
+                logger.error(f"Failed to apply form auth: {e}")
+                return (False, "form (failed)")
+
+        # OAuth2 BBA - uses ZAP browser-based authentication
+        if options.get('oauth2_bba'):
+            bba = options['oauth2_bba']
+            try:
+                success, err = self.zap_set_authentication('default', 'oauth2_bba', bba)
+                if success:
+                    logger.info("Applied OAuth2/BBA auth for scan")
+                    auth_type = "oauth2_bba"
+                else:
+                    logger.error(f"Failed to apply OAuth2/BBA auth: {err}")
+                    return (False, f"oauth2_bba ({err})")
+            except Exception as e:
+                logger.error(f"Failed to apply OAuth2/BBA auth: {e}")
+                return (False, "oauth2_bba (failed)")
+
+        # Script-based auth - uses ZAP script/BBA authentication
+        if options.get('script_auth'):
+            sa = options['script_auth']
+            try:
+                success, err = self.zap_set_authentication('default', 'script_auth', sa)
+                if success:
+                    logger.info("Applied script-based auth for scan")
+                    auth_type = "script_auth"
+                else:
+                    logger.error(f"Failed to apply script auth: {err}")
+                    return (False, f"script_auth ({err})")
+            except Exception as e:
+                logger.error(f"Failed to apply script auth: {e}")
+                return (False, "script_auth (failed)")
+
         return (bool(auth_type), auth_type)
 
     def _clear_scan_auth(self):
@@ -2465,54 +2563,8 @@ class AdvancedVulnScanner:
             raise RuntimeError(f"Target URL validation failed: {error_msg}")
 
         # Apply inline auth if provided in options (per-scan auth)
-        auth_applied, auth_type = self._apply_scan_auth(options)
-        has_auth = auth_applied
-        
-        # Update progress with auth info and verify auth
-        if auth_type:
-            progress.auth_type = auth_type
-            progress.auth_status = "applied"
-            progress.current_check = f"Verifying {auth_type} auth..."
-            
-            # Verify auth by making a test request
-            oauth2_token_acquired = options.get('_oauth2_token_acquired', False)
-            self._scan_log(scan_id, 'info', f"Sending authenticated request to {target}...")
-            auth_verified, http_status = self._verify_auth_request(target)
-
-            if auth_verified or oauth2_token_acquired:
-                # OAuth2 token acquired = auth is verified regardless of endpoint HTTP status
-                if 200 <= http_status < 400:
-                    progress.auth_status = f"verified (HTTP {http_status})"
-                    self._scan_log(scan_id, 'info', f"AUTH VERIFIED: Target responded HTTP {http_status} with {auth_type} credentials")
-                elif oauth2_token_acquired:
-                    progress.auth_status = f"verified (token acquired)"
-                    self._scan_log(scan_id, 'info', f"AUTH VERIFIED: OAuth2 token acquired successfully (target returned HTTP {http_status} which is an endpoint issue, not auth)")
-                else:
-                    progress.auth_status = f"applied (HTTP {http_status})"
-                    self._scan_log(scan_id, 'info', f"Auth applied - endpoint returned HTTP {http_status} (not an auth error, scan will continue)")
-                progress.current_check = f"Auth {progress.auth_status}"
-            else:
-                progress.auth_status = f"failed (HTTP {http_status})"
-                progress.current_check = f"Auth failed: {auth_type} (HTTP {http_status})"
-                self._scan_log(scan_id, 'warning', f"Auth verification FAILED: HTTP {http_status} - credentials may be invalid")
-        
-        # Get or create context ID if auth is configured
-        context_id = self._get_zap_context_id('default')
-        if has_auth and not context_id:
-            # Auth is configured - create 'default' context for the target URL
-            try:
-                self._zap_api_call('JSON/context/action/newContext', {'contextName': 'default'})
-                context_id = self._get_zap_context_id('default')
-                self._scan_log(scan_id, 'info', f"Created 'default' context for authenticated scan (ID: {context_id})")
-            except Exception as e:
-                self._scan_log(scan_id, 'warning', f"Could not create default context: {e}")
-        
-        if context_id:
-            options['_context_id'] = context_id
-            options['_has_auth'] = has_auth
-            self._scan_log(scan_id, 'info', f"Using ZAP context ID {context_id} for scan (auth configured: {has_auth})")
-        elif has_auth:
-            options['_has_auth'] = has_auth
+        self._apply_and_verify_auth(scan_id, target, options, progress)
+        has_auth = options.get('_has_auth', False)
 
         # API scan mode: import OpenAPI spec and/or seed custom request
         if options.get('scan_mode') == 'api':
@@ -3352,7 +3404,7 @@ class AdvancedVulnScanner:
                     return (False, f"Failed to set cookie auth: {str(e)}")
 
             else:
-                return (False, f"Unsupported authentication type: '{auth_type}'. Supported types: 'form', 'http_basic', 'oauth2_bba', 'script_auth', 'bearer_token', 'api_key', 'cookie'")
+                return (False, f"Unsupported authentication type: '{auth_type}'. Supported types: 'form', 'http_basic', 'oauth2_bba', 'oauth2_client_creds', 'script_auth', 'bearer_token', 'api_key', 'cookie'")
 
         except Exception as e:
             error_msg = str(e)
