@@ -801,8 +801,19 @@ async function preloadAllTabs() {
         preloadedTabs.add('files');
         preloadedTabs.add('config');
         
+        // Batch 7: Traffic Analysis and Advanced Vulnerability scanning (server mode only)
+        if (serverModeEnabled) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await Promise.all([
+                loadTrafficAnalysisData().catch(err => console.warn('Traffic preload failed:', err)),
+                loadAdvancedVulnData().catch(err => console.warn('Adv vuln preload failed:', err))
+            ]);
+            preloadedTabs.add('traffic');
+            preloadedTabs.add('adv-vuln');
+        }
+
         // System and NetKB tabs load on-demand (they use different patterns)
-        
+
         console.log('Background tab preload completed');
         addConsoleMessage('All tabs preloaded and ready', 'success');
         
@@ -886,10 +897,10 @@ async function loadTabData(tabName) {
             }
             break;
         case 'traffic':
-            await loadTrafficAnalysisData();
+            loadTrafficAnalysisData(); // Non-blocking - tab shows immediately, data fills in
             break;
         case 'adv-vuln':
-            await loadAdvancedVulnData();
+            loadAdvancedVulnData(); // Non-blocking - tab shows immediately, data fills in
             break;
     }
 }
@@ -10798,8 +10809,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
 async function loadTrafficAnalysisData() {
     try {
-        const response = await fetch('/api/traffic/status');
-        const data = await response.json();
+        // Fire status and all sub-data calls in parallel for faster load
+        const [statusResponse, ...subResults] = await Promise.all([
+            fetch('/api/traffic/status'),
+            loadTrafficHosts().catch(err => console.warn('Traffic hosts failed:', err)),
+            loadTrafficConnections().catch(err => console.warn('Traffic connections failed:', err)),
+            loadTrafficAlerts().catch(err => console.warn('Traffic alerts failed:', err)),
+            loadTrafficProtocols().catch(err => console.warn('Traffic protocols failed:', err)),
+            loadTrafficDnsAnalysis().catch(err => console.warn('Traffic DNS failed:', err)),
+            loadTrafficTopTalkers().catch(err => console.warn('Traffic top talkers failed:', err)),
+            loadTrafficPortActivity().catch(err => console.warn('Traffic ports failed:', err))
+        ]);
+
+        const data = await statusResponse.json();
 
         if (!data.success || !data.available) {
             showTrafficNotAvailable();
@@ -10810,17 +10832,6 @@ async function loadTrafficAnalysisData() {
         updateTrafficSummary(data.summary);
         updateTrafficSecurityMetrics(data.summary);
         updateTrafficBandwidthChart(data.summary);
-
-        // Load additional data
-        await Promise.all([
-            loadTrafficHosts(),
-            loadTrafficConnections(),
-            loadTrafficAlerts(),
-            loadTrafficProtocols(),
-            loadTrafficDnsAnalysis(),
-            loadTrafficTopTalkers(),
-            loadTrafficPortActivity()
-        ]);
 
         // Update capture button state
         trafficCaptureRunning = data.summary?.status === 'running';
@@ -12205,8 +12216,12 @@ function closeTrafficPortModal() {
 
 async function loadAdvancedVulnData() {
     try {
-        const response = await fetch('/api/vuln-advanced/status');
-        const data = await response.json();
+        // Fetch status and findings in parallel for faster load
+        const [statusResponse, findingsResponse] = await Promise.all([
+            fetch('/api/vuln-advanced/status'),
+            fetch('/api/vuln-advanced/findings?limit=1000')
+        ]);
+        const data = await statusResponse.json();
 
         if (!data.success || !data.available) {
             showAdvVulnNotAvailable();
@@ -12217,8 +12232,16 @@ async function loadAdvancedVulnData() {
         updateScannerStatus(data.scanners);
         updateVulnSummary(data.summary);
 
-        // Load findings first so scans can show severity breakdowns
-        await loadAdvVulnFindings();
+        // Parse findings (already fetched in parallel)
+        try {
+            const findingsData = await findingsResponse.json();
+            if (findingsData.success) {
+                advVulnFindingsCache = findingsData.findings || [];
+            }
+        } catch (e) {
+            console.warn('Error parsing findings:', e);
+        }
+
         updateActiveScans(data.active_scans);
 
         // Update stats after findings are loaded
