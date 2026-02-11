@@ -738,6 +738,28 @@ def _stop_service(service_name: str) -> tuple[bool, str]:
     return True, 'stopped'
 
 
+def _deferred_self_stop(delay: int = 3) -> None:
+    """Stop the ragnar.service via a detached shell process.
+
+    Because Ragnar is stopping *itself*, a direct systemctl stop kills the
+    thread before status files and config can be persisted.  Instead we
+    launch a tiny background shell that sleeps briefly then issues the stop,
+    giving the caller time to finish clean-up work first.
+    """
+    try:
+        subprocess.Popen(
+            ['bash', '-c', f'sleep {delay} && sudo systemctl stop ragnar.service'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # detach from Ragnar's process group
+        )
+        logger.info(f"Scheduled deferred ragnar.service stop in {delay}s (detached)")
+    except Exception as exc:
+        logger.error(f"Failed to schedule deferred ragnar.service stop: {exc}")
+        # Last resort: try direct stop (may be interrupted)
+        _stop_service('ragnar.service')
+
+
 def _execute_pwn_mode_switch(target_mode: str) -> None:
     logger.info(f"Preparing service handoff to {target_mode}")
     time.sleep(PWN_SWAP_DELAY_SECONDS)
@@ -746,12 +768,16 @@ def _execute_pwn_mode_switch(target_mode: str) -> None:
         _ensure_pwn_launcher()
         success, detail = _start_service_with_monitor('pwnagotchi.service')
         if success:
-            logger.info("Pwnagotchi service reported active; starting bettercap and stopping Ragnar service")
+            logger.info("Pwnagotchi service reported active; starting bettercap and scheduling Ragnar stop")
             _start_service_with_monitor('bettercap.service')
-            _stop_service('ragnar.service')
+            # Write status and config BEFORE stopping ourselves
             message = 'Pwnagotchi service is running'
             _write_pwn_status_file('running', message, 'swap', {'target_mode': 'pwnagotchi'})
             _update_pwn_config({'pwnagotchi_mode': 'pwnagotchi', 'pwnagotchi_last_status': message})
+            _emit_pwn_status_update()
+            # Stop Ragnar via detached process so the above writes complete
+            _deferred_self_stop()
+            return
         else:
             logger.error(f"Pwnagotchi service failed to start: {detail}")
             failure_message = _format_service_failure_message('pwnagotchi.service')
@@ -760,7 +786,6 @@ def _execute_pwn_mode_switch(target_mode: str) -> None:
                 extra['service_error_detail'] = detail
             _write_pwn_status_file('error', failure_message, 'error', extra)
             _update_pwn_config({'pwnagotchi_mode': 'ragnar', 'pwnagotchi_last_status': failure_message})
-            _start_service_with_monitor('ragnar.service', timeout=30)
     else:
         success, detail = _start_service_with_monitor('ragnar.service')
         if success:
