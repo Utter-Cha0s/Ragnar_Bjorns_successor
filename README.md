@@ -226,23 +226,30 @@ When deployed on capable hardware (Debian-based systems with 8GB+ RAM), Ragnar a
 - **Live Packet Capture**: Monitor network traffic in real-time using tcpdump and tshark
 - **Connection Tracking**: Track all TCP/UDP connections with detailed statistics
 - **Protocol Analysis**: Deep inspection of HTTP, DNS, SMB, SSH, and other protocols
-- **Bandwidth Monitoring**: Per-host bandwidth usage and connection patterns
+- **Bandwidth Monitoring**: Per-host bandwidth usage, top talkers, and connection patterns
+- **Security Risk Scoring**: Automated risk assessment based on alerts and suspicious activity
 - **Anomaly Detection**: Identify suspicious traffic patterns, port scans, and potential C2 beacons
 - **DNS Query Logging**: Track all DNS lookups for threat intelligence correlation
+- **Port Activity Monitoring**: Real-time port usage analysis across all hosts
 
 ### 🛡️ Advanced Vulnerability Scanning
+- **OWASP ZAP Full Scan**: Spider + AJAX spider + active scan with automatic browser detection (Chrome/Chromium/Firefox)
+- **Authenticated Scanning**: 8 authentication types for scanning protected applications:
+  - Form-based login, HTTP Basic, OAuth2 Browser-Based (Microsoft/Azure AD), OAuth2 Client Credentials, Bearer Token, API Key, Cookie, Script-based
+- **Live Scan Logs**: Real-time terminal-style log panel showing scan progress, phase transitions, and findings as they happen
+- **Live Progress Tracking**: Auto-polling scan status with animated progress bar
 - **Nuclei Templates**: Automated scanning with 5000+ vulnerability templates from ProjectDiscovery
 - **Nikto Web Scanning**: Comprehensive web server vulnerability assessment
 - **SQLMap Integration**: Automated SQL injection detection and exploitation
 - **Parallel Scanning**: Multi-threaded vulnerability assessment for faster results
 - **CVE Correlation**: Automatic correlation with NVD, CISA KEV, and threat intelligence feeds
 - **Exploit Suggestions**: AI-powered recommendations for vulnerability exploitation paths
-- **Custom Payloads**: Support for custom vulnerability testing templates
+- **Web and API Scan Modes**: Scan traditional web apps or API endpoints with OpenAPI spec import
 
 ### 📊 Enhanced Web Interface
 Server mode features are seamlessly integrated into the modern web dashboard at `http://<ragnar-ip>:8000`:
-- **Traffic Analysis Tab**: Real-time packet capture visualization and statistics
-- **Advanced Vuln Tab**: Detailed vulnerability scan results with remediation guidance
+- **Traffic Analysis Tab**: Real-time packet capture visualization, bandwidth charts, top talkers, and security risk scoring
+- **Advanced Vuln Tab**: Scan management with live progress, inline findings, live log viewer, severity breakdown, and auth status badges
 - **Resource Monitor**: System resource usage and performance metrics
 - **Threat Intelligence**: Multi-source threat correlation with actionable insights
 

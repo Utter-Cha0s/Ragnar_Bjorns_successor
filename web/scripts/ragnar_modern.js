@@ -801,8 +801,19 @@ async function preloadAllTabs() {
         preloadedTabs.add('files');
         preloadedTabs.add('config');
         
+        // Batch 7: Traffic Analysis and Advanced Vulnerability scanning (server mode only)
+        if (serverModeEnabled) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await Promise.all([
+                loadTrafficAnalysisData().catch(err => console.warn('Traffic preload failed:', err)),
+                loadAdvancedVulnData().catch(err => console.warn('Adv vuln preload failed:', err))
+            ]);
+            preloadedTabs.add('traffic');
+            preloadedTabs.add('adv-vuln');
+        }
+
         // System and NetKB tabs load on-demand (they use different patterns)
-        
+
         console.log('Background tab preload completed');
         addConsoleMessage('All tabs preloaded and ready', 'success');
         
@@ -886,10 +897,10 @@ async function loadTabData(tabName) {
             }
             break;
         case 'traffic':
-            await loadTrafficAnalysisData();
+            loadTrafficAnalysisData(); // Non-blocking - tab shows immediately, data fills in
             break;
         case 'adv-vuln':
-            await loadAdvancedVulnData();
+            loadAdvancedVulnData(); // Non-blocking - tab shows immediately, data fills in
             break;
     }
 }
@@ -7627,6 +7638,9 @@ function updateDashboardStatus(data) {
     updateConnectivityIndicator('usb-status', data.usb_active);
     updateConnectivityIndicator('pan-status', data.pan_connected);
 
+    // Update the primary connection card
+    updatePrimaryConnectionCard(data);
+
     updateReleaseGateState(data.release_gate);
     updatePwnToggleAvailability(Boolean(data.headless_mode));
 }
@@ -7760,6 +7774,54 @@ function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
                 ssidDisplay.textContent = 'Not connected';
                 ssidDisplay.className = 'text-xs text-gray-500 truncate';
             }
+        }
+    }
+}
+
+/**
+ * Update the primary connection card on the dashboard
+ */
+function updatePrimaryConnectionCard(data) {
+    const label = document.getElementById('primary-connection-label');
+    const name = document.getElementById('primary-connection-name');
+    const ip = document.getElementById('primary-connection-ip');
+    const status = document.getElementById('primary-connection-status');
+    const icon = document.getElementById('primary-connection-icon');
+
+    if (!label) return;
+
+    if (data.wifi_connected) {
+        const ssid = data.current_ssid || 'Connected';
+        label.textContent = data.ap_mode_active ? 'AP Mode' : 'WiFi';
+        name.textContent = data.ap_mode_active ? `AP: ${data.ap_ssid || 'Ragnar'}` : ssid;
+        if (status) status.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
+        if (icon) icon.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>';
+        if (icon) icon.className = 'text-green-400';
+    } else if (data.pan_connected) {
+        label.textContent = 'USB/PAN';
+        name.textContent = 'Connected via USB';
+        if (status) status.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
+        if (icon) icon.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>';
+        if (icon) icon.className = 'text-yellow-400';
+    } else if (data.bluetooth_active) {
+        label.textContent = 'Bluetooth';
+        name.textContent = 'Bluetooth active';
+        if (status) status.className = 'w-3 h-3 bg-blue-500 rounded-full pulse-glow';
+        if (icon) icon.className = 'text-blue-400';
+    } else {
+        label.textContent = 'Disconnected';
+        name.textContent = 'No active connection';
+        if (status) status.className = 'w-3 h-3 bg-gray-600 rounded-full';
+        if (icon) icon.className = 'text-gray-500';
+    }
+
+    // Try to show IP from WiFi status if we have it cached
+    if (ip) {
+        const ssidDisplay = document.getElementById('wifi-ssid-display');
+        if (data.wifi_connected && ssidDisplay && ssidDisplay.textContent && ssidDisplay.textContent !== 'Not connected') {
+            ip.textContent = '';  // IP will be filled by wifi detail fetch if available
+        } else {
+            ip.textContent = '';
         }
     }
 }
@@ -10798,8 +10860,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
 async function loadTrafficAnalysisData() {
     try {
-        const response = await fetch('/api/traffic/status');
-        const data = await response.json();
+        // Fire status and all sub-data calls in parallel for faster load
+        const [statusResponse, ...subResults] = await Promise.all([
+            fetch('/api/traffic/status'),
+            loadTrafficHosts().catch(err => console.warn('Traffic hosts failed:', err)),
+            loadTrafficConnections().catch(err => console.warn('Traffic connections failed:', err)),
+            loadTrafficAlerts().catch(err => console.warn('Traffic alerts failed:', err)),
+            loadTrafficProtocols().catch(err => console.warn('Traffic protocols failed:', err)),
+            loadTrafficDnsAnalysis().catch(err => console.warn('Traffic DNS failed:', err)),
+            loadTrafficTopTalkers().catch(err => console.warn('Traffic top talkers failed:', err)),
+            loadTrafficPortActivity().catch(err => console.warn('Traffic ports failed:', err))
+        ]);
+
+        const data = await statusResponse.json();
 
         if (!data.success || !data.available) {
             showTrafficNotAvailable();
@@ -10810,17 +10883,6 @@ async function loadTrafficAnalysisData() {
         updateTrafficSummary(data.summary);
         updateTrafficSecurityMetrics(data.summary);
         updateTrafficBandwidthChart(data.summary);
-
-        // Load additional data
-        await Promise.all([
-            loadTrafficHosts(),
-            loadTrafficConnections(),
-            loadTrafficAlerts(),
-            loadTrafficProtocols(),
-            loadTrafficDnsAnalysis(),
-            loadTrafficTopTalkers(),
-            loadTrafficPortActivity()
-        ]);
 
         // Update capture button state
         trafficCaptureRunning = data.summary?.status === 'running';
@@ -10846,19 +10908,20 @@ function updateTrafficSummary(summary) {
     if (!summary) return;
 
     updateElement('traffic-packets-sec', summary.packets_per_second || 0);
-    updateElement('traffic-mbps', (summary.mbps || 0).toFixed(2));
-    updateElement('traffic-hosts', summary.active_hosts || 0);
+    updateElement('traffic-mbps', (summary.throughput_mbps || summary.mbps || 0).toFixed(2));
+    updateElement('traffic-hosts', summary.unique_hosts || summary.active_hosts || 0);
     updateElement('traffic-connections', summary.active_connections || 0);
-    updateElement('traffic-alerts', summary.alert_count || 0);
+    updateElement('traffic-alerts', summary.unacknowledged_alerts || summary.total_alerts || summary.alert_count || 0);
 
     // Extended stats
     updateElement('traffic-packets-total', formatNumber(summary.total_packets || 0) + ' total');
     updateElement('traffic-bytes-total', formatBytes(summary.total_bytes || 0) + ' total');
-    updateElement('traffic-dns-queries', (summary.dns_queries_logged || 0) + ' DNS');
+    updateElement('traffic-dns-queries', (summary.dns_queries_captured || summary.dns_queries_logged || 0) + ' DNS');
 
     // Store local IPs for UI labeling
-    if (summary.local_ips && Array.isArray(summary.local_ips)) {
-        ragnarLocalIps = new Set(summary.local_ips);
+    const localIps = summary.excluded_local_ips || summary.local_ips;
+    if (localIps && Array.isArray(localIps)) {
+        ragnarLocalIps = new Set(localIps);
         console.log('[Traffic] Ragnar local IPs:', Array.from(ragnarLocalIps));
     }
 }
@@ -10870,7 +10933,7 @@ function updateTrafficSecurityMetrics(summary) {
     if (!summary) return;
 
     // Calculate risk score based on alerts and suspicious activity
-    const alertCount = summary.alert_count || 0;
+    const alertCount = summary.unacknowledged_alerts || summary.total_alerts || summary.alert_count || 0;
     const riskScore = Math.min(100, alertCount * 10);
 
     // Determine risk level
@@ -10925,7 +10988,7 @@ function updateTrafficBandwidthChart(summary) {
     // Add current data point
     trafficBandwidthHistory.push({
         timestamp: Date.now(),
-        mbps: summary.mbps || 0,
+        mbps: summary.throughput_mbps || summary.mbps || 0,
         packetsPerSec: summary.packets_per_second || 0
     });
 
@@ -11382,8 +11445,9 @@ async function loadTrafficDnsAnalysis() {
             return;
         }
 
-        // Update stats
-        const dnsCount = data.dns_queries_logged || 0;
+        // Update stats - dns count is inside summary object
+        const summary = data.summary || {};
+        const dnsCount = summary.dns_queries_captured || summary.dns_queries_logged || data.dns_queries_logged || 0;
         if (totalEl) totalEl.textContent = dnsCount;
 
         // Try to get DNS details from hosts
@@ -12205,8 +12269,12 @@ function closeTrafficPortModal() {
 
 async function loadAdvancedVulnData() {
     try {
-        const response = await fetch('/api/vuln-advanced/status');
-        const data = await response.json();
+        // Fetch status and findings in parallel for faster load
+        const [statusResponse, findingsResponse] = await Promise.all([
+            fetch('/api/vuln-advanced/status'),
+            fetch('/api/vuln-advanced/findings?limit=1000')
+        ]);
+        const data = await statusResponse.json();
 
         if (!data.success || !data.available) {
             showAdvVulnNotAvailable();
@@ -12217,8 +12285,16 @@ async function loadAdvancedVulnData() {
         updateScannerStatus(data.scanners);
         updateVulnSummary(data.summary);
 
-        // Load findings first so scans can show severity breakdowns
-        await loadAdvVulnFindings();
+        // Parse findings (already fetched in parallel)
+        try {
+            const findingsData = await findingsResponse.json();
+            if (findingsData.success) {
+                advVulnFindingsCache = findingsData.findings || [];
+            }
+        } catch (e) {
+            console.warn('Error parsing findings:', e);
+        }
+
         updateActiveScans(data.active_scans);
 
         // Update stats after findings are loaded
@@ -13159,6 +13235,23 @@ function getAuthParams(authType) {
         authParams.password = password;
         authParams.login_url = loginUrl;
         authParams.script_name = scriptName || '';
+    } else if (authType === 'oauth2_client_creds') {
+        const clientId = document.getElementById('zap-oauth2-client-id')?.value.trim();
+        const clientSecret = document.getElementById('zap-oauth2-client-secret')?.value.trim();
+        const tokenUrl = document.getElementById('zap-oauth2-token-url')?.value.trim();
+        const scope = document.getElementById('zap-oauth2-scope')?.value.trim();
+        if (!clientId || !clientSecret) {
+            showNotification('Please enter Client ID and Client Secret', 'warning');
+            return null;
+        }
+        if (!tokenUrl) {
+            showNotification('Token URL is required for OAuth2 Client Credentials', 'warning');
+            return null;
+        }
+        authParams.client_id = clientId;
+        authParams.client_secret = clientSecret;
+        authParams.token_url = tokenUrl;
+        if (scope) authParams.scope = scope;
     } else if (authType === 'bearer_token') {
         if (!bearerToken) {
             showNotification('Please enter a bearer token', 'warning');
@@ -13593,6 +13686,7 @@ function toggleScanAuthFields() {
     const apiKeyHeaderContainer = document.getElementById('zap-api-key-header-container');
     const cookieContainer = document.getElementById('zap-cookie-container');
     const oauth2BbaContainer = document.getElementById('zap-oauth2-bba-container');
+    const oauth2CcContainer = document.getElementById('zap-oauth2-cc-container');
     const scriptAuthContainer = document.getElementById('zap-script-auth-container');
 
     if (!authType) return;
@@ -13609,6 +13703,7 @@ function toggleScanAuthFields() {
     if (apiKeyHeaderContainer) apiKeyHeaderContainer.classList.add('hidden');
     if (cookieContainer) cookieContainer.classList.add('hidden');
     if (oauth2BbaContainer) oauth2BbaContainer.classList.add('hidden');
+    if (oauth2CcContainer) oauth2CcContainer.classList.add('hidden');
     if (scriptAuthContainer) scriptAuthContainer.classList.add('hidden');
 
     // Hide/show the auth fields wrapper based on whether an auth type is selected
@@ -13632,6 +13727,8 @@ function toggleScanAuthFields() {
         if (usernameContainer) usernameContainer.classList.remove('hidden');
         if (passwordContainer) passwordContainer.classList.remove('hidden');
         if (oauth2BbaContainer) oauth2BbaContainer.classList.remove('hidden');
+    } else if (type === 'oauth2_client_creds') {
+        if (oauth2CcContainer) oauth2CcContainer.classList.remove('hidden');
     } else if (type === 'script_auth') {
         if (loginUrlContainer) loginUrlContainer.classList.remove('hidden');
         if (usernameContainer) usernameContainer.classList.remove('hidden');
