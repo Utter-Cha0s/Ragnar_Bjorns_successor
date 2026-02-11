@@ -148,6 +148,23 @@ class WiFiManager:
                 return candidate
         return self.default_wifi_interface
 
+    def _find_secondary_wifi_interface(self):
+        """Find a WiFi interface that is NOT being used for AP mode.
+
+        Returns the interface name (e.g. 'wlan1') or None if only one
+        WiFi adapter is present.
+        """
+        try:
+            interfaces = gather_wifi_interfaces(self.default_wifi_interface)
+            for iface in interfaces:
+                name = iface.get('name', '')
+                if name and name != self.ap_interface:
+                    self.logger.info(f"Secondary WiFi interface found: {name}")
+                    return name
+        except Exception as exc:
+            self.logger.debug(f"Unable to detect secondary WiFi interface: {exc}")
+        return None
+
     def _cache_interface_networks(self, interface, networks):
         """Cache scan results per interface while preserving legacy attributes."""
         target_iface = self._resolve_scan_interface(interface)
@@ -891,13 +908,38 @@ class WiFiManager:
             ragnar_known = [net['ssid'] for net in self.known_networks]
             system_profiles = self.get_system_wifi_profiles()
             all_known = list(set(ragnar_known + system_profiles))  # Combine and deduplicate
-            
+
             if not all_known:
                 return False
-            
-            # Try a quick scan using iwlist (less disruptive)
+
+            # Strategy 1: Use secondary adapter for a reliable nmcli scan
+            secondary = self._find_secondary_wifi_interface()
+            if secondary:
+                try:
+                    subprocess.run(
+                        ['nmcli', 'dev', 'wifi', 'rescan', 'ifname', secondary],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    time.sleep(1)
+                    result = subprocess.run(
+                        ['nmcli', '-t', '-f', 'SSID', 'dev', 'wifi', 'list', 'ifname', secondary],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    if result.returncode == 0:
+                        available_ssids = [
+                            line.strip() for line in result.stdout.strip().split('\n')
+                            if line.strip()
+                        ]
+                        for known_ssid in all_known:
+                            if known_ssid in available_ssids:
+                                self.logger.info(f"Known network '{known_ssid}' detected via secondary adapter {secondary}")
+                                return True
+                except Exception as e:
+                    self.logger.debug(f"Secondary adapter scan failed during known-network check: {e}")
+
+            # Strategy 2: Try a quick scan using iwlist on AP interface (less disruptive)
             try:
-                result = subprocess.run(['sudo', 'iwlist', self.ap_interface, 'scan'], 
+                result = subprocess.run(['sudo', 'iwlist', self.ap_interface, 'scan'],
                                       capture_output=True, text=True, timeout=10)
                 if result.returncode == 0:
                     available_ssids = []
@@ -906,7 +948,7 @@ class WiFiManager:
                             ssid = line.split('ESSID:')[1].strip('"')
                             if ssid and ssid != '<hidden>':
                                 available_ssids.append(ssid)
-                    
+
                     # Check if any known networks (Ragnar or system) are available
                     for known_ssid in all_known:
                         if known_ssid in available_ssids:
@@ -914,9 +956,9 @@ class WiFiManager:
                             return True
             except Exception as e:
                 self.logger.debug(f"iwlist scan failed: {e}")
-            
+
             return False
-            
+
         except Exception as e:
             self.logger.error(f"Error checking for known networks: {e}")
             return False
@@ -1262,6 +1304,88 @@ class WiFiManager:
             self.logger.error(f"Error scanning networks: {e}")
             return []
 
+    def _scan_via_secondary_interface(self, system_profiles=None, known_ssids=None):
+        """Attempt a full nmcli scan using a secondary WiFi adapter (not the AP interface).
+
+        Returns a list of network dicts or an empty list when no secondary
+        adapter is available or the scan fails.
+        """
+        secondary = self._find_secondary_wifi_interface()
+        if not secondary:
+            return []
+
+        self.ap_logger.info(f"Secondary adapter detected ({secondary}) – running live nmcli scan")
+        system_profiles = set(system_profiles or [])
+        known_set = set(known_ssids or self._get_known_ssids())
+
+        try:
+            # Ensure the secondary interface is managed and up
+            subprocess.run(
+                ['sudo', 'nmcli', 'dev', 'set', secondary, 'managed', 'yes'],
+                capture_output=True, text=True, timeout=5
+            )
+            subprocess.run(
+                ['sudo', 'ip', 'link', 'set', secondary, 'up'],
+                capture_output=True, text=True, timeout=5
+            )
+
+            # Trigger rescan
+            subprocess.run(
+                ['nmcli', 'dev', 'wifi', 'rescan', 'ifname', secondary],
+                capture_output=True, text=True, timeout=15
+            )
+            # Short pause to let the radio collect results
+            time.sleep(2)
+
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list', 'ifname', secondary],
+                capture_output=True, text=True, timeout=15
+            )
+
+            if result.returncode != 0:
+                self.ap_logger.warning(
+                    f"nmcli scan on secondary {secondary} failed (rc={result.returncode}): {result.stderr}"
+                )
+                # Fall back to iwlist on the secondary adapter
+                return self._run_iwlist_scan(
+                    secondary,
+                    system_profiles=system_profiles,
+                    known_ssids=known_set,
+                    log_target=self.ap_logger
+                )
+
+            networks = []
+            for line in result.stdout.strip().split('\n'):
+                if line and ':' in line:
+                    parts = line.split(':')
+                    if len(parts) >= 3 and parts[0]:
+                        ssid = parts[0]
+                        is_known = ssid in known_set or ssid in system_profiles
+                        networks.append({
+                            'ssid': ssid,
+                            'signal': int(parts[1]) if parts[1].isdigit() else 0,
+                            'security': parts[2] if parts[2] else 'Open',
+                            'known': is_known,
+                            'has_system_profile': ssid in system_profiles,
+                            'scan_method': 'secondary_nmcli'
+                        })
+
+            # Deduplicate and sort by signal
+            seen = set()
+            unique = []
+            for net in sorted(networks, key=lambda x: x['signal'], reverse=True):
+                if net['ssid'] not in seen:
+                    seen.add(net['ssid'])
+                    unique.append(net)
+
+            if unique:
+                self.ap_logger.info(f"Secondary adapter {secondary} found {len(unique)} networks (live scan)")
+            return unique
+
+        except Exception as exc:
+            self.ap_logger.warning(f"Secondary adapter scan failed on {secondary}: {exc}")
+            return []
+
     def scan_networks_while_ap(self, interface=None):
         """Scan for networks while in AP mode using smart caching and fallback strategies"""
         try:
@@ -1269,12 +1393,22 @@ class WiFiManager:
             target_iface = self._resolve_scan_interface(scan_iface)
             self.logger.info(f"Scanning networks while in AP mode using smart strategies on {target_iface}")
             self.ap_logger.info(f"Starting network scan while in AP mode (non-disruptive) on {target_iface}")
-            
+
             # Get system WiFi profiles to mark known networks
             system_profiles = self.get_system_wifi_profiles()
             ragnar_known = [net['ssid'] for net in self.known_networks]
-            
-            # Strategy 1: Return cached networks if we have recent data (within 5 minutes for fresher data)
+
+            # Strategy 1: Live scan via secondary WiFi adapter (if available)
+            secondary_networks = self._scan_via_secondary_interface(
+                system_profiles=system_profiles,
+                known_ssids=ragnar_known
+            )
+            if secondary_networks:
+                self.ap_logger.info(f"Using live scan from secondary adapter ({len(secondary_networks)} networks)")
+                self._cache_interface_networks(target_iface, secondary_networks)
+                return secondary_networks
+
+            # Strategy 2: Return cached networks if we have recent data (within 5 minutes for fresher data)
             cached_networks, cache_timestamp = self._get_cached_interface_networks(target_iface)
             if cached_networks is not None and cache_timestamp is not None:
                 cache_age = time.time() - cache_timestamp
@@ -1283,16 +1417,16 @@ class WiFiManager:
                         f"Returning cached networks for {target_iface} (age: {cache_age:.1f}s, count: {len(cached_networks)})"
                     )
                     return cached_networks
-            
-            # Strategy 2: Use networks scanned before AP mode started
+
+            # Strategy 3: Use networks scanned before AP mode started
             if hasattr(self, 'available_networks') and self.available_networks:
                 real_networks = [n for n in self.available_networks if not n.get('instruction')]
                 if real_networks:
                     self.ap_logger.info(f"Using pre-AP scan results ({len(real_networks)} networks)")
                     self._cache_interface_networks(target_iface, real_networks)
                     return real_networks
-            
-            # Strategy 3: Try iwlist scan (non-disruptive to AP mode)
+
+            # Strategy 4: Try iwlist scan on AP interface (non-disruptive to AP mode)
             fallback_networks = self._run_iwlist_scan(
                 target_iface,
                 system_profiles=system_profiles,
@@ -1302,8 +1436,8 @@ class WiFiManager:
             if fallback_networks:
                 self._cache_interface_networks(target_iface, fallback_networks)
                 return fallback_networks
-            
-            # Strategy 4: Return known networks as available options
+
+            # Strategy 5: Return known networks as available options
             if self.known_networks:
                 self.ap_logger.info("Returning known networks as scan alternatives")
                 known_as_available = []
