@@ -2392,8 +2392,8 @@ class AdvancedVulnScanner:
         """
         Make a test request to verify auth is working.
         Returns (verified: bool, http_status: int)
-        - verified=True if status is 2xx or 3xx (success/redirect)
-        - verified=False if status is 401/403 (auth failed) or other error
+        - verified=True if status is 2xx, 3xx, 404, 405, 400 (auth is working, endpoint issue)
+        - verified=False only if status is 401/403 (actual auth failure)
         """
         try:
             # Access the target URL via ZAP to test auth
@@ -2421,10 +2421,12 @@ class AdvancedVulnScanner:
                     # Try to extract from responseStatusCode if available
                     status_code = int(latest_msg.get('statusCode', 0) or 0)
                 
-                if 200 <= status_code < 400:
-                    return (True, status_code)
-                else:
+                # 401/403 = actual auth failure; everything else means auth is OK
+                # (404/405/400 = endpoint issue, not auth issue)
+                if status_code in (401, 403):
                     return (False, status_code)
+                else:
+                    return (True, status_code)
             
             # If we can't get messages, return unknown status
             logger.warning("Could not retrieve response to verify auth")
@@ -2470,13 +2472,18 @@ class AdvancedVulnScanner:
             # Verify auth by making a test request
             auth_verified, http_status = self._verify_auth_request(target)
             if auth_verified:
-                progress.auth_status = f"verified (HTTP {http_status})"
-                progress.current_check = f"Auth verified: {auth_type} (HTTP {http_status})"
-                self._scan_log(scan_id, 'info', f"Auth verification successful: HTTP {http_status}")
+                if 200 <= http_status < 400:
+                    progress.auth_status = f"verified (HTTP {http_status})"
+                    self._scan_log(scan_id, 'info', f"Auth verified: HTTP {http_status}")
+                else:
+                    # Auth is OK but endpoint returned non-2xx (e.g. 404, 405)
+                    progress.auth_status = f"applied (HTTP {http_status})"
+                    self._scan_log(scan_id, 'info', f"Auth applied - endpoint returned HTTP {http_status} (not an auth error, scan will continue)")
+                progress.current_check = f"Auth {progress.auth_status}"
             else:
                 progress.auth_status = f"failed (HTTP {http_status})"
-                progress.current_check = f"Auth may have failed: {auth_type} (HTTP {http_status})"
-                self._scan_log(scan_id, 'warning', f"Auth verification warning: HTTP {http_status}")
+                progress.current_check = f"Auth failed: {auth_type} (HTTP {http_status})"
+                self._scan_log(scan_id, 'warning', f"Auth verification FAILED: HTTP {http_status} - credentials may be invalid")
         
         # Get or create context ID if auth is configured
         context_id = self._get_zap_context_id('default')
