@@ -10857,19 +10857,20 @@ function updateTrafficSummary(summary) {
     if (!summary) return;
 
     updateElement('traffic-packets-sec', summary.packets_per_second || 0);
-    updateElement('traffic-mbps', (summary.mbps || 0).toFixed(2));
-    updateElement('traffic-hosts', summary.active_hosts || 0);
+    updateElement('traffic-mbps', (summary.throughput_mbps || summary.mbps || 0).toFixed(2));
+    updateElement('traffic-hosts', summary.unique_hosts || summary.active_hosts || 0);
     updateElement('traffic-connections', summary.active_connections || 0);
-    updateElement('traffic-alerts', summary.alert_count || 0);
+    updateElement('traffic-alerts', summary.unacknowledged_alerts || summary.total_alerts || summary.alert_count || 0);
 
     // Extended stats
     updateElement('traffic-packets-total', formatNumber(summary.total_packets || 0) + ' total');
     updateElement('traffic-bytes-total', formatBytes(summary.total_bytes || 0) + ' total');
-    updateElement('traffic-dns-queries', (summary.dns_queries_logged || 0) + ' DNS');
+    updateElement('traffic-dns-queries', (summary.dns_queries_captured || summary.dns_queries_logged || 0) + ' DNS');
 
     // Store local IPs for UI labeling
-    if (summary.local_ips && Array.isArray(summary.local_ips)) {
-        ragnarLocalIps = new Set(summary.local_ips);
+    const localIps = summary.excluded_local_ips || summary.local_ips;
+    if (localIps && Array.isArray(localIps)) {
+        ragnarLocalIps = new Set(localIps);
         console.log('[Traffic] Ragnar local IPs:', Array.from(ragnarLocalIps));
     }
 }
@@ -10881,7 +10882,7 @@ function updateTrafficSecurityMetrics(summary) {
     if (!summary) return;
 
     // Calculate risk score based on alerts and suspicious activity
-    const alertCount = summary.alert_count || 0;
+    const alertCount = summary.unacknowledged_alerts || summary.total_alerts || summary.alert_count || 0;
     const riskScore = Math.min(100, alertCount * 10);
 
     // Determine risk level
@@ -10936,7 +10937,7 @@ function updateTrafficBandwidthChart(summary) {
     // Add current data point
     trafficBandwidthHistory.push({
         timestamp: Date.now(),
-        mbps: summary.mbps || 0,
+        mbps: summary.throughput_mbps || summary.mbps || 0,
         packetsPerSec: summary.packets_per_second || 0
     });
 
@@ -11393,8 +11394,9 @@ async function loadTrafficDnsAnalysis() {
             return;
         }
 
-        // Update stats
-        const dnsCount = data.dns_queries_logged || 0;
+        // Update stats - dns count is inside summary object
+        const summary = data.summary || {};
+        const dnsCount = summary.dns_queries_captured || summary.dns_queries_logged || data.dns_queries_logged || 0;
         if (totalEl) totalEl.textContent = dnsCount;
 
         // Try to get DNS details from hosts
