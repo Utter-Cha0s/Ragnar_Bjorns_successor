@@ -2407,6 +2407,7 @@ def get_status():
             'coins': safe_int(shared_data.coinnbr),
             'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
             'wifi_connected': safe_bool(shared_data.wifi_connected),
+            'current_ssid': safe_str(getattr(shared_data, 'current_wifi_ssid', '') or get_current_wifi_ssid() or ''),
             'bluetooth_active': safe_bool(shared_data.bluetooth_active),
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),

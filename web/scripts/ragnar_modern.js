@@ -7638,6 +7638,9 @@ function updateDashboardStatus(data) {
     updateConnectivityIndicator('usb-status', data.usb_active);
     updateConnectivityIndicator('pan-status', data.pan_connected);
 
+    // Update the primary connection card
+    updatePrimaryConnectionCard(data);
+
     updateReleaseGateState(data.release_gate);
     updatePwnToggleAvailability(Boolean(data.headless_mode));
 }
@@ -7771,6 +7774,54 @@ function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
                 ssidDisplay.textContent = 'Not connected';
                 ssidDisplay.className = 'text-xs text-gray-500 truncate';
             }
+        }
+    }
+}
+
+/**
+ * Update the primary connection card on the dashboard
+ */
+function updatePrimaryConnectionCard(data) {
+    const label = document.getElementById('primary-connection-label');
+    const name = document.getElementById('primary-connection-name');
+    const ip = document.getElementById('primary-connection-ip');
+    const status = document.getElementById('primary-connection-status');
+    const icon = document.getElementById('primary-connection-icon');
+
+    if (!label) return;
+
+    if (data.wifi_connected) {
+        const ssid = data.current_ssid || 'Connected';
+        label.textContent = data.ap_mode_active ? 'AP Mode' : 'WiFi';
+        name.textContent = data.ap_mode_active ? `AP: ${data.ap_ssid || 'Ragnar'}` : ssid;
+        if (status) status.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
+        if (icon) icon.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>';
+        if (icon) icon.className = 'text-green-400';
+    } else if (data.pan_connected) {
+        label.textContent = 'USB/PAN';
+        name.textContent = 'Connected via USB';
+        if (status) status.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
+        if (icon) icon.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>';
+        if (icon) icon.className = 'text-yellow-400';
+    } else if (data.bluetooth_active) {
+        label.textContent = 'Bluetooth';
+        name.textContent = 'Bluetooth active';
+        if (status) status.className = 'w-3 h-3 bg-blue-500 rounded-full pulse-glow';
+        if (icon) icon.className = 'text-blue-400';
+    } else {
+        label.textContent = 'Disconnected';
+        name.textContent = 'No active connection';
+        if (status) status.className = 'w-3 h-3 bg-gray-600 rounded-full';
+        if (icon) icon.className = 'text-gray-500';
+    }
+
+    // Try to show IP from WiFi status if we have it cached
+    if (ip) {
+        const ssidDisplay = document.getElementById('wifi-ssid-display');
+        if (data.wifi_connected && ssidDisplay && ssidDisplay.textContent && ssidDisplay.textContent !== 'Not connected') {
+            ip.textContent = '';  // IP will be filled by wifi detail fetch if available
+        } else {
+            ip.textContent = '';
         }
     }
 }
