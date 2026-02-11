@@ -481,11 +481,12 @@
             }
         });
 
-        // Clear dropdown when typing manually
+        // Clear dropdown when typing manually and show password field
         manualSSID.addEventListener('input', () => {
-            if (manualSSID.value) {
+            if (manualSSID.value.trim()) {
                 networkSelect.value = '';
-                hidePasswordField();
+                selectedNetworkKnown = false;
+                showPasswordField();
             } else {
                 hidePasswordField();
             }
