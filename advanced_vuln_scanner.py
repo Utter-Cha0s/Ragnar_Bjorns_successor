@@ -2623,7 +2623,7 @@ class AdvancedVulnScanner:
             raise RuntimeError(str(e))
         finally:
             # Clean up scan-specific auth rules
-            if auth_applied:
+            if has_auth:
                 self._clear_scan_auth()
                 self._scan_log(scan_id, 'info', "Cleared scan auth rules")
 
