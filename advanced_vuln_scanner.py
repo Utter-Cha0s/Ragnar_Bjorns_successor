@@ -2295,6 +2295,63 @@ class AdvancedVulnScanner:
                 logger.error(f"Failed to apply API key auth: {e}")
                 return (False, "api_key (failed)")
         
+        # OAuth2 Client Credentials - fetch token then apply as bearer
+        if options.get('oauth2_client_creds'):
+            cc = options['oauth2_client_creds']
+            try:
+                token_url = cc['token_url']
+                post_data = {
+                    'grant_type': 'client_credentials',
+                    'client_id': cc['client_id'],
+                    'client_secret': cc['client_secret'],
+                }
+                if cc.get('scope'):
+                    post_data['scope'] = cc['scope']
+
+                encoded_data = urllib.parse.urlencode(post_data).encode('utf-8')
+                req = urllib.request.Request(token_url, data=encoded_data, method='POST')
+                req.add_header('Content-Type', 'application/x-www-form-urlencoded')
+
+                import ssl
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+
+                with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+                    token_resp = json.loads(resp.read().decode())
+
+                access_token = token_resp.get('access_token')
+                if not access_token:
+                    logger.error(f"OAuth2 CC token response missing access_token: {list(token_resp.keys())}")
+                    return (False, "oauth2_client_creds (no token)")
+
+                expires_in = token_resp.get('expires_in', 'unknown')
+                logger.info(f"OAuth2 Client Credentials token acquired (expires_in: {expires_in}s)")
+
+                # Apply as bearer token via Replacer
+                try:
+                    self._zap_api_call('JSON/replacer/action/removeRule', {'description': 'ScanAuth-Bearer'})
+                except Exception:
+                    pass
+
+                self._zap_api_call('JSON/replacer/action/addRule', {
+                    'description': 'ScanAuth-Bearer',
+                    'enabled': 'true',
+                    'matchType': 'REQ_HEADER',
+                    'matchRegex': 'false',
+                    'matchString': 'Authorization',
+                    'replacement': f"Bearer {access_token}",
+                    'initiators': ''
+                })
+                auth_type = "oauth2_client_creds"
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode() if e.fp else ''
+                logger.error(f"OAuth2 CC token request failed: HTTP {e.code} - {error_body[:500]}")
+                return (False, f"oauth2_client_creds (HTTP {e.code})")
+            except Exception as e:
+                logger.error(f"OAuth2 CC token fetch failed: {e}")
+                return (False, "oauth2_client_creds (failed)")
+
         # HTTP Basic auth
         if options.get('http_basic_auth'):
             try:

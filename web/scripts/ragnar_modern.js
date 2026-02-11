@@ -13159,6 +13159,23 @@ function getAuthParams(authType) {
         authParams.password = password;
         authParams.login_url = loginUrl;
         authParams.script_name = scriptName || '';
+    } else if (authType === 'oauth2_client_creds') {
+        const clientId = document.getElementById('zap-oauth2-client-id')?.value.trim();
+        const clientSecret = document.getElementById('zap-oauth2-client-secret')?.value.trim();
+        const tokenUrl = document.getElementById('zap-oauth2-token-url')?.value.trim();
+        const scope = document.getElementById('zap-oauth2-scope')?.value.trim();
+        if (!clientId || !clientSecret) {
+            showNotification('Please enter Client ID and Client Secret', 'warning');
+            return null;
+        }
+        if (!tokenUrl) {
+            showNotification('Token URL is required for OAuth2 Client Credentials', 'warning');
+            return null;
+        }
+        authParams.client_id = clientId;
+        authParams.client_secret = clientSecret;
+        authParams.token_url = tokenUrl;
+        if (scope) authParams.scope = scope;
     } else if (authType === 'bearer_token') {
         if (!bearerToken) {
             showNotification('Please enter a bearer token', 'warning');
@@ -13593,6 +13610,7 @@ function toggleScanAuthFields() {
     const apiKeyHeaderContainer = document.getElementById('zap-api-key-header-container');
     const cookieContainer = document.getElementById('zap-cookie-container');
     const oauth2BbaContainer = document.getElementById('zap-oauth2-bba-container');
+    const oauth2CcContainer = document.getElementById('zap-oauth2-cc-container');
     const scriptAuthContainer = document.getElementById('zap-script-auth-container');
 
     if (!authType) return;
@@ -13609,6 +13627,7 @@ function toggleScanAuthFields() {
     if (apiKeyHeaderContainer) apiKeyHeaderContainer.classList.add('hidden');
     if (cookieContainer) cookieContainer.classList.add('hidden');
     if (oauth2BbaContainer) oauth2BbaContainer.classList.add('hidden');
+    if (oauth2CcContainer) oauth2CcContainer.classList.add('hidden');
     if (scriptAuthContainer) scriptAuthContainer.classList.add('hidden');
 
     // Hide/show the auth fields wrapper based on whether an auth type is selected
@@ -13632,6 +13651,8 @@ function toggleScanAuthFields() {
         if (usernameContainer) usernameContainer.classList.remove('hidden');
         if (passwordContainer) passwordContainer.classList.remove('hidden');
         if (oauth2BbaContainer) oauth2BbaContainer.classList.remove('hidden');
+    } else if (type === 'oauth2_client_creds') {
+        if (oauth2CcContainer) oauth2CcContainer.classList.remove('hidden');
     } else if (type === 'script_auth') {
         if (loginUrlContainer) loginUrlContainer.classList.remove('hidden');
         if (usernameContainer) usernameContainer.classList.remove('hidden');

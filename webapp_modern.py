@@ -11128,6 +11128,8 @@ def start_advanced_vuln_scan():
                 options['api_key_header'] = auth_params.get('api_key_header', 'X-API-Key')
             elif auth_type == 'cookie' and auth_params.get('cookie_value'):
                 options['cookie_value'] = auth_params['cookie_value']
+            elif auth_type == 'oauth2_client_creds' and auth_params.get('client_id'):
+                options['oauth2_client_creds'] = auth_params
             elif auth_type == 'form' and auth_params.get('username'):
                 options['form_auth'] = auth_params
             elif auth_type == 'oauth2_bba' and auth_params.get('username'):
